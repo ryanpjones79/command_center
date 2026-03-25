@@ -97,6 +97,15 @@ Deployment notes:
 
 Full setup steps live in [docs/railway-deploy.md](docs/railway-deploy.md).
 
+## Netlify Deploy
+
+If you prefer simpler app hosting, Netlify is also supported.
+
+- Netlify handles the Next.js app and scheduled function well
+- you still need an external PostgreSQL database such as Neon or Supabase
+
+Setup steps live in [docs/netlify-deploy.md](docs/netlify-deploy.md).
+
 ## Notes
 
 - Print styles are optimized for the Action Sheet on standard letter paper.

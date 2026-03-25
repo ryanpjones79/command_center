@@ -16,6 +16,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "migrate:legacy-execution": "tsx scripts/migrate-legacy-execution.ts",
     "google:auth": "node --env-file=.env scripts/google-auth-bootstrap.mjs",
+    "netlify:build": "npm run prisma:deploy:bootstrap && npm run build",
     "railway:web:start": "next start",
     "railway:web:predeploy": "npm run prisma:deploy:bootstrap",
     "railway:cron:start": "node scripts/run-railway-cron.mjs"
