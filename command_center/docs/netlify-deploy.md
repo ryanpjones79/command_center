@@ -1,24 +1,25 @@
 # Netlify Deploy
 
-Netlify is a good fit if you want the app hosting experience to feel simpler than Railway.
+Netlify is the simplest hosted path for this repo now that the app lives in `command_center/`.
 
-Important tradeoff:
-
-- Netlify hosts the app well
-- Netlify does **not** provide the production Postgres database for this app
-- you still need an external Postgres provider such as Neon or Supabase
-
-## Recommended setup
+Recommended setup:
 
 - `Netlify` for the Next.js app
-- `Neon` for PostgreSQL
+- `Netlify DB` for the Postgres database
+
+Netlify DB is powered by Neon. It keeps the workflow on one platform, but it is still beta and should be claimed after setup so it does not expire.
+
+## Base directory
+
+When you import the GitHub repo into Netlify, set:
+
+- Base directory: `command_center`
 
 ## Environment variables
 
 Set these in Netlify:
 
 ```env
-DATABASE_URL=postgresql://...
 PRISMA_SCHEMA_PATH=prisma/schema.postgres.prisma
 NEXTAUTH_SECRET=replace-with-a-long-random-secret
 NEXTAUTH_URL=https://your-site.netlify.app
@@ -39,13 +40,19 @@ DAILY_BRIEF_SEND_HOUR=6
 DAILY_BRIEF_SEND_MINUTE=30
 ```
 
+Notes:
+
+- `DATABASE_URL` should be created automatically by Netlify DB / Neon
+- if `DATABASE_URL` is not present after the first deploy, open the site `Extensions` area and connect or claim the Neon database
+
 ## Build settings
 
-The repo now includes:
+The app folder includes:
 
 - build command in [netlify.toml](../netlify.toml): `npm run netlify:build`
 - Next.js support via Netlify's OpenNext adapter
 - a scheduled function in [daily-brief-scheduled.ts](../netlify/functions/daily-brief-scheduled.ts)
+- `@netlify/neon` in `package.json`, which allows Netlify to auto-provision the database during build
 
 `npm run netlify:build` does three things:
 
@@ -64,6 +71,7 @@ Netlify Scheduled Functions are used instead of a separate cron service.
 ## First deploy check
 
 1. Connect the repo to Netlify.
+2. Set the base directory to `command_center`.
 2. Set the environment variables.
 3. Deploy.
 4. Log in.

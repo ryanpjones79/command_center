@@ -18,9 +18,10 @@ That keeps production simple now and avoids trying to replay SQLite-native SQL o
 ## 1. Create the Railway project
 
 1. Create a new Railway project from this GitHub repo.
-2. Add a `PostgreSQL` service.
-3. Add a second app service from the same repo and name it `cron`.
-4. Generate a public domain for the `web` service.
+2. Set the service root directory to `command_center`.
+3. Add a `PostgreSQL` service.
+4. Add a second app service from the same repo and name it `cron`.
+5. Generate a public domain for the `web` service.
 
 ## 2. Set shared environment variables
 
