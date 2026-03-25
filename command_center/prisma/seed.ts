@@ -1,6 +1,10 @@
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 
+if (!process.env.DATABASE_URL && process.env.NETLIFY_DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.NETLIFY_DATABASE_URL;
+}
+
 const prisma = new PrismaClient();
 
 async function main() {

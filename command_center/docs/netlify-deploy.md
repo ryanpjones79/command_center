@@ -43,6 +43,7 @@ DAILY_BRIEF_SEND_MINUTE=30
 Notes:
 
 - `DATABASE_URL` should be created automatically by Netlify DB / Neon
+- if Netlify only exposes `NETLIFY_DATABASE_URL`, the app and Prisma scripts now map that to `DATABASE_URL` automatically
 - if `DATABASE_URL` is not present after the first deploy, open the site `Extensions` area and connect or claim the Neon database
 
 ## Build settings
