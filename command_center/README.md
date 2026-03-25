@@ -105,6 +105,7 @@ If you prefer simpler app hosting, Netlify is also supported.
 
 - Netlify can now be kept as the primary platform for both app hosting and database setup through Netlify DB
 - the repo includes a scheduled Daily Brief function for Netlify
+- the repo root `netlify.toml` points Netlify at this `command_center` folder automatically
 
 Setup steps live in [docs/netlify-deploy.md](docs/netlify-deploy.md).
 

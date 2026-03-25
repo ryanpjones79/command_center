@@ -13,7 +13,14 @@ Netlify DB is powered by Neon. It keeps the workflow on one platform, but it is 
 
 When you import the GitHub repo into Netlify, set:
 
-- Base directory: `command_center`
+- Base directory: leave it alone if Netlify reads the repo root `netlify.toml`
+
+The repo root now contains [netlify.toml](../../netlify.toml), which sets:
+
+- `base = "command_center"`
+- build command
+- publish directory
+- functions directory
 
 ## Environment variables
 
@@ -50,7 +57,7 @@ Notes:
 
 The app folder includes:
 
-- build command in [netlify.toml](../netlify.toml): `npm run netlify:build`
+- build command in [netlify.toml](../../netlify.toml): `npm run netlify:build`
 - Next.js support via Netlify's OpenNext adapter
 - a scheduled function in [daily-brief-scheduled.ts](../netlify/functions/daily-brief-scheduled.ts)
 - `@netlify/neon` in `package.json`, which allows Netlify to auto-provision the database during build

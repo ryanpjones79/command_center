@@ -1,5 +1,10 @@
 [build]
+  base = "command_center"
   command = "npm run netlify:build"
+  publish = ".next"
+
+[build.environment]
+  PRISMA_SCHEMA_PATH = "prisma/schema.postgres.prisma"
 
 [functions]
   directory = "netlify/functions"
