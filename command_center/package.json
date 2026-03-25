@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/prisma-command.mjs generate",
     "dev": "next dev",
     "build": "node scripts/prisma-command.mjs generate && next build",
     "start": "next start",
@@ -13,7 +14,7 @@
     "prisma:migrate": "node scripts/prisma-command.mjs migrate dev",
     "prisma:db:push": "node scripts/prisma-command.mjs db push --skip-generate",
     "prisma:deploy:bootstrap": "npm run prisma:db:push && npm run prisma:seed",
-    "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:seed": "node scripts/prisma-command.mjs generate && tsx prisma/seed.ts",
     "migrate:legacy-execution": "tsx scripts/migrate-legacy-execution.ts",
     "google:auth": "node --env-file=.env scripts/google-auth-bootstrap.mjs",
     "netlify:build": "npm run prisma:deploy:bootstrap && npm run build",
