@@ -34,6 +34,7 @@ smart-diabetes-registry/
 temp_test_patch.txt
 oppe narr v5.sql
 oppe_narr_v5_patched.sql
+pyproject.toml
 
 # Editor directories and files
 .vscode/*
