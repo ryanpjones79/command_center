@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kprops"
+version = "0.1.0"
+description = "Bayesian MLB strikeout prop modeling with Podhorzer xK% integration"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Codex" }]
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "pydantic>=2.8",
+  "requests>=2.32",
+  "typer>=0.12",
+  "python-dateutil>=2.9",
+  "scipy>=1.11",
+  "matplotlib>=3.8",
+  "diskcache>=5.6",
+  "pymc>=5.16; python_version < '3.13'",
+  "arviz>=0.18; python_version < '3.13'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "pytest-cov>=5.0", "ruff>=0.5", "mypy>=1.10"]
+
+[project.scripts]
+kprops = "kprops.cli:app"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

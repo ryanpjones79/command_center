@@ -1,0 +1,239 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Timeframe {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum ExecutionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ExecutionProjectStatus {
+  ON_TRACK
+  NEEDS_ATTENTION
+  BLOCKED
+  COMPLETED
+}
+
+enum ExecutionActiveStatus {
+  ACTIVE_NOW
+  ACTIVE_LATER
+  PARKED
+  COMPLETED
+}
+
+enum ExecutionWeeklyFocus {
+  TOP_3
+  ACTIVE
+  NONE
+}
+
+enum ExecutionTaskType {
+  ACTION
+  FOLLOW_UP
+  ADMIN
+  QUICK_WIN
+}
+
+enum ExecutionDurationBucket {
+  UNDER_30_MIN
+  THIRTY_TO_SIXTY_MIN
+  ONE_TO_TWO_HOURS
+  TWO_HOURS_PLUS
+}
+
+enum ExecutionTaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  WAITING
+  DONE
+  DROPPED
+}
+
+enum ExecutionWhenBucket {
+  TODAY
+  THIS_WEEK
+  LATER
+  WAITING
+  PARKING_LOT
+}
+
+model User {
+  id                String               @id @default(cuid())
+  email             String               @unique
+  passwordHash      String
+  name              String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  settings          UserSettings?
+  watchlist         WatchlistTicker[]
+  savedFilters      SavedSignalFilter[]
+  executionDomains  ExecutionDomain[]
+  executionProjects ExecutionProject[]
+  executionTasks    ExecutionTask[]
+}
+
+model UserSettings {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  accountSize            Float?
+  maxRiskPerTradePercent Float    @default(2)
+  preferredDteMin        Int      @default(30)
+  preferredDteMax        Int      @default(60)
+  definedRiskOnly        Boolean  @default(true)
+  earningsBufferDays     Int      @default(7)
+  concentrationLimit     Int      @default(4)
+  updatedAt              DateTime @updatedAt
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model WatchlistTicker {
+  id                  String    @id @default(cuid())
+  userId              String
+  symbol              String
+  sector              String?
+  manualIvrBucket     String?
+  nextEarningsDate    DateTime?
+  lastManualRefreshAt DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol])
+  @@index([userId])
+}
+
+model PriceBar {
+  id        String    @id @default(cuid())
+  symbol    String
+  timeframe Timeframe
+  date      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float
+  adjClose  Float?
+  provider  String
+  fetchedAt DateTime  @default(now())
+
+  @@unique([symbol, timeframe, date])
+  @@index([symbol, timeframe, date])
+}
+
+model FetchState {
+  id            String   @id @default(cuid())
+  symbol        String
+  provider      String
+  lastFetchedAt DateTime
+  rangeStart    DateTime?
+  rangeEnd      DateTime?
+
+  @@unique([symbol, provider])
+}
+
+model SavedSignalFilter {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  query     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId, createdAt])
+}
+
+model ExecutionDomain {
+  id          String             @id @default(cuid())
+  userId      String
+  name        String
+  slug        String
+  description String?
+  isDefault   Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects    ExecutionProject[]
+  tasks       ExecutionTask[]
+
+  @@unique([userId, slug])
+  @@index([userId, name])
+}
+
+model ExecutionProject {
+  id            String                 @id @default(cuid())
+  userId        String
+  domainId      String
+  name          String
+  status        ExecutionProjectStatus @default(ON_TRACK)
+  activeStatus  ExecutionActiveStatus  @default(ACTIVE_NOW)
+  weeklyFocus   ExecutionWeeklyFocus   @default(NONE)
+  priority      ExecutionPriority      @default(MEDIUM)
+  nextAction    String?
+  waitingOn     String?
+  blocked       Boolean                @default(false)
+  note          String?
+  lastReviewedAt DateTime?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain        ExecutionDomain        @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  tasks         ExecutionTask[]
+
+  @@unique([userId, name])
+  @@index([userId, activeStatus, weeklyFocus, priority])
+}
+
+model ExecutionTask {
+  id           String              @id @default(cuid())
+  userId       String
+  domainId     String
+  projectId    String?
+  title        String
+  type         ExecutionTaskType   @default(ACTION)
+  estimatedDuration ExecutionDurationBucket?
+  status       ExecutionTaskStatus @default(NOT_STARTED)
+  priority     ExecutionPriority   @default(MEDIUM)
+  whenBucket   ExecutionWhenBucket @default(LATER)
+  dueDate      DateTime?
+  followUpDate DateTime?
+  waitingOn    String?
+  note         String?
+  source       String?
+  isBlocked    Boolean             @default(false)
+  pinToTodayUntilDone Boolean      @default(false)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  completedAt  DateTime?
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain       ExecutionDomain     @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  project      ExecutionProject?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([userId, whenBucket, status, priority, dueDate])
+  @@index([userId, followUpDate])
+  @@index([projectId, status])
+}
+
+model DailyBriefDispatch {
+  id        String   @id @default(cuid())
+  dateKey   String   @unique
+  emailTo   String
+  status    String   @default("SENT")
+  error     String?
+  createdAt DateTime @default(now())
+  sentAt    DateTime?
+}

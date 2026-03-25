@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 211 56% 8%;
+  --foreground: 214 31% 94%;
+  --card: 215 42% 12%;
+  --card-foreground: 214 31% 94%;
+  --primary: 162 85% 47%;
+  --primary-foreground: 211 56% 8%;
+  --secondary: 213 31% 19%;
+  --secondary-foreground: 214 31% 92%;
+  --muted: 215 27% 17%;
+  --muted-foreground: 214 16% 73%;
+  --accent: 196 90% 48%;
+  --accent-foreground: 211 56% 8%;
+  --destructive: 2 78% 59%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 216 26% 23%;
+  --input: 216 26% 23%;
+  --ring: 196 90% 48%;
+  --radius: 0.75rem;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply min-h-screen bg-background text-foreground antialiased;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(34, 211, 238, 0.08), transparent 35%),
+    radial-gradient(circle at 95% 0%, rgba(16, 185, 129, 0.08), transparent 32%),
+    linear-gradient(155deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+}
+
+h1,
+h2,
+h3 {
+  font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.print-only {
+  display: none;
+}
+
+@page {
+  size: letter portrait;
+  margin: 0.45in;
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+    background-image: none !important;
+    font-size: 10.5pt;
+  }
+
+  .app-shell-container {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .app-shell-header,
+  .app-no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .daily-brief-print-root {
+    color: black !important;
+  }
+
+  .daily-brief-print-header {
+    margin-bottom: 0.16in;
+    padding-bottom: 0.08in;
+    border-bottom: 1.5px solid black;
+  }
+
+  .daily-brief-print-kicker {
+    margin: 0;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .daily-brief-print-title {
+    margin: 0.03in 0 0;
+    font-size: 18pt;
+    line-height: 1;
+  }
+
+  .daily-brief-print-date {
+    margin: 0.04in 0 0;
+    font-size: 9pt;
+  }
+
+  .daily-brief-print-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.12in;
+    align-items: start;
+  }
+
+  .daily-brief-print-card {
+    border: 1px solid black;
+    padding: 0.08in 0.1in;
+    background: white;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .daily-brief-print-card h3 {
+    margin: 0 0 0.06in;
+    font-size: 8.8pt;
+    line-height: 1.15;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .daily-brief-print-list {
+    display: grid;
+    gap: 0.03in;
+    font-size: 8.4pt;
+    line-height: 1.22;
+  }
+
+  .daily-brief-print-list p {
+    margin: 0;
+  }
+
+  .daily-brief-print-news {
+    grid-column: 1 / -1;
+    margin-top: 0.12in;
+  }
+
+  .daily-brief-print-news-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.08in;
+  }
+
+  .daily-brief-print-news-topic {
+    margin: 0 0 0.04in;
+    font-size: 8.3pt;
+    font-weight: 700;
+    line-height: 1.15;
+    text-transform: uppercase;
+  }
+
+  .daily-brief-print-news .daily-brief-print-list p {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .print-sheet-grid {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0.18in !important;
+    align-items: start !important;
+  }
+
+  .print-card {
+    border: 1px solid black !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: white !important;
+    color: black !important;
+    break-inside: avoid;
+  }
+
+  .print-card * {
+    color: black !important;
+    box-shadow: none !important;
+  }
+
+  .print-row {
+    padding-top: 0.08in;
+    padding-bottom: 0.08in;
+  }
+}
