@@ -6,10 +6,6 @@
     {
       "path": "/api/cron/nightly",
       "schedule": "15 2 * * *"
-    },
-    {
-      "path": "/api/cron/daily-brief",
-      "schedule": "*/15 * * * *"
     }
   ]
 }

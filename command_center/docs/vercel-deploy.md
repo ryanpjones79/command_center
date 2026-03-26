@@ -6,7 +6,7 @@ Recommended setup:
 
 - `Vercel` for the app
 - `Neon` through the Vercel Marketplace for Postgres
-- `Vercel Pro` if you want the 15-minute Daily Brief cron to stay enabled
+- `Vercel Hobby` works if you keep Daily Brief sending manual
 
 ## Vercel project setup
 
@@ -42,7 +42,7 @@ GOOGLE_SHEETS_SHEET_NAME=
 GOOGLE_DAILY_BRIEF_EMAIL_TO=
 FEATURE_GOOGLE_CALENDAR=true
 FEATURE_GMAIL_TRIAGE=true
-FEATURE_DAILY_BRIEF_AUTOSEND=true
+FEATURE_DAILY_BRIEF_AUTOSEND=false
 DAILY_BRIEF_TIMEZONE=America/Los_Angeles
 DAILY_BRIEF_SEND_HOUR=6
 DAILY_BRIEF_SEND_MINUTE=30
@@ -53,6 +53,7 @@ Notes:
 - `DATABASE_URL` should come from your Neon integration or Neon project
 - the production app should use `prisma/schema.postgres.prisma`
 - `CRON_SECRET` is recommended because Vercel automatically sends it as a `Bearer` token for cron requests when present
+- on Hobby, `FEATURE_DAILY_BRIEF_AUTOSEND` should stay `false` because the Daily Brief cron is intentionally removed
 
 ## What the Vercel build does
 
@@ -71,21 +72,19 @@ Notes:
 5. Deploy.
 6. Open `/login`.
 7. Log in with `DEFAULT_USER_EMAIL` and `DEFAULT_USER_PASSWORD`.
-8. Open `/daily-brief` and send a test email.
+8. Open `/daily-brief` and send a test email manually.
 
 ## Cron jobs
 
 The cron schedules are defined in [vercel.json](../vercel.json).
 
 - `/api/cron/nightly`
-- `/api/cron/daily-brief`
 
 Vercel cron jobs run only against the production deployment.
 
 Important:
 
-- Vercel's docs say cron jobs are available on all plans, but Hobby is limited to once-per-day schedules with hourly precision
-- this repo currently includes a `*/15 * * * *` Daily Brief cron, which is intended for a reliable 6:30 AM local send window
-- if you stay on Hobby, deployment can fail because that cron runs more than once per day
-- if you want autosend to stay reliable, use Vercel Pro
-- if you want to stay on Hobby, remove the Daily Brief cron and use manual send from `/daily-brief`
+- Vercel's docs say Hobby is limited to cron jobs that run once per day with hourly precision
+- this repo is now trimmed for Hobby by keeping only the nightly refresh cron
+- Daily Brief autosend is manual on Hobby from `/daily-brief`
+- if you later upgrade to Pro, you can restore the `/api/cron/daily-brief` cron for automatic sends
