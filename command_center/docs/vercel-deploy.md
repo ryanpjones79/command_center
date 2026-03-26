@@ -6,6 +6,7 @@ Recommended setup:
 
 - `Vercel` for the app
 - `Neon` through the Vercel Marketplace for Postgres
+- `Vercel Pro` if you want the 15-minute Daily Brief cron to stay enabled
 
 ## Vercel project setup
 
@@ -80,3 +81,11 @@ The cron schedules are defined in [vercel.json](../vercel.json).
 - `/api/cron/daily-brief`
 
 Vercel cron jobs run only against the production deployment.
+
+Important:
+
+- Vercel's docs say cron jobs are available on all plans, but Hobby is limited to once-per-day schedules with hourly precision
+- this repo currently includes a `*/15 * * * *` Daily Brief cron, which is intended for a reliable 6:30 AM local send window
+- if you stay on Hobby, deployment can fail because that cron runs more than once per day
+- if you want autosend to stay reliable, use Vercel Pro
+- if you want to stay on Hobby, remove the Daily Brief cron and use manual send from `/daily-brief`
