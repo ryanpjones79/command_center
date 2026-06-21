@@ -13,7 +13,7 @@ type DailyBriefPageProps = {
 const briefSectionOrder = [
   "MISSION FOR TODAY",
   "MORNING LAUNCH",
-  "QUICK START QUEUE",
+  "MEAL PLAN",
   "TOP 3 OUTCOMES",
   "DECISION FILTER",
   "SCHEDULE SNAPSHOT",
@@ -71,21 +71,21 @@ export default async function DailyBriefPage({ searchParams }: DailyBriefPagePro
   return (
     <main className="space-y-6">
       <div className="app-no-print space-y-6">
-        <section className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+        <section className="flex flex-col items-stretch gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Daily Brief</p>
-            <h2 className="text-4xl font-semibold tracking-tight">Operator Brief</h2>
+            <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">Operator Brief</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
               Live Google Calendar, planning-sheet, and news inputs rendered through your Action Daily OS brief rules.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild variant="outline">
+          <div className="grid gap-2 sm:flex sm:flex-wrap">
+            <Button asChild className="w-full sm:w-auto" variant="outline">
               <Link href="/">Open Action Sheet</Link>
             </Button>
             <PrintBrowserButton />
             <form action={sendDailyBriefEmailAction}>
-              <Button disabled={brief.status !== "ok" || !brief.emailTo} type="submit">
+              <Button className="w-full sm:w-auto" disabled={brief.status !== "ok" || !brief.emailTo} type="submit">
                 Send Email
               </Button>
             </form>
@@ -103,7 +103,7 @@ export default async function DailyBriefPage({ searchParams }: DailyBriefPagePro
           </Card>
         )}
 
-        <section className="grid gap-4 lg:grid-cols-3">
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Brief Status</CardTitle>
@@ -145,19 +145,19 @@ export default async function DailyBriefPage({ searchParams }: DailyBriefPagePro
           </Card>
         </section>
 
-        <Card>
+        <Card className="overflow-hidden rounded-lg">
           <CardHeader>
             <CardTitle className="text-base">Preview</CardTitle>
             <CardDescription>Plain-text brief body used for the email send.</CardDescription>
           </CardHeader>
           <CardContent>
-            <pre className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-4 font-mono text-sm leading-6">
+            <pre className="max-h-[68vh] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 font-mono text-xs leading-5 sm:p-4 sm:text-sm sm:leading-6">
               {brief.briefText}
             </pre>
           </CardContent>
         </Card>
 
-        <section className="grid gap-4 lg:grid-cols-3">
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {brief.newsTopics.map((topic) => (
             <Card key={topic.label}>
               <CardHeader>

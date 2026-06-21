@@ -17,6 +17,8 @@ dev.db
 .codex-dev.log
 temp_*.log
 .env
+.env.vercel
+vercel.env
 .env.local
 .env.*.local
 *.local

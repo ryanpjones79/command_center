@@ -43,7 +43,7 @@ export type DailyBriefData = {
 const briefSectionOrder = [
   "MISSION FOR TODAY",
   "MORNING LAUNCH",
-  "QUICK START QUEUE",
+  "MEAL PLAN",
   "TOP 3 OUTCOMES",
   "DECISION FILTER",
   "SCHEDULE SNAPSHOT",
@@ -264,12 +264,8 @@ function buildMorningLaunch(planning: DailyPlanningInputs) {
   return uniqueNonEmpty([...planning.morningLaunch, planning.outlookSweep]).slice(0, 3);
 }
 
-function buildQuickStartQueue(planning: DailyPlanningInputs, executionContext: DailyBriefExecutionContext | null) {
-  return uniqueNonEmpty([
-    ...planning.quickStartQueue,
-    ...(executionContext?.overdueFollowUpTitles ?? []),
-    ...(executionContext?.quickStartTasks.map((task) => task.title) ?? [])
-  ]).slice(0, 3);
+function buildMealPlanLines() {
+  return ["Breakfast:", "Lunch:", "Dinner:", "Snack:"];
 }
 
 function buildQuickWins(planning: DailyPlanningInputs, executionContext: DailyBriefExecutionContext | null) {
@@ -479,7 +475,7 @@ function buildBriefText(
   const scheduleSummary = summarizeSchedulePressure(schedule, workBlocks);
   const mission = buildMission(planning, outcomes, scheduleSummary.meetingHeavy, scheduleSummary.fragmented);
   const morningLaunch = buildMorningLaunch(planning);
-  const quickStartQueue = buildQuickStartQueue(planning, executionContext);
+  const mealPlan = buildMealPlanLines();
   const quickWins = buildQuickWins(planning, executionContext);
   const workBlockLines = buildWorkBlockLines(planning, workBlocks, outcomes, executionContext, referenceDate);
   const plan = buildRecommendedPlan(planning, outcomes, workBlockLines);
@@ -505,8 +501,8 @@ function buildBriefText(
     "MORNING LAUNCH",
     ...(morningLaunch.length > 0 ? morningLaunch.map((item) => `- ${item}`) : ["- No morning launch items provided."]),
     "",
-    "QUICK START QUEUE",
-    ...(quickStartQueue.length > 0 ? quickStartQueue.map((item) => `- ${item}`) : ["- No quick-start items provided."]),
+    "MEAL PLAN",
+    ...mealPlan,
     "",
     "TOP 3 OUTCOMES",
     ...(outcomes.length > 0 ? outcomes.map((item) => `- ${item}`) : ["- No top outcomes provided."]),
@@ -560,14 +556,19 @@ function sanitizeHref(value: string) {
 }
 
 function renderSectionHtml(lines: string[]) {
-  const items = lines.map((line) => (line.startsWith("- ") ? line.slice(2) : line)).filter(Boolean);
-  if (items.length === 0) {
+  const trimmedLines = lines.map((line) => line.trim()).filter(Boolean);
+  if (trimmedLines.length === 0) {
     return "";
   }
 
-  return `<ul style="margin:0;padding-left:18px;">${items
-    .map((item) => `<li style="margin:0 0 6px;">${escapeHtml(item)}</li>`)
-    .join("")}</ul>`;
+  const allBullets = trimmedLines.every((line) => line.startsWith("- "));
+  if (allBullets) {
+    return `<ul style="margin:0;padding-left:18px;">${trimmedLines
+      .map((line) => `<li style="margin:0 0 6px;">${escapeHtml(line.slice(2))}</li>`)
+      .join("")}</ul>`;
+  }
+
+  return trimmedLines.map((line) => `<p style="margin:0 0 8px;">${escapeHtml(line)}</p>`).join("");
 }
 
 function buildDailyBriefHtml(brief: DailyBriefData) {
