@@ -275,6 +275,16 @@ function buildQuickWins(planning: DailyPlanningInputs, executionContext: DailyBr
   ]).slice(0, 3);
 }
 
+function getBriefLocalHour(value: Date) {
+  const hour = new Intl.DateTimeFormat("en-US", {
+    timeZone: process.env.DAILY_BRIEF_TIMEZONE || "America/Los_Angeles",
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).format(value);
+
+  return Number.parseInt(hour, 10);
+}
+
 function buildWorkBlockLines(
   planning: DailyPlanningInputs,
   workBlocks: WorkBlock[],
@@ -323,7 +333,7 @@ function buildWorkBlockLines(
     })[0];
   };
 
-  const preNoonBlock = workBlocks.find((block) => block.start.getHours() < 12);
+  const preNoonBlock = workBlocks.find((block) => getBriefLocalHour(block.start) < 12);
   if (planning.mustBeforeNoon && preNoonBlock) {
     const followOn = primary && planning.mustBeforeNoon.toLowerCase() !== primary.toLowerCase() ? `, then ${primary}` : "";
     lines.push(`${preNoonBlock.label} -> ${planning.mustBeforeNoon} first${followOn}`);

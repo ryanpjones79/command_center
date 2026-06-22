@@ -21,18 +21,88 @@ type TimeWindow = {
   end: Date;
 };
 
-function startOfDay(value: Date) {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+const DEFAULT_TIME_ZONE = "America/Los_Angeles";
+
+function getBriefTimeZone() {
+  return process.env.DAILY_BRIEF_TIMEZONE || DEFAULT_TIME_ZONE;
 }
 
-function endOfDay(value: Date) {
-  const copy = startOfDay(value);
-  copy.setDate(copy.getDate() + 1);
-  return copy;
+function getZonedDateParts(value: Date, timeZone = getBriefTimeZone()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(value);
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number.parseInt(map.year, 10),
+    month: Number.parseInt(map.month, 10),
+    day: Number.parseInt(map.day, 10),
+    hour: Number.parseInt(map.hour, 10),
+    minute: Number.parseInt(map.minute, 10),
+    second: Number.parseInt(map.second, 10)
+  };
 }
 
-function formatClock(value: Date) {
+function zonedDateTimeToUtc(
+  parts: {
+    year: number;
+    month: number;
+    day: number;
+    hour?: number;
+    minute?: number;
+    second?: number;
+  },
+  timeZone = getBriefTimeZone()
+) {
+  const desired = {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour ?? 0,
+    minute: parts.minute ?? 0,
+    second: parts.second ?? 0
+  };
+  let candidate = new Date(Date.UTC(desired.year, desired.month - 1, desired.day, desired.hour, desired.minute, desired.second));
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const actual = getZonedDateParts(candidate, timeZone);
+    const desiredWallTime = Date.UTC(desired.year, desired.month - 1, desired.day, desired.hour, desired.minute, desired.second);
+    const actualWallTime = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second);
+    candidate = new Date(candidate.getTime() + desiredWallTime - actualWallTime);
+  }
+
+  return candidate;
+}
+
+function addCalendarDays(parts: { year: number; month: number; day: number }, days: number) {
+  const value = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
+  return {
+    year: value.getUTCFullYear(),
+    month: value.getUTCMonth() + 1,
+    day: value.getUTCDate()
+  };
+}
+
+function startOfDay(value: Date, timeZone = getBriefTimeZone()) {
+  const parts = getZonedDateParts(value, timeZone);
+  return zonedDateTimeToUtc({ year: parts.year, month: parts.month, day: parts.day }, timeZone);
+}
+
+function endOfDay(value: Date, timeZone = getBriefTimeZone()) {
+  const parts = getZonedDateParts(value, timeZone);
+  return zonedDateTimeToUtc({ ...addCalendarDays(parts, 1) }, timeZone);
+}
+
+function formatClock(value: Date, timeZone = getBriefTimeZone()) {
   return value.toLocaleTimeString("en-US", {
+    timeZone,
     hour: "numeric",
     minute: "2-digit"
   });
@@ -121,7 +191,14 @@ function parseClockOnDate(referenceDate: Date, input: string) {
     return null;
   }
 
-  return new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate(), hours, minutes, 0, 0);
+  const dateParts = getZonedDateParts(referenceDate);
+  return zonedDateTimeToUtc({
+    year: dateParts.year,
+    month: dateParts.month,
+    day: dateParts.day,
+    hour: hours,
+    minute: minutes
+  });
 }
 
 export function parseWorkdayWindow(referenceDate: Date, input?: string | null) {
@@ -146,11 +223,13 @@ export function parseWorkdayWindow(referenceDate: Date, input?: string | null) {
 export async function getTodaysCalendarEvents(referenceDate = new Date()) {
   const calendar = getGoogleCalendarClient();
   const { calendarId } = getGoogleConfigSnapshot();
+  const timeZone = getBriefTimeZone();
 
   const response = await calendar.events.list({
     calendarId,
-    timeMin: startOfDay(referenceDate).toISOString(),
-    timeMax: endOfDay(referenceDate).toISOString(),
+    timeMin: startOfDay(referenceDate, timeZone).toISOString(),
+    timeMax: endOfDay(referenceDate, timeZone).toISOString(),
+    timeZone,
     singleEvents: true,
     orderBy: "startTime"
   });
