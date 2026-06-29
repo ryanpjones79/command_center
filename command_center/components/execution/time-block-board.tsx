@@ -178,8 +178,8 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
   };
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <section className="rounded-2xl border bg-card p-3 shadow-sm sm:p-4">
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <section className="flex min-h-0 flex-col rounded-2xl border bg-card p-3 shadow-sm sm:p-4 xl:max-h-[calc(100vh-9rem)]">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Google Calendar + Task Blocks</p>
@@ -208,7 +208,7 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
           </div>
         )}
 
-        <div className="overflow-x-auto">
+        <div className="min-h-[560px] overflow-auto rounded-xl xl:min-h-0">
           <div className="grid min-w-[720px] grid-cols-[72px_minmax(0,1fr)]">
             <div className="relative" style={{ height: dayHeight }}>
               {Array.from({ length: endHour - startHour + 1 }, (_, index) => (
@@ -298,7 +298,7 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
         </div>
       </section>
 
-      <aside className="space-y-3">
+      <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
         <section
           className="rounded-2xl border bg-card p-4 shadow-sm"
           onDragOver={(event) => event.preventDefault()}
