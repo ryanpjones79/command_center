@@ -56,6 +56,10 @@ function durationMinutes(start: Date, end: Date) {
   return Math.max(slotMinutes, Math.round((end.getTime() - start.getTime()) / 60000));
 }
 
+function hasTimedDuration(event: BoardCalendarEvent) {
+  return !event.isAllDay && event.end.getTime() > event.start.getTime();
+}
+
 function slotStart(date: Date, index: number) {
   const value = new Date(date);
   value.setHours(startHour, index * slotMinutes, 0, 0);
@@ -74,6 +78,8 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
   }, [date]);
 
   const dayHeight = (endHour - startHour) * 60 * pixelsPerMinute;
+  const contextEvents = calendarEvents.filter((event) => !hasTimedDuration(event));
+  const timedEvents = calendarEvents.filter(hasTimedDuration);
 
   const scheduleTask = (taskId: string, start: Date) => {
     setPendingTaskId(taskId);
@@ -108,6 +114,24 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
 
         {message && <p className="mb-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">{message}</p>}
 
+        {contextEvents.length > 0 && (
+          <div className="mb-3 rounded-xl border border-border bg-muted/30 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">All-day / FYI</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {contextEvents.map((event) => (
+                <span
+                  className="rounded-full border border-border bg-background/70 px-2.5 py-1 text-xs text-muted-foreground"
+                  key={event.id}
+                  title={event.isAllDay ? "All-day Google Calendar item" : "Google Calendar item with no timed duration"}
+                >
+                  {event.summary}
+                  {!event.isAllDay ? ` (${formatClock(event.start)})` : ""}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <div className="grid min-w-[720px] grid-cols-[72px_minmax(0,1fr)]">
             <div className="relative" style={{ height: dayHeight }}>
@@ -141,8 +165,7 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
                 />
               ))}
 
-              {calendarEvents
-                .filter((event) => !event.isAllDay)
+              {timedEvents
                 .map((event) => {
                   const top = Math.max(0, minutesFromStart(event.start) * pixelsPerMinute);
                   const height = durationMinutes(event.start, event.end) * pixelsPerMinute;

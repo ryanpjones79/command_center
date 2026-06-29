@@ -267,10 +267,12 @@ export async function getTodaysCalendarEvents(referenceDate = new Date()) {
 export function deriveWorkBlocksFromEvents(events: CalendarEvent[], referenceDate = new Date(), workdayWindow?: string | null) {
   const explicitWindow = parseWorkdayWindow(referenceDate, workdayWindow);
   const busy = mergeIntervals(
-    events.map((event) => ({
-      start: event.start,
-      end: event.end
-    }))
+    events
+      .filter((event) => !event.isAllDay && event.end.getTime() > event.start.getTime())
+      .map((event) => ({
+        start: event.start,
+        end: event.end
+      }))
   );
 
   if (busy.length === 0) {
