@@ -100,6 +100,15 @@ function endOfDay(value: Date, timeZone = getBriefTimeZone()) {
   return zonedDateTimeToUtc({ ...addCalendarDays(parts, 1) }, timeZone);
 }
 
+export function getCalendarDayRange(referenceDate = new Date()) {
+  const timeZone = getBriefTimeZone();
+  return {
+    start: startOfDay(referenceDate, timeZone),
+    end: endOfDay(referenceDate, timeZone),
+    timeZone
+  };
+}
+
 function formatClock(value: Date, timeZone = getBriefTimeZone()) {
   return value.toLocaleTimeString("en-US", {
     timeZone,

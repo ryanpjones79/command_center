@@ -1,15 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { executionSelectOptions } from "@/lib/execution-options";
-import { getCalendarEventsForDate } from "@/server/google-calendar-service";
+import { getCalendarDayRange, getCalendarEventsForDate } from "@/server/google-calendar-service";
 
 function startOfDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-}
-
-function endOfDay(value: Date) {
-  const end = startOfDay(value);
-  end.setDate(end.getDate() + 1);
-  return end;
 }
 
 function daysAgo(value: Date, count: number) {
@@ -390,8 +384,7 @@ export async function getTaskMaintenanceData(
 export async function getTimeBlockPlannerData(userId: string, referenceDate = new Date()) {
   await ensureExecutionSetup(userId);
 
-  const dayStart = startOfDay(referenceDate);
-  const dayEnd = endOfDay(referenceDate);
+  const dayRange = getCalendarDayRange(referenceDate);
 
   const [calendarEvents, tasks, domains, projects] = await Promise.all([
     getCalendarEventsForDate(referenceDate),
@@ -400,7 +393,7 @@ export async function getTimeBlockPlannerData(userId: string, referenceDate = ne
         userId,
         status: { notIn: ["DONE", "DROPPED"] },
         OR: [
-          { scheduledStart: { gte: dayStart, lt: dayEnd } },
+          { scheduledStart: { gte: dayRange.start, lt: dayRange.end } },
           { scheduledStart: null }
         ]
       },

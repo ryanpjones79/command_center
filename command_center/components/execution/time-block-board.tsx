@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { clearTaskTimeBlockAction, scheduleTaskTimeBlockAction } from "@/app/time-blocks/actions";
 import { formatExecutionDurationBucket, formatExecutionLabel } from "@/lib/execution-options";
 
@@ -56,6 +57,25 @@ function durationMinutes(start: Date, end: Date) {
   return Math.max(slotMinutes, Math.round((end.getTime() - start.getTime()) / 60000));
 }
 
+function minutesForDurationBucket(value: string | null | undefined) {
+  switch (value) {
+    case "UNDER_30_MIN":
+      return 30;
+    case "THIRTY_TO_SIXTY_MIN":
+      return 60;
+    case "ONE_TO_TWO_HOURS":
+      return 90;
+    case "TWO_HOURS_PLUS":
+      return 120;
+    default:
+      return 30;
+  }
+}
+
+function addMinutes(value: Date, minutes: number) {
+  return new Date(value.getTime() + minutes * 60000);
+}
+
 function hasTimedDuration(event: BoardCalendarEvent) {
   return !event.isAllDay && event.end.getTime() > event.start.getTime();
 }
@@ -67,10 +87,18 @@ function slotStart(date: Date, index: number) {
 }
 
 export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unscheduledTasks }: TimeBlockBoardProps) {
+  const router = useRouter();
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [localScheduledTasks, setLocalScheduledTasks] = useState(scheduledTasks);
+  const [localUnscheduledTasks, setLocalUnscheduledTasks] = useState(unscheduledTasks);
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    setLocalScheduledTasks(scheduledTasks);
+    setLocalUnscheduledTasks(unscheduledTasks);
+  }, [scheduledTasks, unscheduledTasks]);
 
   const slots = useMemo(() => {
     const count = ((endHour - startHour) * 60) / slotMinutes;
@@ -82,22 +110,56 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
   const timedEvents = calendarEvents.filter(hasTimedDuration);
 
   const scheduleTask = (taskId: string, start: Date) => {
+    const task = [...localUnscheduledTasks, ...localScheduledTasks].find((item) => item.id === taskId);
+    const previousScheduled = localScheduledTasks;
+    const previousUnscheduled = localUnscheduledTasks;
+
+    if (task) {
+      const scheduledEnd = addMinutes(start, minutesForDurationBucket(task.estimatedDuration));
+      const movedTask = { ...task, scheduledStart: start, scheduledEnd };
+      setLocalUnscheduledTasks((tasks) => tasks.filter((item) => item.id !== taskId));
+      setLocalScheduledTasks((tasks) => [movedTask, ...tasks.filter((item) => item.id !== taskId)]);
+    }
+
     setPendingTaskId(taskId);
     setMessage("");
     startTransition(async () => {
       const result = await scheduleTaskTimeBlockAction(taskId, start.toISOString());
       setPendingTaskId(null);
-      setMessage(result.ok ? "Timeblock saved." : result.error);
+      if (result.ok) {
+        setMessage("Timeblock saved.");
+        router.refresh();
+      } else {
+        setLocalScheduledTasks(previousScheduled);
+        setLocalUnscheduledTasks(previousUnscheduled);
+        setMessage(result.error);
+      }
     });
   };
 
   const clearTask = (taskId: string) => {
+    const task = localScheduledTasks.find((item) => item.id === taskId);
+    const previousScheduled = localScheduledTasks;
+    const previousUnscheduled = localUnscheduledTasks;
+
+    if (task) {
+      setLocalScheduledTasks((tasks) => tasks.filter((item) => item.id !== taskId));
+      setLocalUnscheduledTasks((tasks) => [{ ...task, scheduledStart: null, scheduledEnd: null }, ...tasks]);
+    }
+
     setPendingTaskId(taskId);
     setMessage("");
     startTransition(async () => {
       const result = await clearTaskTimeBlockAction(taskId);
       setPendingTaskId(null);
-      setMessage(result.ok ? "Timeblock cleared." : result.error);
+      if (result.ok) {
+        setMessage("Timeblock cleared.");
+        router.refresh();
+      } else {
+        setLocalScheduledTasks(previousScheduled);
+        setLocalUnscheduledTasks(previousUnscheduled);
+        setMessage(result.error);
+      }
     });
   };
 
@@ -183,7 +245,7 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
                   );
                 })}
 
-              {scheduledTasks.map((task) => {
+              {localScheduledTasks.map((task) => {
                 if (!task.scheduledStart || !task.scheduledEnd) return null;
                 const top = Math.max(0, minutesFromStart(task.scheduledStart) * pixelsPerMinute);
                 const height = durationMinutes(task.scheduledStart, task.scheduledEnd) * pixelsPerMinute;
@@ -227,8 +289,8 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Task Queue</p>
           <h3 className="mt-1 text-lg font-semibold">Drag to Timeblock</h3>
           <div className="mt-3 space-y-2">
-            {unscheduledTasks.length === 0 && <p className="text-sm text-muted-foreground">No unscheduled active tasks.</p>}
-            {unscheduledTasks.map((task) => (
+            {localUnscheduledTasks.length === 0 && <p className="text-sm text-muted-foreground">No unscheduled active tasks.</p>}
+            {localUnscheduledTasks.map((task) => (
               <div
                 className="cursor-grab rounded-xl border bg-background/70 p-3 shadow-sm active:cursor-grabbing"
                 draggable
