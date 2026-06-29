@@ -55,6 +55,8 @@ const briefSectionOrder = [
   "NEWS WATCH"
 ] as const;
 
+const noCleanWorkBlockLine = "No clean work block. Use short execution windows.";
+
 function formatDateLine(value: Date) {
   return value.toLocaleDateString("en-US", {
     weekday: "long",
@@ -300,7 +302,7 @@ function buildWorkBlockLines(
   }
 
   if (workBlocks.length === 0) {
-    return ["No bounded work block available from the current schedule."];
+    return [noCleanWorkBlockLine];
   }
 
   const lines: string[] = [];
@@ -364,9 +366,17 @@ function buildWorkBlockLines(
 }
 
 function buildRecommendedPlan(planning: DailyPlanningInputs, outcomes: string[], workBlockLines: string[]) {
+  const blockPhrase = (line: string | undefined, preposition: "in" | "via") => {
+    if (!line || line.startsWith(noCleanWorkBlockLine)) {
+      return "";
+    }
+
+    return ` ${preposition} ${line}`;
+  };
+
   const first = planning.mustBeforeNoon
-    ? `${planning.mustBeforeNoon} before noon${workBlockLines[0] ? ` via ${workBlockLines[0]}` : ""}.`
-    : `${outcomes[0] ?? "Move the first priority"}${workBlockLines[0] ? ` in ${workBlockLines[0]}` : ""}.`;
+    ? `${planning.mustBeforeNoon} before noon${blockPhrase(workBlockLines[0], "via")}.`
+    : `${outcomes[0] ?? "Move the first priority"}${blockPhrase(workBlockLines[0], "in")}.`;
 
   const thenTarget = outcomes.find(
     (item) =>
@@ -375,12 +385,12 @@ function buildRecommendedPlan(planning: DailyPlanningInputs, outcomes: string[],
       item.toLowerCase() !== outcomes[0]?.toLowerCase()
   );
   const then = thenTarget
-    ? `${thenTarget}${workBlockLines[1] ? ` in ${workBlockLines[1]}` : ""}.`
+    ? `${thenTarget}${blockPhrase(workBlockLines[1], "in")}.`
     : buildMorningLaunch(planning).join("; ") || "Run the launch checklist and protect the next open block.";
 
   const lastTarget = outcomes[2] ?? planning.quickWins[0] ?? planning.outlookSweep;
   const last = lastTarget
-    ? `${lastTarget}${workBlockLines[2] ? ` in ${workBlockLines[2]}` : ""}.`
+    ? `${lastTarget}${blockPhrase(workBlockLines[2], "in")}.`
     : "Use short gaps for cleanup only.";
 
   return { first, then, last };
@@ -447,7 +457,7 @@ function parseBriefSections(text: string) {
 }
 
 function buildNewsLines(newsTopics: DailyNewsTopic[], includeLinks: boolean) {
-  const lines = ["NEWS WATCH"];
+  const lines = ["NEWS WATCH", "Optional. Read only after today's execution tasks are complete."];
 
   for (const topic of newsTopics) {
     lines.push(topic.label);
@@ -639,6 +649,7 @@ function buildDailyBriefHtml(brief: DailyBriefData) {
           ${cards}
           <section style="border:1px solid #d4d9e1;padding:14px 16px;">
             <h2 style="margin:0 0 12px;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;">NEWS WATCH</h2>
+            <p style="margin:0 0 12px;color:#4b5563;font-size:13px;">Optional. Read only after today's execution tasks are complete.</p>
             ${newsHtml || '<p style="margin:0;">No news items returned.</p>'}
           </section>
         </div>

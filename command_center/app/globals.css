@@ -78,8 +78,8 @@ h3 {
   }
 
   .daily-brief-print-header {
-    margin-bottom: 0.16in;
-    padding-bottom: 0.08in;
+    margin-bottom: 0.1in;
+    padding-bottom: 0.06in;
     border-bottom: 1.5px solid black;
   }
 
@@ -92,34 +92,38 @@ h3 {
   }
 
   .daily-brief-print-title {
-    margin: 0.03in 0 0;
-    font-size: 18pt;
+    margin: 0.02in 0 0;
+    font-size: 16pt;
     line-height: 1;
   }
 
   .daily-brief-print-date {
-    margin: 0.04in 0 0;
-    font-size: 9pt;
+    margin: 0.03in 0 0;
+    font-size: 8.5pt;
   }
 
   .daily-brief-print-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.12in;
+    gap: 0.08in;
     align-items: start;
   }
 
   .daily-brief-print-card {
     border: 1px solid black;
-    padding: 0.08in 0.1in;
+    padding: 0.055in 0.075in;
     background: white;
     break-inside: avoid;
     page-break-inside: avoid;
   }
 
+  .daily-brief-print-card-wide {
+    grid-column: 1 / -1;
+  }
+
   .daily-brief-print-card h3 {
-    margin: 0 0 0.06in;
-    font-size: 8.8pt;
+    margin: 0 0 0.035in;
+    font-size: 7.8pt;
     line-height: 1.15;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -127,39 +131,13 @@ h3 {
 
   .daily-brief-print-list {
     display: grid;
-    gap: 0.03in;
-    font-size: 8.4pt;
-    line-height: 1.22;
+    gap: 0.018in;
+    font-size: 7.8pt;
+    line-height: 1.16;
   }
 
   .daily-brief-print-list p {
     margin: 0;
-  }
-
-  .daily-brief-print-news {
-    grid-column: 1 / -1;
-    margin-top: 0.12in;
-  }
-
-  .daily-brief-print-news-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.08in;
-  }
-
-  .daily-brief-print-news-topic {
-    margin: 0 0 0.04in;
-    font-size: 8.3pt;
-    font-weight: 700;
-    line-height: 1.15;
-    text-transform: uppercase;
-  }
-
-  .daily-brief-print-news .daily-brief-print-list p {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
   }
 
   .print-sheet-grid {

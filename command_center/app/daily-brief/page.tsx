@@ -25,8 +25,114 @@ const briefSectionOrder = [
   "NEWS WATCH"
 ] as const;
 
+const noCleanWorkBlockLine = "No clean work block. Use short execution windows.";
+
+type PrintSection = {
+  className?: string;
+  lines: string[];
+  title: string;
+};
+
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function stripBullet(line: string) {
+  return line.replace(/^-\s*/, "").trim();
+}
+
+function normalizePrintLine(line: string) {
+  const stripped = stripBullet(line);
+  if (
+    stripped.includes("No bounded work block available") ||
+    stripped.includes("No clean work block. Use short execution windows")
+  ) {
+    return noCleanWorkBlockLine;
+  }
+
+  return stripped;
+}
+
+function getSectionLines(sections: Map<string, string[]>, heading: string, limit?: number) {
+  const lines = (sections.get(heading) ?? [])
+    .filter((item) => !item.trim().startsWith("http"))
+    .map(normalizePrintLine)
+    .filter(Boolean);
+
+  return typeof limit === "number" ? lines.slice(0, limit) : lines;
+}
+
+function getExactlyThree(lines: string[]) {
+  const exact = lines.slice(0, 3);
+  while (exact.length < 3) {
+    exact.push("[ ]");
+  }
+
+  return exact;
+}
+
+function buildPrintSections(sections: Map<string, string[]>): PrintSection[] {
+  const mission = getSectionLines(sections, "MISSION FOR TODAY", 1);
+  const schedule = getSectionLines(sections, "SCHEDULE SNAPSHOT");
+  const workBlocks = getSectionLines(sections, "BEST WORK BLOCKS", 2);
+  const recommendedPlan = getSectionLines(sections, "RECOMMENDED PLAN", 3);
+  const hasNoCleanBlock = workBlocks.some((line) => line === noCleanWorkBlockLine);
+  const planOfAttack = [
+    ...(hasNoCleanBlock ? [noCleanWorkBlockLine] : workBlocks),
+    ...recommendedPlan
+  ].slice(0, 4);
+  const quickWins = getSectionLines(sections, "QUICK WINS", 2);
+  const watchouts = getSectionLines(sections, "WATCHOUTS", 2);
+
+  return [
+    {
+      title: "Mission for Today",
+      lines: mission.length > 0 ? mission : ["[ ]"],
+      className: "daily-brief-print-card-wide"
+    },
+    {
+      title: "Schedule Snapshot",
+      lines: schedule.length > 0 ? schedule : ["No calendar commitments found."],
+      className: "daily-brief-print-card-wide"
+    },
+    {
+      title: "Plan of Attack",
+      lines: planOfAttack.length > 0 ? planOfAttack : [noCleanWorkBlockLine],
+      className: "daily-brief-print-card-wide"
+    },
+    {
+      title: "Right Thing Easy Setup",
+      lines: [
+        "Health: water, protein, shoes visible",
+        "Focus: pick one money/visibility move",
+        "Friction: remove one blocker before starting"
+      ]
+    },
+    {
+      title: "Default Food Plan",
+      lines: ["Shake / beef or chicken bowl / chicken + rice-potato / yogurt or jerky"]
+    },
+    {
+      title: "Today's Top 3",
+      lines: getExactlyThree(getSectionLines(sections, "TOP 3 OUTCOMES"))
+    },
+    {
+      title: "Quick Wins",
+      lines: quickWins.length > 0 ? quickWins : ["[ ]"]
+    },
+    {
+      title: "Fallback If Day Gets Messy",
+      lines: ["Protein first. Walk 20 minutes. Complete one business money/visibility move."]
+    },
+    {
+      title: "Watchouts",
+      lines: watchouts.length > 0 ? watchouts : ["[ ]"]
+    },
+    {
+      title: "Scorecard",
+      lines: ["[ ] Protein", "[ ] Movement", "[ ] CCHCS", "[ ] Rykas", "[ ] SignalCare"]
+    }
+  ];
 }
 
 function parseBriefSections(text: string) {
@@ -67,6 +173,7 @@ export default async function DailyBriefPage({ searchParams }: DailyBriefPagePro
   const error = firstParam(params.error);
   const brief = await getDailyBriefData(new Date(), user.id);
   const sections = parseBriefSections(brief.briefText);
+  const printSections = buildPrintSections(sections);
 
   return (
     <main className="space-y-6">
@@ -157,42 +264,35 @@ export default async function DailyBriefPage({ searchParams }: DailyBriefPagePro
           </CardContent>
         </Card>
 
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {brief.newsTopics.map((topic) => (
-            <Card key={topic.label}>
-              <CardHeader>
-                <CardTitle className="text-base">{topic.label}</CardTitle>
-                <CardDescription>Latest full-story links</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {topic.items.length === 0 && <p className="text-sm text-muted-foreground">No items returned.</p>}
-                {topic.items.map((item) => (
-                  <div className="rounded-lg border p-3" key={`${topic.label}-${item.link}`}>
-                    <a
-                      className="text-sm font-medium text-accent underline-offset-2 hover:underline"
-                      href={item.link}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      {item.title}
-                    </a>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {item.source}
-                      {item.publishedAt
-                        ? ` - ${item.publishedAt.toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            hour: "numeric",
-                            minute: "2-digit"
-                          })}`
-                        : ""}
-                    </p>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          ))}
-        </section>
+        <Card className="print:hidden">
+          <CardHeader>
+            <CardTitle className="text-base">News Watch</CardTitle>
+            <CardDescription>Optional. Read only after today's execution tasks are complete.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 lg:grid-cols-3">
+            {brief.newsTopics.map((topic) => (
+              <section className="rounded-lg border p-3" key={topic.label}>
+                <h3 className="text-sm font-semibold">{topic.label}</h3>
+                <div className="mt-2 space-y-2">
+                  {topic.items.length === 0 && <p className="text-xs text-muted-foreground">No items returned.</p>}
+                  {topic.items.slice(0, 3).map((item) => (
+                    <div key={`${topic.label}-${item.link}`}>
+                      <a
+                        className="line-clamp-2 text-xs font-medium text-accent underline-offset-2 hover:underline"
+                        href={item.link}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        {item.title}
+                      </a>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">{item.source || "Source unavailable"}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </CardContent>
+        </Card>
       </div>
 
       <section className="daily-brief-print-root print-only">
@@ -203,44 +303,17 @@ export default async function DailyBriefPage({ searchParams }: DailyBriefPagePro
         </header>
 
         <div className="daily-brief-print-grid">
-          {briefSectionOrder
-            .filter((heading) => heading !== "NEWS WATCH")
-            .map((heading) => {
-              const items = (sections.get(heading) ?? []).filter((item) => !item.trim().startsWith("http"));
-              if (items.length === 0) {
-                return null;
-              }
-
-              return (
-                <section className="daily-brief-print-card" key={heading}>
-                  <h3>{heading}</h3>
-                  <div className="daily-brief-print-list">
-                    {items.map((item, index) => (
-                      <p key={`${heading}-${index}`}>{item}</p>
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
-        </div>
-
-        <section className="daily-brief-print-card daily-brief-print-news">
-          <h3>NEWS WATCH</h3>
-          <div className="daily-brief-print-news-grid">
-            {brief.newsTopics.map((topic) => (
-              <div key={topic.label}>
-                <p className="daily-brief-print-news-topic">{topic.label}</p>
-                <div className="daily-brief-print-list">
-                  {topic.items.slice(0, 3).map((item, index) => (
-                    <p key={`${topic.label}-${index}`}>
-                      {index + 1}. {item.title} ({item.source})
-                    </p>
-                  ))}
-                </div>
+          {printSections.map((section) => (
+            <section className={`daily-brief-print-card ${section.className ?? ""}`} key={section.title}>
+              <h3>{section.title}</h3>
+              <div className="daily-brief-print-list">
+                {section.lines.map((item, index) => (
+                  <p key={`${section.title}-${index}`}>{item}</p>
+                ))}
               </div>
-            ))}
-          </div>
-        </section>
+            </section>
+          ))}
+        </div>
       </section>
     </main>
   );
