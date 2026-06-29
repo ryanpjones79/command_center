@@ -1,8 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { executionSelectOptions } from "@/lib/execution-options";
+import { getCalendarEventsForDate } from "@/server/google-calendar-service";
 
 function startOfDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function endOfDay(value: Date) {
+  const end = startOfDay(value);
+  end.setDate(end.getDate() + 1);
+  return end;
 }
 
 function daysAgo(value: Date, count: number) {
@@ -378,6 +385,40 @@ export async function getTaskMaintenanceData(
   const today = startOfDay(new Date());
 
   return { tasks: addQuickWinCandidateFlag(sortTasks(rawTasks), today), domains, projects };
+}
+
+export async function getTimeBlockPlannerData(userId: string, referenceDate = new Date()) {
+  await ensureExecutionSetup(userId);
+
+  const dayStart = startOfDay(referenceDate);
+  const dayEnd = endOfDay(referenceDate);
+
+  const [calendarEvents, tasks, domains, projects] = await Promise.all([
+    getCalendarEventsForDate(referenceDate),
+    prisma.executionTask.findMany({
+      where: {
+        userId,
+        status: { notIn: ["DONE", "DROPPED"] },
+        OR: [
+          { scheduledStart: { gte: dayStart, lt: dayEnd } },
+          { scheduledStart: null }
+        ]
+      },
+      include: { domain: true, project: true }
+    }),
+    prisma.executionDomain.findMany({ where: { userId }, orderBy: { name: "asc" } }),
+    prisma.executionProject.findMany({ where: { userId }, include: { domain: true }, orderBy: { name: "asc" } })
+  ]);
+
+  const sortedTasks = sortTasks(tasks);
+  return {
+    date: referenceDate,
+    calendarEvents,
+    domains,
+    projects,
+    scheduledTasks: sortedTasks.filter((task) => task.scheduledStart),
+    unscheduledTasks: sortedTasks.filter((task) => !task.scheduledStart)
+  };
 }
 
 export async function getProjectMaintenanceData(userId: string) {

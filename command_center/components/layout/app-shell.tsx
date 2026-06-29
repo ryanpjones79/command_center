@@ -6,6 +6,7 @@ const links = [
   { href: "/daily-brief", label: "Daily Brief" },
   { href: "/", label: "Action Sheet" },
   { href: "/weekly-review", label: "Weekly Review" },
+  { href: "/time-blocks", label: "Time Blocks" },
   { href: "/tasks", label: "Tasks" },
   { href: "/projects", label: "Projects" },
   { href: "/settings", label: "Settings" }

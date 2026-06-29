@@ -226,6 +226,8 @@ model ExecutionTask {
   recurrenceFrequency ExecutionRecurrenceFrequency @default(NONE)
   recurrenceEndDate DateTime?
   recurrenceParentId String?
+  scheduledStart DateTime?
+  scheduledEnd DateTime?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
   completedAt  DateTime?
@@ -237,6 +239,7 @@ model ExecutionTask {
   @@index([userId, followUpDate])
   @@index([userId, recurrenceFrequency])
   @@index([recurrenceParentId])
+  @@index([userId, scheduledStart])
   @@index([projectId, status])
 }
 

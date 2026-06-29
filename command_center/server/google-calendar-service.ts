@@ -220,7 +220,7 @@ export function parseWorkdayWindow(referenceDate: Date, input?: string | null) {
   return { start, end };
 }
 
-export async function getTodaysCalendarEvents(referenceDate = new Date()) {
+export async function getCalendarEventsForDate(referenceDate = new Date()) {
   const calendar = getGoogleCalendarClient();
   const { calendarId } = getGoogleConfigSnapshot();
   const timeZone = getBriefTimeZone();
@@ -258,6 +258,10 @@ export async function getTodaysCalendarEvents(referenceDate = new Date()) {
     .filter((event) => event.status !== "cancelled" && !isCancelledSummary(event.summary))
     .sort((left, right) => left.start.getTime() - right.start.getTime())
     .map(({ status: _status, ...event }) => event);
+}
+
+export async function getTodaysCalendarEvents(referenceDate = new Date()) {
+  return getCalendarEventsForDate(referenceDate);
 }
 
 export function deriveWorkBlocksFromEvents(events: CalendarEvent[], referenceDate = new Date(), workdayWindow?: string | null) {
