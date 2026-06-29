@@ -150,7 +150,7 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
 
   useEffect(() => {
     setLocalScheduledTasks(scheduledTasks);
-    setLocalUnscheduledTasks(unscheduledTasks);
+    setLocalUnscheduledTasks(unscheduledTasks.map((task) => ({ ...task, scheduledStart: null, scheduledEnd: null })));
   }, [scheduledTasks, unscheduledTasks]);
 
   const slots = useMemo(() => {

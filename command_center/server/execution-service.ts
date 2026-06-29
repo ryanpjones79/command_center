@@ -405,17 +405,15 @@ export async function getTimeBlockPlannerData(userId: string, referenceDate = ne
   await ensureExecutionSetup(userId);
 
   const dayRange = getCalendarDayRange(referenceDate);
+  const isScheduledOnSelectedDay = (task: { scheduledStart: Date | null }) =>
+    Boolean(task.scheduledStart && task.scheduledStart >= dayRange.start && task.scheduledStart < dayRange.end);
 
   const [calendarEvents, tasks, domains, projects] = await Promise.all([
     getCalendarEventsForDate(referenceDate),
     prisma.executionTask.findMany({
       where: {
         userId,
-        status: { notIn: ["DONE", "DROPPED"] },
-        OR: [
-          { scheduledStart: { gte: dayRange.start, lt: dayRange.end } },
-          { scheduledStart: null }
-        ]
+        status: { notIn: ["DONE", "DROPPED"] }
       },
       include: { domain: true, project: true }
     }),
@@ -429,8 +427,8 @@ export async function getTimeBlockPlannerData(userId: string, referenceDate = ne
     calendarEvents,
     domains,
     projects,
-    scheduledTasks: sortedTasks.filter((task) => task.scheduledStart),
-    unscheduledTasks: sortedTasks.filter((task) => !task.scheduledStart)
+    scheduledTasks: sortedTasks.filter((task) => isScheduledOnSelectedDay(task)),
+    unscheduledTasks: sortedTasks.filter((task) => !isScheduledOnSelectedDay(task))
   };
 }
 
