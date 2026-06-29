@@ -241,6 +241,9 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                       )}
                       {task.pinToTodayUntilDone && <Badge variant="default">Pinned Today</Badge>}
                       {task.isQuickWinCandidate && <Badge variant="secondary">Quick Win Candidate</Badge>}
+                      {task.recurrenceFrequency !== "NONE" && (
+                        <Badge variant="outline">Repeats {formatExecutionLabel(task.recurrenceFrequency).toLowerCase()}</Badge>
+                      )}
                     </div>
                   </div>
 
@@ -261,6 +264,14 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                       <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Estimate</p>
                       <p className="mt-1 text-sm">
                         {task.estimatedDuration ? formatExecutionDurationBucket(task.estimatedDuration) : "None"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Repeats</p>
+                      <p className="mt-1 text-sm">
+                        {task.recurrenceFrequency === "NONE"
+                          ? "No"
+                          : `${formatExecutionLabel(task.recurrenceFrequency)}${task.recurrenceEndDate ? ` until ${task.recurrenceEndDate.toLocaleDateString()}` : ""}`}
                       </p>
                     </div>
                     <div>
@@ -357,6 +368,25 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                           </option>
                         ))}
                       </select>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <select
+                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                          defaultValue={task.recurrenceFrequency}
+                          name="recurrenceFrequency"
+                        >
+                          {executionSelectOptions.recurrenceFrequencies.map((value) => (
+                            <option key={value} value={value}>
+                              {value === "NONE" ? "Does not repeat" : `Repeats ${formatExecutionLabel(value).toLowerCase()}`}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                          defaultValue={task.recurrenceEndDate ? task.recurrenceEndDate.toISOString().slice(0, 10) : ""}
+                          name="recurrenceEndDate"
+                          type="date"
+                        />
+                      </div>
                       <div className="grid gap-2 sm:grid-cols-2">
                         <input
                           className="h-9 rounded-md border border-input bg-background px-3 text-sm"

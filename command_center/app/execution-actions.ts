@@ -1,6 +1,7 @@
 "use server";
 
 import {
+  type ExecutionRecurrenceFrequency,
   type ExecutionActiveStatus,
   type ExecutionTaskStatus,
   type ExecutionWhenBucket
@@ -36,6 +37,30 @@ function addDays(value: Date, days: number) {
   return copy;
 }
 
+function addMonths(value: Date, months: number) {
+  const copy = new Date(value);
+  copy.setMonth(copy.getMonth() + months);
+  return copy;
+}
+
+function nextRecurrenceDate(value: Date, frequency: ExecutionRecurrenceFrequency) {
+  if (frequency === "DAILY") return addDays(value, 1);
+  if (frequency === "WEEKLY") return addDays(value, 7);
+  if (frequency === "MONTHLY") return addMonths(value, 1);
+  return null;
+}
+
+function whenBucketForDate(value: Date) {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const targetStart = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  const daysAway = Math.round((targetStart.getTime() - todayStart.getTime()) / 86400000);
+
+  if (daysAway <= 0) return "TODAY";
+  if (daysAway <= 7) return "THIS_WEEK";
+  return "LATER";
+}
+
 async function getOwnedProject(userId: string, projectId: string) {
   if (!projectId) return null;
   return prisma.executionProject.findFirst({
@@ -47,8 +72,7 @@ async function getOwnedProject(userId: string, projectId: string) {
 async function getOwnedTask(userId: string, taskId: string) {
   if (!taskId) return null;
   return prisma.executionTask.findFirst({
-    where: { id: taskId, userId },
-    select: { id: true, followUpDate: true }
+    where: { id: taskId, userId }
   });
 }
 
@@ -62,6 +86,62 @@ async function getOwnedTaskIds(userId: string, taskIds: string[]) {
   });
 
   return ownedTasks.map((task) => task.id);
+}
+
+async function completeExecutionTask(task: NonNullable<Awaited<ReturnType<typeof getOwnedTask>>>) {
+  const completedAt = new Date();
+
+  await prisma.executionTask.update({
+    where: { id: task.id },
+    data: {
+      status: "DONE",
+      completedAt
+    }
+  });
+
+  if (task.recurrenceFrequency === "NONE") {
+    return;
+  }
+
+  const anchorDate = task.dueDate ?? task.followUpDate ?? completedAt;
+  let nextDate = nextRecurrenceDate(anchorDate, task.recurrenceFrequency);
+  const today = new Date(completedAt.getFullYear(), completedAt.getMonth(), completedAt.getDate());
+
+  while (nextDate && nextDate < today) {
+    nextDate = nextRecurrenceDate(nextDate, task.recurrenceFrequency);
+  }
+
+  if (!nextDate) {
+    return;
+  }
+
+  if (task.recurrenceEndDate && nextDate > task.recurrenceEndDate) {
+    return;
+  }
+
+  await prisma.executionTask.create({
+    data: {
+      userId: task.userId,
+      domainId: task.domainId,
+      projectId: task.projectId,
+      title: task.title,
+      type: task.type,
+      estimatedDuration: task.estimatedDuration,
+      status: "NOT_STARTED",
+      priority: task.priority,
+      whenBucket: whenBucketForDate(nextDate),
+      dueDate: task.dueDate ? nextDate : task.followUpDate ? null : nextDate,
+      followUpDate: task.followUpDate ? nextDate : null,
+      waitingOn: task.waitingOn,
+      note: task.note,
+      source: task.source,
+      isBlocked: false,
+      pinToTodayUntilDone: task.pinToTodayUntilDone,
+      recurrenceFrequency: task.recurrenceFrequency,
+      recurrenceEndDate: task.recurrenceEndDate,
+      recurrenceParentId: task.recurrenceParentId ?? task.id
+    }
+  });
 }
 
 export async function seedExecutionDomainsAction() {
@@ -275,7 +355,9 @@ export async function createExecutionTaskAction(_prevState: unknown, formData: F
     note: formData.get("note"),
     source: formData.get("source"),
     isBlocked: formData.get("isBlocked") === "on",
-    pinToTodayUntilDone: formData.get("pinToTodayUntilDone") === "on"
+    pinToTodayUntilDone: formData.get("pinToTodayUntilDone") === "on",
+    recurrenceFrequency: formData.get("recurrenceFrequency") || "NONE",
+    recurrenceEndDate: formData.get("recurrenceEndDate")
   });
 
   if (!parsed.success) {
@@ -307,6 +389,8 @@ export async function createExecutionTaskAction(_prevState: unknown, formData: F
       source: parsed.data.source || null,
       isBlocked: parsed.data.isBlocked,
       pinToTodayUntilDone: parsed.data.pinToTodayUntilDone,
+      recurrenceFrequency: parsed.data.recurrenceFrequency,
+      recurrenceEndDate: parseDate(parsed.data.recurrenceEndDate),
       completedAt: parsed.data.status === "DONE" ? new Date() : null
     }
   });
@@ -336,32 +420,46 @@ export async function updateExecutionTaskAction(formData: FormData) {
     note: formData.get("note"),
     source: formData.get("source"),
     isBlocked: formData.get("isBlocked") === "on",
-    pinToTodayUntilDone: formData.get("pinToTodayUntilDone") === "on"
+    pinToTodayUntilDone: formData.get("pinToTodayUntilDone") === "on",
+    recurrenceFrequency: formData.get("recurrenceFrequency") || "NONE",
+    recurrenceEndDate: formData.get("recurrenceEndDate")
   });
 
   if (!parsed.success) return;
 
-  await prisma.executionTask.update({
-    where: { id: task.id },
-    data: {
-      domainId: parsed.data.domainId,
-      projectId: parsed.data.projectId || null,
-      title: parsed.data.title,
-      type: parsed.data.type,
-      estimatedDuration: parsed.data.estimatedDuration ?? null,
-      status: parsed.data.status,
-      priority: parsed.data.priority,
-      whenBucket: parsed.data.whenBucket,
-      dueDate: parseDate(parsed.data.dueDate),
-      followUpDate: parseDate(parsed.data.followUpDate),
-      waitingOn: parsed.data.waitingOn || null,
-      note: parsed.data.note || null,
-      source: parsed.data.source || null,
-      isBlocked: parsed.data.isBlocked,
-      pinToTodayUntilDone: parsed.data.pinToTodayUntilDone,
-      completedAt: parsed.data.status === "DONE" ? new Date() : null
-    }
-  });
+  const data = {
+    domainId: parsed.data.domainId,
+    projectId: parsed.data.projectId || null,
+    title: parsed.data.title,
+    type: parsed.data.type,
+    estimatedDuration: parsed.data.estimatedDuration ?? null,
+    status: parsed.data.status,
+    priority: parsed.data.priority,
+    whenBucket: parsed.data.whenBucket,
+    dueDate: parseDate(parsed.data.dueDate),
+    followUpDate: parseDate(parsed.data.followUpDate),
+    waitingOn: parsed.data.waitingOn || null,
+    note: parsed.data.note || null,
+    source: parsed.data.source || null,
+    isBlocked: parsed.data.isBlocked,
+    pinToTodayUntilDone: parsed.data.pinToTodayUntilDone,
+    recurrenceFrequency: parsed.data.recurrenceFrequency,
+    recurrenceEndDate: parseDate(parsed.data.recurrenceEndDate),
+    completedAt: parsed.data.status === "DONE" ? new Date() : null
+  };
+
+  if (parsed.data.status === "DONE" && task.status !== "DONE") {
+    const updatedTask = await prisma.executionTask.update({
+      where: { id: task.id },
+      data
+    });
+    await completeExecutionTask(updatedTask);
+  } else {
+    await prisma.executionTask.update({
+      where: { id: task.id },
+      data
+    });
+  }
 
   revalidateExecution();
 }
@@ -385,14 +483,18 @@ export async function markExecutionTaskStatusAction(
   const task = await getOwnedTask(user.id, taskId);
   if (!task) return;
 
-  await prisma.executionTask.update({
-    where: { id: task.id },
-    data: {
-      status,
-      whenBucket,
-      completedAt: status === "DONE" ? new Date() : null
-    }
-  });
+  if (status === "DONE" && task.status !== "DONE") {
+    await completeExecutionTask(task);
+  } else {
+    await prisma.executionTask.update({
+      where: { id: task.id },
+      data: {
+        status,
+        whenBucket,
+        completedAt: null
+      }
+    });
+  }
 
   revalidateExecution();
 }
@@ -499,8 +601,13 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
     updates.completedAt = null;
   }
   if (bulkAction === "STATUS_DONE") {
-    updates.status = "DONE";
-    updates.completedAt = new Date();
+    const tasks = await prisma.executionTask.findMany({
+      where: { userId: user.id, id: { in: ownedTaskIds } }
+    });
+
+    await Promise.all(tasks.filter((task) => task.status !== "DONE").map((task) => completeExecutionTask(task)));
+    revalidateExecution();
+    return;
   }
 
   if (Object.keys(updates).length === 0) return;

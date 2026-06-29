@@ -3,6 +3,7 @@ import type {
   ExecutionDurationBucket,
   ExecutionPriority,
   ExecutionProjectStatus,
+  ExecutionRecurrenceFrequency,
   ExecutionTaskStatus,
   ExecutionTaskType,
   ExecutionWeeklyFocus,
@@ -12,6 +13,7 @@ import type {
 export type ExecutionSelectOptions = {
   priorities: ExecutionPriority[];
   durationBuckets: ExecutionDurationBucket[];
+  recurrenceFrequencies: ExecutionRecurrenceFrequency[];
   taskTypes: ExecutionTaskType[];
   taskStatuses: ExecutionTaskStatus[];
   whenBuckets: ExecutionWhenBucket[];
@@ -23,6 +25,7 @@ export type ExecutionSelectOptions = {
 export const executionSelectOptions: ExecutionSelectOptions = {
   priorities: ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
   durationBuckets: ["UNDER_30_MIN", "THIRTY_TO_SIXTY_MIN", "ONE_TO_TWO_HOURS", "TWO_HOURS_PLUS"],
+  recurrenceFrequencies: ["NONE", "DAILY", "WEEKLY", "MONTHLY"],
   taskTypes: ["ACTION", "FOLLOW_UP", "ADMIN", "QUICK_WIN"],
   taskStatuses: ["NOT_STARTED", "IN_PROGRESS", "WAITING", "DONE", "DROPPED"],
   whenBuckets: ["TODAY", "THIS_WEEK", "LATER", "WAITING", "PARKING_LOT"],

@@ -107,6 +107,16 @@ export function CreateTaskForm({
         ))}
       </select>
       <div className="grid gap-2 sm:grid-cols-2">
+        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="NONE" name="recurrenceFrequency">
+          {executionSelectOptions.recurrenceFrequencies.map((value) => (
+            <option key={value} value={value}>
+              {value === "NONE" ? "Does not repeat" : `Repeats ${formatExecutionLabel(value).toLowerCase()}`}
+            </option>
+          ))}
+        </select>
+        <Input name="recurrenceEndDate" type="date" />
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
         <Input name="waitingOn" placeholder="Waiting on" />
         <Input name="source" placeholder="Source" />
       </div>

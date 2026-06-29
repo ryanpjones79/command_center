@@ -70,6 +70,13 @@ enum ExecutionWhenBucket {
   PARKING_LOT
 }
 
+enum ExecutionRecurrenceFrequency {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
 model User {
   id                String               @id @default(cuid())
   email             String               @unique
@@ -216,6 +223,9 @@ model ExecutionTask {
   source       String?
   isBlocked    Boolean             @default(false)
   pinToTodayUntilDone Boolean      @default(false)
+  recurrenceFrequency ExecutionRecurrenceFrequency @default(NONE)
+  recurrenceEndDate DateTime?
+  recurrenceParentId String?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
   completedAt  DateTime?
@@ -225,6 +235,8 @@ model ExecutionTask {
 
   @@index([userId, whenBucket, status, priority, dueDate])
   @@index([userId, followUpDate])
+  @@index([userId, recurrenceFrequency])
+  @@index([recurrenceParentId])
   @@index([projectId, status])
 }
 

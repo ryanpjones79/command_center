@@ -14,6 +14,8 @@ type TaskItem = {
   priority: string;
   whenBucket: string;
   estimatedDuration: string | null;
+  recurrenceFrequency: string;
+  recurrenceEndDate: Date | null;
   dueDate: Date | null;
   followUpDate?: Date | null;
   waitingOn: string | null;
@@ -85,7 +87,15 @@ export function TaskLineItem({
                 Pinned
               </span>
             )}
+            {task.recurrenceFrequency !== "NONE" && (
+              <span className="rounded border border-border/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                Repeats {formatExecutionLabel(task.recurrenceFrequency).toLowerCase()}
+              </span>
+            )}
             {task.dueDate && <span className="text-[11px] text-muted-foreground">Due {task.dueDate.toLocaleDateString()}</span>}
+            {task.recurrenceEndDate && (
+              <span className="text-[11px] text-muted-foreground">Repeats until {task.recurrenceEndDate.toLocaleDateString()}</span>
+            )}
             {task.followUpDate && (
               <span className="text-[11px] text-muted-foreground">Follow up {task.followUpDate.toLocaleDateString()}</span>
             )}
@@ -180,6 +190,25 @@ export function TaskLineItem({
                   </option>
                 ))}
               </select>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <select
+                  className={fieldClass}
+                  defaultValue={task.recurrenceFrequency}
+                  name="recurrenceFrequency"
+                >
+                  {executionSelectOptions.recurrenceFrequencies.map((value) => (
+                    <option key={value} value={value}>
+                      {value === "NONE" ? "Does not repeat" : `Repeats ${formatExecutionLabel(value).toLowerCase()}`}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className={fieldClass}
+                  defaultValue={task.recurrenceEndDate ? task.recurrenceEndDate.toISOString().slice(0, 10) : ""}
+                  name="recurrenceEndDate"
+                  type="date"
+                />
+              </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <input
                   className={fieldClass}
