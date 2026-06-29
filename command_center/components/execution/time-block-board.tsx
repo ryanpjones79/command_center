@@ -77,8 +77,21 @@ function addMinutes(value: Date, minutes: number) {
   return new Date(value.getTime() + minutes * 60000);
 }
 
-function hasTimedDuration(event: BoardCalendarEvent) {
-  return !event.isAllDay && event.end.getTime() - event.start.getTime() >= minimumTimedEventMinutes * 60000;
+function isSameLocalDay(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function hasTimedDuration(event: BoardCalendarEvent, selectedDate: Date) {
+  return (
+    !event.isAllDay &&
+    isSameLocalDay(event.start, selectedDate) &&
+    isSameLocalDay(event.end, selectedDate) &&
+    event.end.getTime() - event.start.getTime() >= minimumTimedEventMinutes * 60000
+  );
 }
 
 function slotStart(date: Date, index: number) {
@@ -107,8 +120,8 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
   }, [date]);
 
   const dayHeight = (endHour - startHour) * 60 * pixelsPerMinute;
-  const contextEvents = calendarEvents.filter((event) => !hasTimedDuration(event));
-  const timedEvents = calendarEvents.filter(hasTimedDuration);
+  const contextEvents = calendarEvents.filter((event) => !hasTimedDuration(event, date));
+  const timedEvents = calendarEvents.filter((event) => hasTimedDuration(event, date));
 
   const scheduleTask = (taskId: string, start: Date) => {
     const task = [...localUnscheduledTasks, ...localScheduledTasks].find((item) => item.id === taskId);
@@ -286,9 +299,20 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
       </section>
 
       <aside className="space-y-3">
-        <section className="rounded-2xl border bg-card p-4 shadow-sm">
+        <section
+          className="rounded-2xl border bg-card p-4 shadow-sm"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            const taskId = event.dataTransfer.getData("text/plain") || draggedTaskId;
+            if (taskId) {
+              clearTask(taskId);
+            }
+          }}
+        >
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Task Queue</p>
           <h3 className="mt-1 text-lg font-semibold">Drag to Timeblock</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Drop a scheduled task here to move it back to the queue.</p>
           <div className="mt-3 space-y-2">
             {localUnscheduledTasks.length === 0 && <p className="text-sm text-muted-foreground">No unscheduled active tasks.</p>}
             {localUnscheduledTasks.map((task) => (

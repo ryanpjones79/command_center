@@ -157,6 +157,21 @@ function isCancelledSummary(summary: string) {
   return lowered.startsWith("canceled:") || lowered.startsWith("cancelled:");
 }
 
+function isSameZonedDay(left: Date, right: Date) {
+  const leftParts = getZonedDateParts(left);
+  const rightParts = getZonedDateParts(right);
+  return leftParts.year === rightParts.year && leftParts.month === rightParts.month && leftParts.day === rightParts.day;
+}
+
+function isTimedBusyEvent(event: CalendarEvent, referenceDate: Date) {
+  return (
+    !event.isAllDay &&
+    isSameZonedDay(event.start, referenceDate) &&
+    isSameZonedDay(event.end, referenceDate) &&
+    event.end.getTime() - event.start.getTime() >= MINIMUM_BUSY_EVENT_MINUTES * 60000
+  );
+}
+
 function mergeIntervals(intervals: TimeWindow[]) {
   if (intervals.length === 0) {
     return [];
@@ -278,11 +293,7 @@ export function deriveWorkBlocksFromEvents(events: CalendarEvent[], referenceDat
   const explicitWindow = parseWorkdayWindow(referenceDate, workdayWindow);
   const busy = mergeIntervals(
     events
-      .filter(
-        (event) =>
-          !event.isAllDay &&
-          event.end.getTime() - event.start.getTime() >= MINIMUM_BUSY_EVENT_MINUTES * 60000
-      )
+      .filter((event) => isTimedBusyEvent(event, referenceDate))
       .map((event) => ({
         start: event.start,
         end: event.end
