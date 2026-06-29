@@ -260,6 +260,65 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
     });
   };
 
+  const mobileTaskQueue = (
+    <section className="rounded-[1.75rem] border border-emerald-300/20 bg-slate-950/95 p-4 text-white shadow-[0_18px_70px_rgba(2,6,23,0.36)] lg:hidden">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-200/80">Task Queue</p>
+          <h3 className="mt-1 text-lg font-semibold">Tap to place</h3>
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs text-slate-200">
+          {localUnscheduledTasks.length} open
+        </span>
+      </div>
+      <div className="mt-3 max-h-[58vh] space-y-2 overflow-y-auto pr-1">
+        {localUnscheduledTasks.length === 0 && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-3 text-sm text-slate-300">
+            <p>No unscheduled active tasks for this day.</p>
+            <p className="mt-1 text-xs text-slate-400">If everything is already placed, it will show in the timeline below.</p>
+          </div>
+        )}
+        {localUnscheduledTasks.map((task) => {
+          const openSlots = findOpenSlots(task, 3);
+          return (
+            <div className={`rounded-2xl border p-3 ${priorityTone(task.priority)}`} key={task.id}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="line-clamp-2 text-sm font-semibold text-white">{task.title}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-300">
+                    <span>{task.domain.name}</span>
+                    {task.project && <span>{task.project.name}</span>}
+                    <span>{formatExecutionLabel(task.priority)}</span>
+                    {task.estimatedDuration && <span>{formatExecutionDurationBucket(task.estimatedDuration)}</span>}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {openSlots.length === 0 && <span className="text-xs text-slate-300">No clean slot found today.</span>}
+                {openSlots.map((slot, index) => (
+                  <button
+                    className={
+                      index === 0
+                        ? "rounded-full bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-slate-950"
+                        : "rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-medium text-white"
+                    }
+                    disabled={isPending || pendingTaskId === task.id}
+                    key={slot.toISOString()}
+                    onClick={() => scheduleTask(task.id, slot)}
+                    type="button"
+                  >
+                    {index === 0 ? "Next " : ""}
+                    {formatClock(slot)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   return (
     <div className="space-y-4">
       <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(2,6,23,0.32)] lg:hidden">
@@ -305,6 +364,8 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
       </section>
 
       <div className="grid gap-4 lg:hidden">
+        {mobileTaskQueue}
+
         {contextEvents.length > 0 && (
           <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
@@ -374,58 +435,6 @@ export function TimeBlockBoard({ calendarEvents, date, scheduledTasks, unschedul
                 </div>
               </div>
             ))}
-          </div>
-        </section>
-
-        <section className="sticky bottom-20 z-30 rounded-[1.75rem] border border-emerald-300/20 bg-slate-950/95 p-4 text-white shadow-[0_18px_70px_rgba(2,6,23,0.45)] backdrop-blur">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-200/80">Task Queue</p>
-              <h3 className="mt-1 text-lg font-semibold">Tap to place</h3>
-            </div>
-            <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs text-slate-200">
-              {localUnscheduledTasks.length} open
-            </span>
-          </div>
-          <div className="mt-3 max-h-[46vh] space-y-2 overflow-y-auto pr-1">
-            {localUnscheduledTasks.length === 0 && <p className="rounded-2xl border border-white/10 bg-white/[0.06] p-3 text-sm text-slate-300">No unscheduled active tasks.</p>}
-            {localUnscheduledTasks.map((task) => {
-              const openSlots = findOpenSlots(task, 3);
-              return (
-                <div className={`rounded-2xl border p-3 ${priorityTone(task.priority)}`} key={task.id}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="line-clamp-2 text-sm font-semibold text-white">{task.title}</p>
-                      <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-300">
-                        <span>{task.domain.name}</span>
-                        {task.project && <span>{task.project.name}</span>}
-                        <span>{formatExecutionLabel(task.priority)}</span>
-                        {task.estimatedDuration && <span>{formatExecutionDurationBucket(task.estimatedDuration)}</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {openSlots.length === 0 && <span className="text-xs text-slate-300">No clean slot found today.</span>}
-                    {openSlots.map((slot, index) => (
-                      <button
-                        className={
-                          index === 0
-                            ? "rounded-full bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-slate-950"
-                            : "rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-medium text-white"
-                        }
-                        disabled={isPending || pendingTaskId === task.id}
-                        key={slot.toISOString()}
-                        onClick={() => scheduleTask(task.id, slot)}
-                        type="button"
-                      >
-                        {index === 0 ? "Next " : ""}
-                        {formatClock(slot)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </section>
       </div>
