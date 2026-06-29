@@ -51,6 +51,7 @@ export const executionTaskSchema = z.object({
   source: z.string().max(180).optional(),
   isBlocked: z.coerce.boolean().default(false),
   pinToTodayUntilDone: z.coerce.boolean().default(false),
-  recurrenceFrequency: z.enum(["NONE", "DAILY", "WEEKLY", "MONTHLY"]).default("NONE"),
+  recurrenceFrequency: z.enum(["NONE", "DAILY", "WORKDAYS", "WEEKENDS", "WEEKLY", "CUSTOM_WEEKDAYS", "MONTHLY"]).default("NONE"),
+  recurrenceWeekdays: z.string().max(20).nullish(),
   recurrenceEndDate: z.string().optional()
 });

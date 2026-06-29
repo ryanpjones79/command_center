@@ -43,9 +43,43 @@ function addMonths(value: Date, months: number) {
   return copy;
 }
 
-function nextRecurrenceDate(value: Date, frequency: ExecutionRecurrenceFrequency) {
+const validRecurrenceWeekdays = new Set(["0", "1", "2", "3", "4", "5", "6"]);
+
+function normalizeRecurrenceWeekdays(value: FormDataEntryValue | FormDataEntryValue[] | null | undefined) {
+  const rawValues = Array.isArray(value) ? value : value ? [value] : [];
+  const selected = [...new Set(rawValues.map(String).filter((day) => validRecurrenceWeekdays.has(day)))];
+  return selected.length > 0 ? selected.sort().join(",") : null;
+}
+
+function parseRecurrenceWeekdays(value: string | null | undefined) {
+  const selected = String(value ?? "")
+    .split(",")
+    .map((day) => Number(day.trim()))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+
+  return new Set(selected);
+}
+
+function nextMatchingDay(value: Date, allowedDays: Set<number>) {
+  if (allowedDays.size === 0) return null;
+
+  let nextDate = addDays(value, 1);
+  for (let index = 0; index < 14; index += 1) {
+    if (allowedDays.has(nextDate.getDay())) {
+      return nextDate;
+    }
+    nextDate = addDays(nextDate, 1);
+  }
+
+  return null;
+}
+
+function nextRecurrenceDate(value: Date, frequency: ExecutionRecurrenceFrequency, recurrenceWeekdays?: string | null) {
   if (frequency === "DAILY") return addDays(value, 1);
+  if (frequency === "WORKDAYS") return nextMatchingDay(value, new Set([1, 2, 3, 4, 5]));
+  if (frequency === "WEEKENDS") return nextMatchingDay(value, new Set([0, 6]));
   if (frequency === "WEEKLY") return addDays(value, 7);
+  if (frequency === "CUSTOM_WEEKDAYS") return nextMatchingDay(value, parseRecurrenceWeekdays(recurrenceWeekdays));
   if (frequency === "MONTHLY") return addMonths(value, 1);
   return null;
 }
@@ -104,11 +138,11 @@ async function completeExecutionTask(task: NonNullable<Awaited<ReturnType<typeof
   }
 
   const anchorDate = task.dueDate ?? task.followUpDate ?? completedAt;
-  let nextDate = nextRecurrenceDate(anchorDate, task.recurrenceFrequency);
+  let nextDate = nextRecurrenceDate(anchorDate, task.recurrenceFrequency, task.recurrenceWeekdays);
   const today = new Date(completedAt.getFullYear(), completedAt.getMonth(), completedAt.getDate());
 
   while (nextDate && nextDate < today) {
-    nextDate = nextRecurrenceDate(nextDate, task.recurrenceFrequency);
+    nextDate = nextRecurrenceDate(nextDate, task.recurrenceFrequency, task.recurrenceWeekdays);
   }
 
   if (!nextDate) {
@@ -138,6 +172,7 @@ async function completeExecutionTask(task: NonNullable<Awaited<ReturnType<typeof
       isBlocked: false,
       pinToTodayUntilDone: task.pinToTodayUntilDone,
       recurrenceFrequency: task.recurrenceFrequency,
+      recurrenceWeekdays: task.recurrenceWeekdays,
       recurrenceEndDate: task.recurrenceEndDate,
       recurrenceParentId: task.recurrenceParentId ?? task.id
     }
@@ -357,6 +392,7 @@ export async function createExecutionTaskAction(_prevState: unknown, formData: F
     isBlocked: formData.get("isBlocked") === "on",
     pinToTodayUntilDone: formData.get("pinToTodayUntilDone") === "on",
     recurrenceFrequency: formData.get("recurrenceFrequency") || "NONE",
+    recurrenceWeekdays: normalizeRecurrenceWeekdays(formData.getAll("recurrenceWeekdays")),
     recurrenceEndDate: formData.get("recurrenceEndDate")
   });
 
@@ -390,6 +426,7 @@ export async function createExecutionTaskAction(_prevState: unknown, formData: F
       isBlocked: parsed.data.isBlocked,
       pinToTodayUntilDone: parsed.data.pinToTodayUntilDone,
       recurrenceFrequency: parsed.data.recurrenceFrequency,
+      recurrenceWeekdays: parsed.data.recurrenceFrequency === "CUSTOM_WEEKDAYS" ? parsed.data.recurrenceWeekdays ?? null : null,
       recurrenceEndDate: parseDate(parsed.data.recurrenceEndDate),
       completedAt: parsed.data.status === "DONE" ? new Date() : null
     }
@@ -422,6 +459,7 @@ export async function updateExecutionTaskAction(formData: FormData) {
     isBlocked: formData.get("isBlocked") === "on",
     pinToTodayUntilDone: formData.get("pinToTodayUntilDone") === "on",
     recurrenceFrequency: formData.get("recurrenceFrequency") || "NONE",
+    recurrenceWeekdays: normalizeRecurrenceWeekdays(formData.getAll("recurrenceWeekdays")),
     recurrenceEndDate: formData.get("recurrenceEndDate")
   });
 
@@ -444,6 +482,7 @@ export async function updateExecutionTaskAction(formData: FormData) {
     isBlocked: parsed.data.isBlocked,
     pinToTodayUntilDone: parsed.data.pinToTodayUntilDone,
     recurrenceFrequency: parsed.data.recurrenceFrequency,
+    recurrenceWeekdays: parsed.data.recurrenceFrequency === "CUSTOM_WEEKDAYS" ? parsed.data.recurrenceWeekdays ?? null : null,
     recurrenceEndDate: parseDate(parsed.data.recurrenceEndDate),
     completedAt: parsed.data.status === "DONE" ? new Date() : null
   };

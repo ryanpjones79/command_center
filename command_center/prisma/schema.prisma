@@ -73,7 +73,10 @@ enum ExecutionWhenBucket {
 enum ExecutionRecurrenceFrequency {
   NONE
   DAILY
+  WORKDAYS
+  WEEKENDS
   WEEKLY
+  CUSTOM_WEEKDAYS
   MONTHLY
 }
 
@@ -224,6 +227,7 @@ model ExecutionTask {
   isBlocked    Boolean             @default(false)
   pinToTodayUntilDone Boolean      @default(false)
   recurrenceFrequency ExecutionRecurrenceFrequency @default(NONE)
+  recurrenceWeekdays String?
   recurrenceEndDate DateTime?
   recurrenceParentId String?
   scheduledStart DateTime?

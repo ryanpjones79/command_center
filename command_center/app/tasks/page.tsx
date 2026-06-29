@@ -5,13 +5,18 @@ import {
   nudgeExecutionTaskFollowUpAction,
   updateExecutionTaskAction
 } from "@/app/execution-actions";
+import type { ReactNode } from "react";
 import { CreateTaskForm } from "@/components/execution/create-task-form";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   executionSelectOptions,
+  executionWeekdayOptions,
   formatExecutionDurationBucket,
-  formatExecutionLabel
+  formatExecutionLabel,
+  formatRecurrenceFrequency,
+  formatRecurrenceWeekdays,
+  parseRecurrenceWeekdays
 } from "@/lib/execution-options";
 import { requireUser } from "@/lib/session";
 import { getTaskMaintenanceData } from "@/server/execution-service";
@@ -36,6 +41,26 @@ const bulkActionOptions = [
   { value: "FOLLOW_UP_7", label: "Push follow-up +1 week" },
   { value: "ASSIGN_PROJECT", label: "Assign project" }
 ] as const;
+
+const taskEditFieldClass = "h-9 rounded-md border border-input bg-background px-3 text-sm";
+
+function TaskEditField({
+  label,
+  help,
+  children
+}: {
+  label: string;
+  help?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{label}</span>
+      {children}
+      {help && <span className="text-[11px] leading-snug text-muted-foreground">{help}</span>}
+    </div>
+  );
+}
 
 export default async function TasksPage({ searchParams }: TasksPageProps) {
   const user = await requireUser();
@@ -210,6 +235,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
             const bumpTwoDaysAction = nudgeExecutionTaskFollowUpAction.bind(null, task.id, 2);
             const bumpWeekAction = nudgeExecutionTaskFollowUpAction.bind(null, task.id, 7);
             const markDoneAction = markExecutionTaskStatusAction.bind(null, task.id, "DONE", undefined);
+            const selectedRecurrenceWeekdays = parseRecurrenceWeekdays(task.recurrenceWeekdays);
+            const recurrenceWeekdayLabel = formatRecurrenceWeekdays(task.recurrenceWeekdays);
 
             return (
               <Card key={task.id}>
@@ -242,7 +269,10 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                       {task.pinToTodayUntilDone && <Badge variant="default">Pinned Today</Badge>}
                       {task.isQuickWinCandidate && <Badge variant="secondary">Quick Win Candidate</Badge>}
                       {task.recurrenceFrequency !== "NONE" && (
-                        <Badge variant="outline">Repeats {formatExecutionLabel(task.recurrenceFrequency).toLowerCase()}</Badge>
+                        <Badge variant="outline">
+                          {formatRecurrenceFrequency(task.recurrenceFrequency)}
+                          {recurrenceWeekdayLabel ? `: ${recurrenceWeekdayLabel}` : ""}
+                        </Badge>
                       )}
                     </div>
                   </div>
@@ -271,7 +301,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                       <p className="mt-1 text-sm">
                         {task.recurrenceFrequency === "NONE"
                           ? "No"
-                          : `${formatExecutionLabel(task.recurrenceFrequency)}${task.recurrenceEndDate ? ` until ${task.recurrenceEndDate.toLocaleDateString()}` : ""}`}
+                          : `${formatRecurrenceFrequency(task.recurrenceFrequency)}${recurrenceWeekdayLabel ? `: ${recurrenceWeekdayLabel}` : ""}${task.recurrenceEndDate ? ` until ${task.recurrenceEndDate.toLocaleDateString()}` : ""}`}
                       </p>
                     </div>
                     <div>
@@ -309,113 +339,162 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                     <form action={updateExecutionTaskAction} className="mt-3 grid gap-3">
                       <input name="taskId" type="hidden" value={task.id} />
                       <div className="grid gap-2 sm:grid-cols-2">
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={task.domainId} name="domainId">
-                          {domains.map((domain) => (
-                            <option key={domain.id} value={domain.id}>
-                              {domain.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={task.projectId ?? ""} name="projectId">
-                          <option value="">No project</option>
-                          {projects.map((project) => (
-                            <option key={project.id} value={project.id}>
-                              {project.name}
-                            </option>
-                          ))}
-                        </select>
+                        <TaskEditField label="Area">
+                          <select className={taskEditFieldClass} defaultValue={task.domainId} name="domainId">
+                            {domains.map((domain) => (
+                              <option key={domain.id} value={domain.id}>
+                                {domain.name}
+                              </option>
+                            ))}
+                          </select>
+                        </TaskEditField>
+                        <TaskEditField label="Project">
+                          <select className={taskEditFieldClass} defaultValue={task.projectId ?? ""} name="projectId">
+                            <option value="">No project</option>
+                            {projects.map((project) => (
+                              <option key={project.id} value={project.id}>
+                                {project.name}
+                              </option>
+                            ))}
+                          </select>
+                        </TaskEditField>
                       </div>
-                      <input className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={task.title} name="title" required />
+                      <TaskEditField label="Task name">
+                        <input className={taskEditFieldClass} defaultValue={task.title} name="title" required />
+                      </TaskEditField>
                       <div className="grid gap-2 sm:grid-cols-4">
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={task.type} name="type">
-                          {executionSelectOptions.taskTypes.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={task.status} name="status">
-                          {executionSelectOptions.taskStatuses.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={task.priority} name="priority">
-                          {executionSelectOptions.priorities.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={task.whenBucket} name="whenBucket">
-                          {executionSelectOptions.whenBuckets.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
+                        <TaskEditField label="Type">
+                          <select className={taskEditFieldClass} defaultValue={task.type} name="type">
+                            {executionSelectOptions.taskTypes.map((value) => (
+                              <option key={value} value={value}>
+                                {formatExecutionLabel(value)}
+                              </option>
+                            ))}
+                          </select>
+                        </TaskEditField>
+                        <TaskEditField label="Status">
+                          <select className={taskEditFieldClass} defaultValue={task.status} name="status">
+                            {executionSelectOptions.taskStatuses.map((value) => (
+                              <option key={value} value={value}>
+                                {formatExecutionLabel(value)}
+                              </option>
+                            ))}
+                          </select>
+                        </TaskEditField>
+                        <TaskEditField label="Priority">
+                          <select className={taskEditFieldClass} defaultValue={task.priority} name="priority">
+                            {executionSelectOptions.priorities.map((value) => (
+                              <option key={value} value={value}>
+                                {formatExecutionLabel(value)}
+                              </option>
+                            ))}
+                          </select>
+                        </TaskEditField>
+                        <TaskEditField label="Planning bucket" help="Where this should live until scheduled or finished.">
+                          <select className={taskEditFieldClass} defaultValue={task.whenBucket} name="whenBucket">
+                            {executionSelectOptions.whenBuckets.map((value) => (
+                              <option key={value} value={value}>
+                                {formatExecutionLabel(value)}
+                              </option>
+                            ))}
+                          </select>
+                        </TaskEditField>
                       </div>
-                      <select
-                        className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                        defaultValue={task.estimatedDuration ?? ""}
-                        name="estimatedDuration"
-                      >
-                        <option value="">No estimate yet</option>
-                        {executionSelectOptions.durationBuckets.map((value) => (
-                          <option key={value} value={value}>
-                            {formatExecutionDurationBucket(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <div className="grid gap-2 sm:grid-cols-2">
+                      <TaskEditField label="Estimated time" help="<30 min tasks can be suggested as quick wins.">
                         <select
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                          defaultValue={task.recurrenceFrequency}
-                          name="recurrenceFrequency"
+                          className={taskEditFieldClass}
+                          defaultValue={task.estimatedDuration ?? ""}
+                          name="estimatedDuration"
                         >
-                          {executionSelectOptions.recurrenceFrequencies.map((value) => (
+                          <option value="">No estimate yet</option>
+                          {executionSelectOptions.durationBuckets.map((value) => (
                             <option key={value} value={value}>
-                              {value === "NONE" ? "Does not repeat" : `Repeats ${formatExecutionLabel(value).toLowerCase()}`}
+                              {formatExecutionDurationBucket(value)}
                             </option>
                           ))}
                         </select>
-                        <input
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                          defaultValue={task.recurrenceEndDate ? task.recurrenceEndDate.toISOString().slice(0, 10) : ""}
-                          name="recurrenceEndDate"
-                          type="date"
-                        />
+                      </TaskEditField>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <TaskEditField label="Repeats" help="Creates the next copy when this one is marked done.">
+                          <select
+                            className={taskEditFieldClass}
+                            defaultValue={task.recurrenceFrequency}
+                            name="recurrenceFrequency"
+                          >
+                            {executionSelectOptions.recurrenceFrequencies.map((value) => (
+                              <option key={value} value={value}>
+                                {formatRecurrenceFrequency(value)}
+                              </option>
+                            ))}
+                          </select>
+                        </TaskEditField>
+                        <TaskEditField label="Repeat ends" help="Optional. Leave blank if it should keep repeating.">
+                          <input
+                            className={taskEditFieldClass}
+                            defaultValue={task.recurrenceEndDate ? task.recurrenceEndDate.toISOString().slice(0, 10) : ""}
+                            name="recurrenceEndDate"
+                            type="date"
+                          />
+                        </TaskEditField>
+                      </div>
+                      <TaskEditField label="Custom weekdays" help="Used only when Repeats is set to Custom weekdays.">
+                        <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+                          {executionWeekdayOptions.map((day) => (
+                            <label
+                              className="flex h-9 items-center justify-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground"
+                              key={day.value}
+                            >
+                              <input
+                                className="h-3.5 w-3.5"
+                                defaultChecked={selectedRecurrenceWeekdays.has(day.value)}
+                                name="recurrenceWeekdays"
+                                type="checkbox"
+                                value={day.value}
+                              />
+                              {day.label}
+                            </label>
+                          ))}
+                        </div>
+                      </TaskEditField>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <TaskEditField label="Due date" help="Use only when there is a real deadline.">
+                          <input
+                            className={taskEditFieldClass}
+                            defaultValue={task.dueDate ? task.dueDate.toISOString().slice(0, 10) : ""}
+                            name="dueDate"
+                            type="date"
+                          />
+                        </TaskEditField>
+                        <TaskEditField label="Follow-up date" help="Use when this depends on someone else or needs a check-in.">
+                          <input
+                            className={taskEditFieldClass}
+                            defaultValue={task.followUpDate ? task.followUpDate.toISOString().slice(0, 10) : ""}
+                            name="followUpDate"
+                            type="date"
+                          />
+                        </TaskEditField>
                       </div>
                       <div className="grid gap-2 sm:grid-cols-2">
-                        <input
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                          defaultValue={task.dueDate ? task.dueDate.toISOString().slice(0, 10) : ""}
-                          name="dueDate"
-                          type="date"
-                        />
-                        <input
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                          defaultValue={task.followUpDate ? task.followUpDate.toISOString().slice(0, 10) : ""}
-                          name="followUpDate"
-                          type="date"
-                        />
+                        <TaskEditField label="Waiting on" help="Person, team, or dependency blocking the next move.">
+                          <input
+                            className={taskEditFieldClass}
+                            defaultValue={task.waitingOn ?? ""}
+                            name="waitingOn"
+                            placeholder="Name or dependency"
+                          />
+                        </TaskEditField>
+                        <TaskEditField label="Source" help="Where this came from, if useful later.">
+                          <input
+                            className={taskEditFieldClass}
+                            defaultValue={task.source ?? ""}
+                            name="source"
+                            placeholder="Email, meeting, brief, idea"
+                          />
+                        </TaskEditField>
                       </div>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        <input
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                          defaultValue={task.waitingOn ?? ""}
-                          name="waitingOn"
-                          placeholder="Waiting on"
-                        />
-                        <input
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                          defaultValue={task.source ?? ""}
-                          name="source"
-                          placeholder="Source"
-                        />
-                      </div>
-                      <textarea className="min-h-[96px] rounded-md border border-input bg-background px-3 py-2 text-sm" defaultValue={task.note ?? ""} name="note" />
+                      <TaskEditField label="Notes">
+                        <textarea className="min-h-[96px] rounded-md border border-input bg-background px-3 py-2 text-sm" defaultValue={task.note ?? ""} name="note" />
+                      </TaskEditField>
                       <div className="flex flex-wrap gap-4">
                         <label className="flex items-center gap-2 text-sm text-muted-foreground">
                           <input className="h-4 w-4" defaultChecked={task.isBlocked} name="isBlocked" type="checkbox" />

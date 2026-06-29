@@ -25,7 +25,7 @@ export type ExecutionSelectOptions = {
 export const executionSelectOptions: ExecutionSelectOptions = {
   priorities: ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
   durationBuckets: ["UNDER_30_MIN", "THIRTY_TO_SIXTY_MIN", "ONE_TO_TWO_HOURS", "TWO_HOURS_PLUS"],
-  recurrenceFrequencies: ["NONE", "DAILY", "WEEKLY", "MONTHLY"],
+  recurrenceFrequencies: ["NONE", "DAILY", "WORKDAYS", "WEEKENDS", "WEEKLY", "CUSTOM_WEEKDAYS"],
   taskTypes: ["ACTION", "FOLLOW_UP", "ADMIN", "QUICK_WIN"],
   taskStatuses: ["NOT_STARTED", "IN_PROGRESS", "WAITING", "DONE", "DROPPED"],
   whenBuckets: ["TODAY", "THIS_WEEK", "LATER", "WAITING", "PARKING_LOT"],
@@ -57,4 +57,71 @@ export function formatExecutionDurationBucket(value: string) {
     default:
       return formatExecutionLabel(value);
   }
+}
+
+export const executionWeekdayOptions = [
+  { value: "1", label: "Mon" },
+  { value: "2", label: "Tue" },
+  { value: "3", label: "Wed" },
+  { value: "4", label: "Thu" },
+  { value: "5", label: "Fri" },
+  { value: "6", label: "Sat" },
+  { value: "0", label: "Sun" }
+] as const;
+
+export function formatRecurrenceFrequency(value: string) {
+  switch (value) {
+    case "NONE":
+      return "Does not repeat";
+    case "DAILY":
+      return "Daily";
+    case "WORKDAYS":
+      return "Workdays";
+    case "WEEKENDS":
+      return "Weekends";
+    case "WEEKLY":
+      return "Weekly";
+    case "CUSTOM_WEEKDAYS":
+      return "Custom weekdays";
+    case "MONTHLY":
+      return "Monthly";
+    default:
+      return formatExecutionLabel(value);
+  }
+}
+
+export function describeRecurrenceFrequency(value: string) {
+  switch (value) {
+    case "DAILY":
+      return "True every day anchors.";
+    case "WORKDAYS":
+      return "Monday-Friday operating tasks.";
+    case "WEEKENDS":
+      return "Saturday-Sunday items only.";
+    case "WEEKLY":
+      return "Same day each week.";
+    case "CUSTOM_WEEKDAYS":
+      return "Pick exact weekdays below.";
+    default:
+      return "One-time task or project work.";
+  }
+}
+
+export function parseRecurrenceWeekdays(value: string | null | undefined) {
+  return new Set(
+    String(value ?? "")
+      .split(",")
+      .map((day) => day.trim())
+      .filter((day) => executionWeekdayOptions.some((option) => option.value === day))
+  );
+}
+
+export function formatRecurrenceWeekdays(value: string | null | undefined) {
+  const selected = parseRecurrenceWeekdays(value);
+  if (selected.size === 0) return "";
+
+  return executionWeekdayOptions
+    .filter((option) => selected.has(option.value))
+    .map((option) => option.label)
+    .join(", ");
 }

@@ -192,8 +192,24 @@ function isParkingLotTask<T extends { whenBucket: string }>(task: T) {
   return task.whenBucket === "PARKING_LOT" || task.whenBucket === "LATER";
 }
 
-function isTodayTask<T extends { whenBucket: string; pinToTodayUntilDone?: boolean }>(task: T) {
-  return task.whenBucket === "TODAY" || Boolean(task.pinToTodayUntilDone);
+function isDueTodayOrEarlier(value: Date | null | undefined, today: Date) {
+  return Boolean(value && startOfDay(value) <= today);
+}
+
+function isTodayTask<
+  T extends {
+    whenBucket: string;
+    dueDate: Date | null;
+    followUpDate?: Date | null;
+    pinToTodayUntilDone?: boolean;
+  }
+>(task: T, today: Date) {
+  return (
+    task.whenBucket === "TODAY" ||
+    Boolean(task.pinToTodayUntilDone) ||
+    isDueTodayOrEarlier(task.dueDate, today) ||
+    isDueTodayOrEarlier(task.followUpDate ?? null, today)
+  );
 }
 
 export const defaultExecutionDomains = [
@@ -256,10 +272,14 @@ export async function getActionSheetData(userId: string) {
   const projects = sortProjects(rawProjects);
 
   const todayTasks = tasks.filter(
-    (task) => isTodayTask(task) && !isWaitingTask(task) && !belongsInQuickWinSection(task, today)
+    (task) => isTodayTask(task, today) && !isWaitingTask(task) && !belongsInQuickWinSection(task, today)
   );
   const thisWeekTasks = tasks.filter(
-    (task) => task.whenBucket === "THIS_WEEK" && !isWaitingTask(task) && !belongsInQuickWinSection(task, today)
+    (task) =>
+      task.whenBucket === "THIS_WEEK" &&
+      !isTodayTask(task, today) &&
+      !isWaitingTask(task) &&
+      !belongsInQuickWinSection(task, today)
   );
   const waitingTasks = sortWaitingTasks(tasks.filter((task) => isWaitingTask(task)));
   const quickWinTasks = tasks.filter((task) => belongsInQuickWinSection(task, today) && !isWaitingTask(task));

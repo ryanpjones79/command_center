@@ -1,8 +1,13 @@
 import { markExecutionTaskStatusAction, updateExecutionTaskAction } from "@/app/execution-actions";
+import type { ReactNode } from "react";
 import {
   executionSelectOptions,
+  executionWeekdayOptions,
   formatExecutionDurationBucket,
-  formatExecutionLabel
+  formatExecutionLabel,
+  formatRecurrenceFrequency,
+  formatRecurrenceWeekdays,
+  parseRecurrenceWeekdays
 } from "@/lib/execution-options";
 
 type TaskItem = {
@@ -15,6 +20,7 @@ type TaskItem = {
   whenBucket: string;
   estimatedDuration: string | null;
   recurrenceFrequency: string;
+  recurrenceWeekdays: string | null;
   recurrenceEndDate: Date | null;
   dueDate: Date | null;
   followUpDate?: Date | null;
@@ -39,6 +45,24 @@ type ProjectOption = {
   domainId: string;
 };
 
+function EditField({
+  label,
+  help,
+  children
+}: {
+  label: string;
+  help?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{label}</span>
+      {children}
+      {help && <span className="text-[11px] leading-snug text-muted-foreground">{help}</span>}
+    </div>
+  );
+}
+
 export function TaskLineItem({
   task,
   domains,
@@ -50,6 +74,8 @@ export function TaskLineItem({
 }) {
   const completeAction = markExecutionTaskStatusAction.bind(null, task.id, "DONE", undefined);
   const fieldClass = "h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm";
+  const selectedRecurrenceWeekdays = parseRecurrenceWeekdays(task.recurrenceWeekdays);
+  const recurrenceWeekdayLabel = formatRecurrenceWeekdays(task.recurrenceWeekdays);
 
   return (
     <div className="print-row border-b border-dashed border-border py-3 last:border-b-0 sm:py-2">
@@ -89,7 +115,8 @@ export function TaskLineItem({
             )}
             {task.recurrenceFrequency !== "NONE" && (
               <span className="rounded border border-border/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                Repeats {formatExecutionLabel(task.recurrenceFrequency).toLowerCase()}
+                {formatRecurrenceFrequency(task.recurrenceFrequency)}
+                {recurrenceWeekdayLabel ? `: ${recurrenceWeekdayLabel}` : ""}
               </span>
             )}
             {task.dueDate && <span className="text-[11px] text-muted-foreground">Due {task.dueDate.toLocaleDateString()}</span>}
@@ -110,138 +137,187 @@ export function TaskLineItem({
             <form action={updateExecutionTaskAction} className="mt-3 grid gap-3">
               <input name="taskId" type="hidden" value={task.id} />
               <div className="grid gap-2 sm:grid-cols-2">
-                <select
-                  className={fieldClass}
-                  defaultValue={task.domainId}
-                  name="domainId"
-                >
-                  {domains.map((domain) => (
-                    <option key={domain.id} value={domain.id}>
-                      {domain.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className={fieldClass}
-                  defaultValue={task.project?.id ?? ""}
-                  name="projectId"
-                >
-                  <option value="">No project</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
+                <EditField label="Area">
+                  <select
+                    className={fieldClass}
+                    defaultValue={task.domainId}
+                    name="domainId"
+                  >
+                    {domains.map((domain) => (
+                      <option key={domain.id} value={domain.id}>
+                        {domain.name}
+                      </option>
+                    ))}
+                  </select>
+                </EditField>
+                <EditField label="Project">
+                  <select
+                    className={fieldClass}
+                    defaultValue={task.project?.id ?? ""}
+                    name="projectId"
+                  >
+                    <option value="">No project</option>
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                </EditField>
               </div>
-              <input
-                className={fieldClass}
-                defaultValue={task.title}
-                name="title"
-                required
-              />
+              <EditField label="Task name">
+                <input
+                  className={fieldClass}
+                  defaultValue={task.title}
+                  name="title"
+                  required
+                />
+              </EditField>
               <div className="grid gap-2 sm:grid-cols-4">
-                <select className={fieldClass} defaultValue={task.type} name="type">
-                  {executionSelectOptions.taskTypes.map((value) => (
-                    <option key={value} value={value}>
-                      {formatExecutionLabel(value)}
-                    </option>
-                  ))}
-                </select>
-                <select className={fieldClass} defaultValue={task.status} name="status">
-                  {executionSelectOptions.taskStatuses.map((value) => (
-                    <option key={value} value={value}>
-                      {formatExecutionLabel(value)}
-                    </option>
-                  ))}
-                </select>
+                <EditField label="Type">
+                  <select className={fieldClass} defaultValue={task.type} name="type">
+                    {executionSelectOptions.taskTypes.map((value) => (
+                      <option key={value} value={value}>
+                        {formatExecutionLabel(value)}
+                      </option>
+                    ))}
+                  </select>
+                </EditField>
+                <EditField label="Status">
+                  <select className={fieldClass} defaultValue={task.status} name="status">
+                    {executionSelectOptions.taskStatuses.map((value) => (
+                      <option key={value} value={value}>
+                        {formatExecutionLabel(value)}
+                      </option>
+                    ))}
+                  </select>
+                </EditField>
+                <EditField label="Priority">
+                  <select
+                    className={fieldClass}
+                    defaultValue={task.priority}
+                    name="priority"
+                  >
+                    {executionSelectOptions.priorities.map((value) => (
+                      <option key={value} value={value}>
+                        {formatExecutionLabel(value)}
+                      </option>
+                    ))}
+                  </select>
+                </EditField>
+                <EditField label="Planning bucket">
+                  <select
+                    className={fieldClass}
+                    defaultValue={task.whenBucket}
+                    name="whenBucket"
+                  >
+                    {executionSelectOptions.whenBuckets.map((value) => (
+                      <option key={value} value={value}>
+                        {formatExecutionLabel(value)}
+                      </option>
+                    ))}
+                  </select>
+                </EditField>
+              </div>
+              <EditField label="Estimated time" help="<30 min tasks can be suggested as quick wins.">
                 <select
                   className={fieldClass}
-                  defaultValue={task.priority}
-                  name="priority"
+                  defaultValue={task.estimatedDuration ?? ""}
+                  name="estimatedDuration"
                 >
-                  {executionSelectOptions.priorities.map((value) => (
+                  <option value="">No estimate yet</option>
+                  {executionSelectOptions.durationBuckets.map((value) => (
                     <option key={value} value={value}>
-                      {formatExecutionLabel(value)}
+                      {formatExecutionDurationBucket(value)}
                     </option>
                   ))}
                 </select>
-                <select
-                  className={fieldClass}
-                  defaultValue={task.whenBucket}
-                  name="whenBucket"
-                >
-                  {executionSelectOptions.whenBuckets.map((value) => (
-                    <option key={value} value={value}>
-                      {formatExecutionLabel(value)}
-                    </option>
+              </EditField>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <EditField label="Repeats" help="Creates the next copy when this one is marked done.">
+                  <select
+                    className={fieldClass}
+                    defaultValue={task.recurrenceFrequency}
+                    name="recurrenceFrequency"
+                  >
+                    {executionSelectOptions.recurrenceFrequencies.map((value) => (
+                      <option key={value} value={value}>
+                        {formatRecurrenceFrequency(value)}
+                      </option>
+                    ))}
+                  </select>
+                </EditField>
+                <EditField label="Repeat ends" help="Optional. Leave blank if it should keep repeating.">
+                  <input
+                    className={fieldClass}
+                    defaultValue={task.recurrenceEndDate ? task.recurrenceEndDate.toISOString().slice(0, 10) : ""}
+                    name="recurrenceEndDate"
+                    type="date"
+                  />
+                </EditField>
+              </div>
+              <EditField label="Custom weekdays" help="Used only when Repeats is set to Custom weekdays.">
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+                  {executionWeekdayOptions.map((day) => (
+                    <label
+                      className="flex h-9 items-center justify-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground"
+                      key={day.value}
+                    >
+                      <input
+                        className="h-3.5 w-3.5"
+                        defaultChecked={selectedRecurrenceWeekdays.has(day.value)}
+                        name="recurrenceWeekdays"
+                        type="checkbox"
+                        value={day.value}
+                      />
+                      {day.label}
+                    </label>
                   ))}
-                </select>
-              </div>
-              <select
-                className={fieldClass}
-                defaultValue={task.estimatedDuration ?? ""}
-                name="estimatedDuration"
-              >
-                <option value="">No estimate yet</option>
-                {executionSelectOptions.durationBuckets.map((value) => (
-                  <option key={value} value={value}>
-                    {formatExecutionDurationBucket(value)}
-                  </option>
-                ))}
-              </select>
+                </div>
+              </EditField>
               <div className="grid gap-2 sm:grid-cols-2">
-                <select
-                  className={fieldClass}
-                  defaultValue={task.recurrenceFrequency}
-                  name="recurrenceFrequency"
-                >
-                  {executionSelectOptions.recurrenceFrequencies.map((value) => (
-                    <option key={value} value={value}>
-                      {value === "NONE" ? "Does not repeat" : `Repeats ${formatExecutionLabel(value).toLowerCase()}`}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className={fieldClass}
-                  defaultValue={task.recurrenceEndDate ? task.recurrenceEndDate.toISOString().slice(0, 10) : ""}
-                  name="recurrenceEndDate"
-                  type="date"
-                />
+                <EditField label="Due date" help="Use only for real deadlines.">
+                  <input
+                    className={fieldClass}
+                    defaultValue={task.dueDate ? task.dueDate.toISOString().slice(0, 10) : ""}
+                    name="dueDate"
+                    type="date"
+                  />
+                </EditField>
+                <EditField label="Follow-up date" help="Use when you need to check back later.">
+                  <input
+                    className={fieldClass}
+                    defaultValue={task.followUpDate ? task.followUpDate.toISOString().slice(0, 10) : ""}
+                    name="followUpDate"
+                    type="date"
+                  />
+                </EditField>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  className={fieldClass}
-                  defaultValue={task.dueDate ? task.dueDate.toISOString().slice(0, 10) : ""}
-                  name="dueDate"
-                  type="date"
-                />
-                <input
-                  className={fieldClass}
-                  defaultValue={task.followUpDate ? task.followUpDate.toISOString().slice(0, 10) : ""}
-                  name="followUpDate"
-                  type="date"
-                />
+                <EditField label="Waiting on" help="Person, team, or dependency blocking the next move.">
+                  <input
+                    className={fieldClass}
+                    defaultValue={task.waitingOn ?? ""}
+                    name="waitingOn"
+                    placeholder="Name or dependency"
+                  />
+                </EditField>
+                <EditField label="Source" help="Where this came from, if useful later.">
+                  <input
+                    className={fieldClass}
+                    defaultValue={task.source ?? ""}
+                    name="source"
+                    placeholder="Email, meeting, brief, idea"
+                  />
+                </EditField>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  className={fieldClass}
-                  defaultValue={task.waitingOn ?? ""}
-                  name="waitingOn"
-                  placeholder="Waiting on"
+              <EditField label="Notes">
+                <textarea
+                  className="min-h-[88px] rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  defaultValue={task.note ?? ""}
+                  name="note"
                 />
-                <input
-                  className={fieldClass}
-                  defaultValue={task.source ?? ""}
-                  name="source"
-                  placeholder="Source"
-                />
-              </div>
-              <textarea
-                className="min-h-[88px] rounded-md border border-input bg-background px-3 py-2 text-sm"
-                defaultValue={task.note ?? ""}
-                name="note"
-              />
+              </EditField>
               <div className="grid gap-2 sm:flex sm:flex-wrap sm:gap-4">
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input className="h-4 w-4" defaultChecked={task.isBlocked} name="isBlocked" type="checkbox" />
