@@ -35,25 +35,28 @@ export default async function TimeBlocksPage({ searchParams }: TimeBlocksPagePro
   const planner = await getTimeBlockPlannerData(user.id, selectedDate);
 
   return (
-    <main className="space-y-6">
-      <section className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Calendar Planner</p>
-          <h2 className="text-4xl font-semibold tracking-tight">Time Blocks</h2>
-          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Imported Google Calendar events stay read-only. Drag Action OS tasks into open slots to build the day.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline">
-            <Link href={`/time-blocks?date=${dateKey(addDays(selectedDate, -1))}`}>Previous</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/time-blocks">Today</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={`/time-blocks?date=${dateKey(addDays(selectedDate, 1))}`}>Next</Link>
-          </Button>
+    <main className="space-y-5 sm:space-y-6">
+      <section className="relative overflow-hidden rounded-[1.75rem] border bg-card/90 p-4 shadow-sm sm:p-6">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(16,185,129,0.16),transparent_30%),radial-gradient(circle_at_90%_10%,rgba(245,158,11,0.13),transparent_26%)]" />
+        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Calendar Planner</p>
+            <h2 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">Time Blocks</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+              Mobile is tap-to-place. Desktop keeps drag-and-drop. Google Calendar remains read-only.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+            <Button asChild className="h-10 rounded-xl px-3 text-xs sm:text-sm" variant="outline">
+              <Link href={`/time-blocks?date=${dateKey(addDays(selectedDate, -1))}`}>Previous</Link>
+            </Button>
+            <Button asChild className="h-10 rounded-xl px-3 text-xs sm:text-sm" variant="outline">
+              <Link href="/time-blocks">Today</Link>
+            </Button>
+            <Button asChild className="h-10 rounded-xl px-3 text-xs sm:text-sm" variant="outline">
+              <Link href={`/time-blocks?date=${dateKey(addDays(selectedDate, 1))}`}>Next</Link>
+            </Button>
+          </div>
         </div>
       </section>
 
