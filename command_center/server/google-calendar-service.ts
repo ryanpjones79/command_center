@@ -22,6 +22,7 @@ type TimeWindow = {
 };
 
 const DEFAULT_TIME_ZONE = "America/Los_Angeles";
+const MINIMUM_BUSY_EVENT_MINUTES = 5;
 
 function getBriefTimeZone() {
   return process.env.DAILY_BRIEF_TIMEZONE || DEFAULT_TIME_ZONE;
@@ -277,7 +278,11 @@ export function deriveWorkBlocksFromEvents(events: CalendarEvent[], referenceDat
   const explicitWindow = parseWorkdayWindow(referenceDate, workdayWindow);
   const busy = mergeIntervals(
     events
-      .filter((event) => !event.isAllDay && event.end.getTime() > event.start.getTime())
+      .filter(
+        (event) =>
+          !event.isAllDay &&
+          event.end.getTime() - event.start.getTime() >= MINIMUM_BUSY_EVENT_MINUTES * 60000
+      )
       .map((event) => ({
         start: event.start,
         end: event.end

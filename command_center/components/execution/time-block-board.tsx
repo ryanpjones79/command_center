@@ -36,6 +36,7 @@ const startHour = 6;
 const endHour = 21;
 const slotMinutes = 30;
 const pixelsPerMinute = 2;
+const minimumTimedEventMinutes = 5;
 
 function toLocalDate(value: Date) {
   return new Date(value);
@@ -77,7 +78,7 @@ function addMinutes(value: Date, minutes: number) {
 }
 
 function hasTimedDuration(event: BoardCalendarEvent) {
-  return !event.isAllDay && event.end.getTime() > event.start.getTime();
+  return !event.isAllDay && event.end.getTime() - event.start.getTime() >= minimumTimedEventMinutes * 60000;
 }
 
 function slotStart(date: Date, index: number) {
