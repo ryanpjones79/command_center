@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { getCalendarEventsForDate } from "@/server/google-calendar-service";
 
 function minutesForDurationBucket(value: string | null | undefined) {
   switch (value) {
@@ -25,16 +26,33 @@ function addMinutes(value: Date, minutes: number) {
 
 function whenBucketForDate(value: Date) {
   const today = new Date();
-  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const targetStart = new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  const daysAway = Math.round((targetStart.getTime() - todayStart.getTime()) / 86400000);
+  const todayStart = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate()
+  );
+  const targetStart = new Date(
+    value.getFullYear(),
+    value.getMonth(),
+    value.getDate()
+  );
+  const daysAway = Math.round(
+    (targetStart.getTime() - todayStart.getTime()) / 86400000
+  );
 
   if (daysAway <= 0) return "TODAY";
   if (daysAway <= 7) return "THIS_WEEK";
   return "LATER";
 }
 
-export async function scheduleTaskTimeBlockAction(taskId: string, startIso: string) {
+function overlaps(start: Date, end: Date, busyStart: Date, busyEnd: Date) {
+  return start < busyEnd && end > busyStart;
+}
+
+export async function scheduleTaskTimeBlockAction(
+  taskId: string,
+  startIso: string
+) {
   const user = await requireUser();
   const task = await prisma.executionTask.findFirst({
     where: { id: taskId, userId: user.id },
@@ -50,11 +68,51 @@ export async function scheduleTaskTimeBlockAction(taskId: string, startIso: stri
     return { ok: false, error: "Invalid time block." };
   }
 
+  const scheduledEnd = addMinutes(
+    scheduledStart,
+    minutesForDurationBucket(task.estimatedDuration)
+  );
+  const conflictingTask = await prisma.executionTask.findFirst({
+    where: {
+      userId: user.id,
+      id: { not: task.id },
+      status: { notIn: ["DONE", "DROPPED"] },
+      scheduledStart: { lt: scheduledEnd },
+      scheduledEnd: { gt: scheduledStart }
+    },
+    select: { title: true }
+  });
+
+  if (conflictingTask) {
+    return {
+      ok: false,
+      error: `That window overlaps ${conflictingTask.title}.`
+    };
+  }
+
+  try {
+    const calendarEvents = await getCalendarEventsForDate(scheduledStart);
+    const conflictingEvent = calendarEvents.find(
+      (event) =>
+        !event.isAllDay &&
+        overlaps(scheduledStart, scheduledEnd, event.start, event.end)
+    );
+
+    if (conflictingEvent) {
+      return {
+        ok: false,
+        error: `That window overlaps ${conflictingEvent.summary}.`
+      };
+    }
+  } catch {
+    // If Google is temporarily unavailable, do not block manual task placement.
+  }
+
   await prisma.executionTask.update({
     where: { id: task.id },
     data: {
       scheduledStart,
-      scheduledEnd: addMinutes(scheduledStart, minutesForDurationBucket(task.estimatedDuration)),
+      scheduledEnd,
       whenBucket: whenBucketForDate(scheduledStart)
     }
   });

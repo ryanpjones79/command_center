@@ -68,38 +68,118 @@ type TimeBlockBoardProps = {
   calendarEvents: BoardCalendarEvent[];
   date: Date;
   scheduledTasks: BoardTask[];
+  timeZone: string;
   unscheduledTasks: BoardTask[];
 };
 
+const defaultTimeZone = "America/Los_Angeles";
 const startHour = 6;
 const endHour = 21;
 const slotMinutes = 30;
 const pixelsPerMinute = 2;
 const minimumTimedEventMinutes = 5;
 
-function toLocalDate(value: Date) {
-  return new Date(value);
+function getZonedDateParts(value: Date, timeZone = defaultTimeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(value);
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+
+  return {
+    year: Number.parseInt(map.year, 10),
+    month: Number.parseInt(map.month, 10),
+    day: Number.parseInt(map.day, 10),
+    hour: Number.parseInt(map.hour, 10),
+    minute: Number.parseInt(map.minute, 10),
+    second: Number.parseInt(map.second, 10)
+  };
 }
 
-function formatClock(value: Date) {
+function zonedDateTimeToUtc(
+  parts: {
+    year: number;
+    month: number;
+    day: number;
+    hour?: number;
+    minute?: number;
+    second?: number;
+  },
+  timeZone = defaultTimeZone
+) {
+  const desired = {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour ?? 0,
+    minute: parts.minute ?? 0,
+    second: parts.second ?? 0
+  };
+  let candidate = new Date(
+    Date.UTC(
+      desired.year,
+      desired.month - 1,
+      desired.day,
+      desired.hour,
+      desired.minute,
+      desired.second
+    )
+  );
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const actual = getZonedDateParts(candidate, timeZone);
+    const desiredWallTime = Date.UTC(
+      desired.year,
+      desired.month - 1,
+      desired.day,
+      desired.hour,
+      desired.minute,
+      desired.second
+    );
+    const actualWallTime = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second
+    );
+    candidate = new Date(
+      candidate.getTime() + desiredWallTime - actualWallTime
+    );
+  }
+
+  return candidate;
+}
+
+function formatClock(value: Date, timeZone = defaultTimeZone) {
   return value.toLocaleTimeString("en-US", {
+    timeZone,
     hour: "numeric",
     minute: "2-digit"
   });
 }
 
-function formatShortDate(value: Date | null) {
+function formatShortDate(value: Date | null, timeZone = defaultTimeZone) {
   if (!value) return "None";
 
   return value.toLocaleDateString("en-US", {
+    timeZone,
     month: "short",
     day: "numeric"
   });
 }
 
-function minutesFromStart(value: Date) {
-  const local = toLocalDate(value);
-  return (local.getHours() - startHour) * 60 + local.getMinutes();
+function minutesFromStart(value: Date, timeZone = defaultTimeZone) {
+  const local = getZonedDateParts(value, timeZone);
+  return (local.hour - startHour) * 60 + local.minute;
 }
 
 function durationMinutes(start: Date, end: Date) {
@@ -128,32 +208,53 @@ function addMinutes(value: Date, minutes: number) {
   return new Date(value.getTime() + minutes * 60000);
 }
 
-function startOfDay(value: Date) {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-}
-
-function isSameLocalDay(left: Date, right: Date) {
-  return (
-    left.getFullYear() === right.getFullYear() &&
-    left.getMonth() === right.getMonth() &&
-    left.getDate() === right.getDate()
+function startOfDay(value: Date, timeZone = defaultTimeZone) {
+  const parts = getZonedDateParts(value, timeZone);
+  return zonedDateTimeToUtc(
+    { year: parts.year, month: parts.month, day: parts.day },
+    timeZone
   );
 }
 
-function hasTimedDuration(event: BoardCalendarEvent, selectedDate: Date) {
+function isSameLocalDay(left: Date, right: Date, timeZone = defaultTimeZone) {
+  const leftParts = getZonedDateParts(left, timeZone);
+  const rightParts = getZonedDateParts(right, timeZone);
+
+  return (
+    leftParts.year === rightParts.year &&
+    leftParts.month === rightParts.month &&
+    leftParts.day === rightParts.day
+  );
+}
+
+function hasTimedDuration(
+  event: BoardCalendarEvent,
+  selectedDate: Date,
+  timeZone = defaultTimeZone
+) {
   return (
     !event.isAllDay &&
-    isSameLocalDay(event.start, selectedDate) &&
-    isSameLocalDay(event.end, selectedDate) &&
+    isSameLocalDay(event.start, selectedDate, timeZone) &&
+    isSameLocalDay(event.end, selectedDate, timeZone) &&
     event.end.getTime() - event.start.getTime() >=
       minimumTimedEventMinutes * 60000
   );
 }
 
-function slotStart(date: Date, index: number) {
-  const value = new Date(date);
-  value.setHours(startHour, index * slotMinutes, 0, 0);
-  return value;
+function slotStart(date: Date, index: number, timeZone = defaultTimeZone) {
+  const parts = getZonedDateParts(date, timeZone);
+  const totalMinutes = startHour * 60 + index * slotMinutes;
+
+  return zonedDateTimeToUtc(
+    {
+      year: parts.year,
+      month: parts.month,
+      day: parts.day,
+      hour: Math.floor(totalMinutes / 60),
+      minute: totalMinutes % 60
+    },
+    timeZone
+  );
 }
 
 function overlaps(start: Date, end: Date, busyStart: Date, busyEnd: Date) {
@@ -177,6 +278,7 @@ export function TimeBlockBoard({
   calendarEvents,
   date,
   scheduledTasks,
+  timeZone,
   unscheduledTasks
 }: TimeBlockBoardProps) {
   const router = useRouter();
@@ -203,15 +305,17 @@ export function TimeBlockBoard({
 
   const slots = useMemo(() => {
     const count = ((endHour - startHour) * 60) / slotMinutes;
-    return Array.from({ length: count }, (_, index) => slotStart(date, index));
-  }, [date]);
+    return Array.from({ length: count }, (_, index) =>
+      slotStart(date, index, timeZone)
+    );
+  }, [date, timeZone]);
 
   const dayHeight = (endHour - startHour) * 60 * pixelsPerMinute;
   const contextEvents = calendarEvents.filter(
-    (event) => !hasTimedDuration(event, date)
+    (event) => !hasTimedDuration(event, date, timeZone)
   );
   const timedEvents = calendarEvents.filter((event) =>
-    hasTimedDuration(event, date)
+    hasTimedDuration(event, date, timeZone)
   );
   const selectedTask =
     [...localUnscheduledTasks, ...localScheduledTasks].find(
@@ -256,17 +360,14 @@ export function TimeBlockBoard({
           end: item.scheduledEnd as Date
         }))
     ];
-    const selectedDay = startOfDay(date);
-    const today = startOfDay(new Date());
+    const selectedDay = startOfDay(date, timeZone);
+    const today = startOfDay(new Date(), timeZone);
     const now = new Date();
 
     return slots
       .filter((slot) => {
         const end = addMinutes(slot, duration);
-        if (
-          end.getHours() > endHour ||
-          (end.getHours() === endHour && end.getMinutes() > 0)
-        )
+        if (minutesFromStart(end, timeZone) > (endHour - startHour) * 60)
           return false;
         if (selectedDay.getTime() === today.getTime() && slot < now)
           return false;
@@ -287,6 +388,26 @@ export function TimeBlockBoard({
         start,
         minutesForDurationBucket(task.estimatedDuration)
       );
+      const busy = [
+        ...timedEvents.map((event) => ({ start: event.start, end: event.end })),
+        ...localScheduledTasks
+          .filter(
+            (item) =>
+              item.id !== taskId && item.scheduledStart && item.scheduledEnd
+          )
+          .map((item) => ({
+            start: item.scheduledStart as Date,
+            end: item.scheduledEnd as Date
+          }))
+      ];
+
+      if (
+        busy.some((item) => overlaps(start, scheduledEnd, item.start, item.end))
+      ) {
+        setMessage("That window overlaps a calendar event or placed task.");
+        return;
+      }
+
       const movedTask = { ...task, scheduledStart: start, scheduledEnd };
       setLocalUnscheduledTasks((tasks) =>
         tasks.filter((item) => item.id !== taskId)
@@ -416,7 +537,7 @@ export function TimeBlockBoard({
               Due
             </p>
             <p className="mt-1 text-sm font-medium">
-              {formatShortDate(selectedTask.dueDate)}
+              {formatShortDate(selectedTask.dueDate, timeZone)}
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-3">
@@ -424,7 +545,7 @@ export function TimeBlockBoard({
               Follow Up
             </p>
             <p className="mt-1 text-sm font-medium">
-              {formatShortDate(selectedTask.followUpDate)}
+              {formatShortDate(selectedTask.followUpDate, timeZone)}
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-3">
@@ -458,7 +579,7 @@ export function TimeBlockBoard({
                     : ""
                 }${
                   selectedTask.recurrenceEndDate
-                    ? ` until ${formatShortDate(selectedTask.recurrenceEndDate)}`
+                    ? ` until ${formatShortDate(selectedTask.recurrenceEndDate, timeZone)}`
                     : ""
                 }`}
           </p>
@@ -499,7 +620,7 @@ export function TimeBlockBoard({
                 type="button"
               >
                 {index === 0 ? "Place next " : "Place "}
-                {formatClock(slot)}
+                {formatClock(slot, timeZone)}
               </button>
             ))
           )}
@@ -586,7 +707,7 @@ export function TimeBlockBoard({
                     type="button"
                   >
                     {index === 0 ? "Next " : ""}
-                    {formatClock(slot)}
+                    {formatClock(slot, timeZone)}
                   </button>
                 ))}
               </div>
@@ -612,6 +733,7 @@ export function TimeBlockBoard({
               <div>
                 <h3 className="text-2xl font-semibold leading-tight">
                   {date.toLocaleDateString("en-US", {
+                    timeZone,
                     weekday: "long",
                     month: "short",
                     day: "numeric"
@@ -692,7 +814,9 @@ export function TimeBlockBoard({
                     {event.summary}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {event.isAllDay ? "All-day item" : formatClock(event.start)}
+                    {event.isAllDay
+                      ? "All-day item"
+                      : formatClock(event.start, timeZone)}
                   </p>
                 </div>
               ))}
@@ -729,10 +853,10 @@ export function TimeBlockBoard({
               >
                 <div className="pt-3 text-right">
                   <p className="text-sm font-semibold">
-                    {formatClock(item.start)}
+                    {formatClock(item.start, timeZone)}
                   </p>
                   <p className="text-[11px] text-muted-foreground">
-                    {formatClock(item.end)}
+                    {formatClock(item.end, timeZone)}
                   </p>
                 </div>
                 <div
@@ -780,6 +904,7 @@ export function TimeBlockBoard({
               </p>
               <h3 className="text-xl font-semibold">
                 {date.toLocaleDateString("en-US", {
+                  timeZone,
                   weekday: "long",
                   month: "long",
                   day: "numeric"
@@ -814,7 +939,9 @@ export function TimeBlockBoard({
                     }
                   >
                     {event.summary}
-                    {!event.isAllDay ? ` (${formatClock(event.start)})` : ""}
+                    {!event.isAllDay
+                      ? ` (${formatClock(event.start, timeZone)})`
+                      : ""}
                   </span>
                 ))}
               </div>
@@ -830,14 +957,13 @@ export function TimeBlockBoard({
                     key={index}
                     style={{ top: index * 60 * pixelsPerMinute - 6, width: 64 }}
                   >
-                    {new Date(
-                      date.getFullYear(),
-                      date.getMonth(),
-                      date.getDate(),
-                      startHour + index
-                    ).toLocaleTimeString("en-US", {
-                      hour: "numeric"
-                    })}
+                    {slotStart(date, index * 2, timeZone).toLocaleTimeString(
+                      "en-US",
+                      {
+                        timeZone,
+                        hour: "numeric"
+                      }
+                    )}
                   </div>
                 ))}
               </div>
@@ -861,7 +987,7 @@ export function TimeBlockBoard({
                       }
                     }}
                     style={{
-                      top: minutesFromStart(slot) * pixelsPerMinute,
+                      top: minutesFromStart(slot, timeZone) * pixelsPerMinute,
                       height: slotMinutes * pixelsPerMinute
                     }}
                   />
@@ -870,13 +996,30 @@ export function TimeBlockBoard({
                 {timedEvents.map((event) => {
                   const top = Math.max(
                     0,
-                    minutesFromStart(event.start) * pixelsPerMinute
+                    minutesFromStart(event.start, timeZone) * pixelsPerMinute
+                  );
+                  const height =
+                    durationMinutes(event.start, event.end) * pixelsPerMinute;
+
+                  return (
+                    <div
+                      className="pointer-events-none absolute left-0 right-0 z-[1] border-y border-amber-300/20 bg-amber-300/10"
+                      key={`${event.id}-busy`}
+                      style={{ top, height }}
+                    />
+                  );
+                })}
+
+                {timedEvents.map((event) => {
+                  const top = Math.max(
+                    0,
+                    minutesFromStart(event.start, timeZone) * pixelsPerMinute
                   );
                   const height =
                     durationMinutes(event.start, event.end) * pixelsPerMinute;
                   return (
                     <div
-                      className="absolute left-3 right-[52%] overflow-hidden rounded-lg border border-amber-400/70 bg-amber-300/90 p-2 text-amber-950 shadow-sm"
+                      className="absolute left-3 right-[52%] z-10 overflow-hidden rounded-lg border border-amber-400/70 bg-amber-300/90 p-2 text-amber-950 shadow-sm"
                       key={event.id}
                       style={{ top, height }}
                     >
@@ -884,7 +1027,8 @@ export function TimeBlockBoard({
                         {event.summary}
                       </p>
                       <p className="text-[11px] opacity-80">
-                        {formatClock(event.start)}-{formatClock(event.end)}
+                        {formatClock(event.start, timeZone)}-
+                        {formatClock(event.end, timeZone)}
                       </p>
                     </div>
                   );
@@ -894,14 +1038,15 @@ export function TimeBlockBoard({
                   if (!task.scheduledStart || !task.scheduledEnd) return null;
                   const top = Math.max(
                     0,
-                    minutesFromStart(task.scheduledStart) * pixelsPerMinute
+                    minutesFromStart(task.scheduledStart, timeZone) *
+                      pixelsPerMinute
                   );
                   const height =
                     durationMinutes(task.scheduledStart, task.scheduledEnd) *
                     pixelsPerMinute;
                   return (
                     <div
-                      className="absolute left-[50%] right-3 cursor-grab overflow-hidden rounded-lg border border-primary/50 bg-primary/15 p-2 shadow-sm"
+                      className="absolute left-[50%] right-3 z-20 cursor-grab overflow-hidden rounded-lg border border-primary/50 bg-primary/15 p-2 shadow-sm"
                       draggable
                       key={task.id}
                       onClick={() => setSelectedTaskId(task.id)}
@@ -917,8 +1062,8 @@ export function TimeBlockBoard({
                             {task.title}
                           </p>
                           <p className="text-[11px] text-muted-foreground">
-                            {formatClock(task.scheduledStart)}-
-                            {formatClock(task.scheduledEnd)}
+                            {formatClock(task.scheduledStart, timeZone)}-
+                            {formatClock(task.scheduledEnd, timeZone)}
                           </p>
                         </div>
                         <button

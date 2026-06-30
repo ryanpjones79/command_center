@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { executionSelectOptions } from "@/lib/execution-options";
-import { getCalendarDayRange, getCalendarEventsForDate } from "@/server/google-calendar-service";
+import {
+  getCalendarDayRange,
+  getCalendarEventsForDate
+} from "@/server/google-calendar-service";
 
 function startOfDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
@@ -53,13 +56,19 @@ function sortTasks<
   }
 >(tasks: T[]) {
   return [...tasks].sort((left, right) => {
-    const pinnedDiff = Number(Boolean(right.pinToTodayUntilDone)) - Number(Boolean(left.pinToTodayUntilDone));
+    const pinnedDiff =
+      Number(Boolean(right.pinToTodayUntilDone)) -
+      Number(Boolean(left.pinToTodayUntilDone));
     if (pinnedDiff !== 0) return pinnedDiff;
 
-    const statusDiff = (taskStatusRank.get(left.status) ?? 0) - (taskStatusRank.get(right.status) ?? 0);
+    const statusDiff =
+      (taskStatusRank.get(left.status) ?? 0) -
+      (taskStatusRank.get(right.status) ?? 0);
     if (statusDiff !== 0) return statusDiff;
 
-    const bucketDiff = (whenBucketRank.get(left.whenBucket) ?? 0) - (whenBucketRank.get(right.whenBucket) ?? 0);
+    const bucketDiff =
+      (whenBucketRank.get(left.whenBucket) ?? 0) -
+      (whenBucketRank.get(right.whenBucket) ?? 0);
     if (bucketDiff !== 0) return bucketDiff;
 
     const priorityDiff = compareTaskPriority(left.priority, right.priority);
@@ -68,7 +77,10 @@ function sortTasks<
     const dateDiff = compareDateAsc(left.dueDate, right.dueDate);
     if (dateDiff !== 0) return dateDiff;
 
-    const followUpDiff = compareDateAsc(left.followUpDate ?? null, right.followUpDate ?? null);
+    const followUpDiff = compareDateAsc(
+      left.followUpDate ?? null,
+      right.followUpDate ?? null
+    );
     if (followUpDiff !== 0) return followUpDiff;
 
     return left.updatedAt.getTime() - right.updatedAt.getTime();
@@ -84,7 +96,10 @@ function sortWaitingTasks<
   }
 >(tasks: T[]) {
   return [...tasks].sort((left, right) => {
-    const followUpDiff = compareDateAsc(left.followUpDate ?? null, right.followUpDate ?? null);
+    const followUpDiff = compareDateAsc(
+      left.followUpDate ?? null,
+      right.followUpDate ?? null
+    );
     if (followUpDiff !== 0) return followUpDiff;
 
     const priorityDiff = compareTaskPriority(left.priority, right.priority);
@@ -107,16 +122,22 @@ function sortProjects<
   }
 >(projects: T[]) {
   return [...projects].sort((left, right) => {
-    const weeklyDiff = (weeklyFocusRank.get(left.weeklyFocus) ?? 0) - (weeklyFocusRank.get(right.weeklyFocus) ?? 0);
+    const weeklyDiff =
+      (weeklyFocusRank.get(left.weeklyFocus) ?? 0) -
+      (weeklyFocusRank.get(right.weeklyFocus) ?? 0);
     if (weeklyDiff !== 0) return weeklyDiff;
 
-    const activeDiff = (activeStatusRank.get(left.activeStatus) ?? 0) - (activeStatusRank.get(right.activeStatus) ?? 0);
+    const activeDiff =
+      (activeStatusRank.get(left.activeStatus) ?? 0) -
+      (activeStatusRank.get(right.activeStatus) ?? 0);
     if (activeDiff !== 0) return activeDiff;
 
     const priorityDiff = compareTaskPriority(left.priority, right.priority);
     if (priorityDiff !== 0) return priorityDiff;
 
-    const statusDiff = (projectStatusRank.get(left.status) ?? 0) - (projectStatusRank.get(right.status) ?? 0);
+    const statusDiff =
+      (projectStatusRank.get(left.status) ?? 0) -
+      (projectStatusRank.get(right.status) ?? 0);
     if (statusDiff !== 0) return statusDiff;
 
     return compareDateDesc(left.updatedAt, right.updatedAt);
@@ -213,16 +234,56 @@ function isTodayTask<
 }
 
 export const defaultExecutionDomains = [
-  { name: "Work", slug: "work", description: "Leadership, analytics, dev workflows. No PHI." },
-  { name: "Rykas", slug: "rykas", description: "Amazon FBA, reorders, vendor coordination." },
-  { name: "Casino/AP", slug: "casino-ap", description: "Legal and compliant AP tracking only." },
-  { name: "Betting Models", slug: "betting-models", description: "Research queue, model maintenance, data pulls." },
-  { name: "Poker", slug: "poker", description: "Study plans and live execution prep." },
-  { name: "Health", slug: "health", description: "Protein, calories, training, recovery." },
-  { name: "Family", slug: "family", description: "Family planning and commitments." },
-  { name: "Golf", slug: "golf", description: "Practice, play, and scheduling." },
-  { name: "Travel", slug: "travel", description: "Trips, logistics, preparation." },
-  { name: "Admin", slug: "admin", description: "Paperwork, errands, misc operations." }
+  {
+    name: "Work",
+    slug: "work",
+    description: "Leadership, analytics, dev workflows. No PHI."
+  },
+  {
+    name: "Rykas",
+    slug: "rykas",
+    description: "Amazon FBA, reorders, vendor coordination."
+  },
+  {
+    name: "Casino/AP",
+    slug: "casino-ap",
+    description: "Legal and compliant AP tracking only."
+  },
+  {
+    name: "Betting Models",
+    slug: "betting-models",
+    description: "Research queue, model maintenance, data pulls."
+  },
+  {
+    name: "Poker",
+    slug: "poker",
+    description: "Study plans and live execution prep."
+  },
+  {
+    name: "Health",
+    slug: "health",
+    description: "Protein, calories, training, recovery."
+  },
+  {
+    name: "Family",
+    slug: "family",
+    description: "Family planning and commitments."
+  },
+  {
+    name: "Golf",
+    slug: "golf",
+    description: "Practice, play, and scheduling."
+  },
+  {
+    name: "Travel",
+    slug: "travel",
+    description: "Trips, logistics, preparation."
+  },
+  {
+    name: "Admin",
+    slug: "admin",
+    description: "Paperwork, errands, misc operations."
+  }
 ] as const;
 
 export async function ensureExecutionSetup(userId: string) {
@@ -237,7 +298,10 @@ export async function ensureExecutionSetup(userId: string) {
 
 export async function getExecutionWorkspace(userId: string) {
   const [domains, rawProjects] = await Promise.all([
-    prisma.executionDomain.findMany({ where: { userId }, orderBy: { name: "asc" } }),
+    prisma.executionDomain.findMany({
+      where: { userId },
+      orderBy: { name: "asc" }
+    }),
     prisma.executionProject.findMany({
       where: { userId },
       include: { domain: true }
@@ -254,7 +318,10 @@ export async function getActionSheetData(userId: string) {
   const staleCutoff = daysAgo(today, 7);
 
   const [domains, rawTasks, rawProjects] = await Promise.all([
-    prisma.executionDomain.findMany({ where: { userId }, orderBy: { name: "asc" } }),
+    prisma.executionDomain.findMany({
+      where: { userId },
+      orderBy: { name: "asc" }
+    }),
     prisma.executionTask.findMany({
       where: {
         userId,
@@ -272,7 +339,10 @@ export async function getActionSheetData(userId: string) {
   const projects = sortProjects(rawProjects);
 
   const todayTasks = tasks.filter(
-    (task) => isTodayTask(task, today) && !isWaitingTask(task) && !belongsInQuickWinSection(task, today)
+    (task) =>
+      isTodayTask(task, today) &&
+      !isWaitingTask(task) &&
+      !belongsInQuickWinSection(task, today)
   );
   const thisWeekTasks = tasks.filter(
     (task) =>
@@ -281,13 +351,22 @@ export async function getActionSheetData(userId: string) {
       !isWaitingTask(task) &&
       !belongsInQuickWinSection(task, today)
   );
-  const waitingTasks = sortWaitingTasks(tasks.filter((task) => isWaitingTask(task)));
-  const quickWinTasks = tasks.filter((task) => belongsInQuickWinSection(task, today) && !isWaitingTask(task));
+  const waitingTasks = sortWaitingTasks(
+    tasks.filter((task) => isWaitingTask(task))
+  );
+  const quickWinTasks = tasks.filter(
+    (task) => belongsInQuickWinSection(task, today) && !isWaitingTask(task)
+  );
   const parkingLotTasks = tasks.filter(
-    (task) => isParkingLotTask(task) && !isWaitingTask(task) && !belongsInQuickWinSection(task, today)
+    (task) =>
+      isParkingLotTask(task) &&
+      !isWaitingTask(task) &&
+      !belongsInQuickWinSection(task, today)
   );
 
-  const topThreeProjects = projects.filter((project) => project.weeklyFocus === "TOP_3").slice(0, 3);
+  const topThreeProjects = projects
+    .filter((project) => project.weeklyFocus === "TOP_3")
+    .slice(0, 3);
   const overdueFollowUps = waitingTasks.filter(
     (task) => task.followUpDate && startOfDay(task.followUpDate) < today
   );
@@ -338,16 +417,24 @@ export async function getWeeklyReviewData(userId: string) {
   return {
     projects,
     summary: {
-      activeNowCount: projects.filter((project) => project.activeStatus === "ACTIVE_NOW").length,
-      topThreeCount: projects.filter((project) => project.weeklyFocus === "TOP_3").length,
+      activeNowCount: projects.filter(
+        (project) => project.activeStatus === "ACTIVE_NOW"
+      ).length,
+      topThreeCount: projects.filter(
+        (project) => project.weeklyFocus === "TOP_3"
+      ).length,
       missingNextAction: projects.filter(
         (project) =>
           project.activeStatus === "ACTIVE_NOW" &&
           project.status !== "COMPLETED" &&
           !project.nextAction?.trim()
       ),
-      blockedProjects: projects.filter((project) => project.blocked || project.status === "BLOCKED"),
-      waitingProjects: projects.filter((project) => Boolean(project.waitingOn?.trim())),
+      blockedProjects: projects.filter(
+        (project) => project.blocked || project.status === "BLOCKED"
+      ),
+      waitingProjects: projects.filter((project) =>
+        Boolean(project.waitingOn?.trim())
+      ),
       staleProjects: projects.filter(
         (project) =>
           project.activeStatus !== "COMPLETED" &&
@@ -374,7 +461,9 @@ export async function getTaskMaintenanceData(
     prisma.executionTask.findMany({
       where: {
         userId,
-        ...(filters?.whenBucket ? { whenBucket: filters.whenBucket as never } : {}),
+        ...(filters?.whenBucket
+          ? { whenBucket: filters.whenBucket as never }
+          : {}),
         ...(filters?.status ? { status: filters.status as never } : {}),
         ...(filters?.domainId ? { domainId: filters.domainId } : {}),
         ...(filters?.projectId ? { projectId: filters.projectId } : {}),
@@ -392,21 +481,39 @@ export async function getTaskMaintenanceData(
       },
       include: { domain: true, project: true }
     }),
-    prisma.executionDomain.findMany({ where: { userId }, orderBy: { name: "asc" } }),
-    prisma.executionProject.findMany({ where: { userId }, include: { domain: true }, orderBy: { name: "asc" } })
+    prisma.executionDomain.findMany({
+      where: { userId },
+      orderBy: { name: "asc" }
+    }),
+    prisma.executionProject.findMany({
+      where: { userId },
+      include: { domain: true },
+      orderBy: { name: "asc" }
+    })
   ]);
 
   const today = startOfDay(new Date());
 
-  return { tasks: addQuickWinCandidateFlag(sortTasks(rawTasks), today), domains, projects };
+  return {
+    tasks: addQuickWinCandidateFlag(sortTasks(rawTasks), today),
+    domains,
+    projects
+  };
 }
 
-export async function getTimeBlockPlannerData(userId: string, referenceDate = new Date()) {
+export async function getTimeBlockPlannerData(
+  userId: string,
+  referenceDate = new Date()
+) {
   await ensureExecutionSetup(userId);
 
   const dayRange = getCalendarDayRange(referenceDate);
   const isScheduledOnSelectedDay = (task: { scheduledStart: Date | null }) =>
-    Boolean(task.scheduledStart && task.scheduledStart >= dayRange.start && task.scheduledStart < dayRange.end);
+    Boolean(
+      task.scheduledStart &&
+      task.scheduledStart >= dayRange.start &&
+      task.scheduledStart < dayRange.end
+    );
 
   const [calendarEvents, tasks, domains, projects] = await Promise.all([
     getCalendarEventsForDate(referenceDate),
@@ -417,18 +524,30 @@ export async function getTimeBlockPlannerData(userId: string, referenceDate = ne
       },
       include: { domain: true, project: true }
     }),
-    prisma.executionDomain.findMany({ where: { userId }, orderBy: { name: "asc" } }),
-    prisma.executionProject.findMany({ where: { userId }, include: { domain: true }, orderBy: { name: "asc" } })
+    prisma.executionDomain.findMany({
+      where: { userId },
+      orderBy: { name: "asc" }
+    }),
+    prisma.executionProject.findMany({
+      where: { userId },
+      include: { domain: true },
+      orderBy: { name: "asc" }
+    })
   ]);
 
   const sortedTasks = sortTasks(tasks);
   return {
     date: referenceDate,
+    timeZone: dayRange.timeZone,
     calendarEvents,
     domains,
     projects,
-    scheduledTasks: sortedTasks.filter((task) => isScheduledOnSelectedDay(task)),
-    unscheduledTasks: sortedTasks.filter((task) => !isScheduledOnSelectedDay(task))
+    scheduledTasks: sortedTasks.filter((task) =>
+      isScheduledOnSelectedDay(task)
+    ),
+    unscheduledTasks: sortedTasks.filter(
+      (task) => !isScheduledOnSelectedDay(task)
+    )
   };
 }
 
@@ -446,7 +565,10 @@ export async function getProjectMaintenanceData(userId: string) {
         }
       }
     }),
-    prisma.executionDomain.findMany({ where: { userId }, orderBy: { name: "asc" } })
+    prisma.executionDomain.findMany({
+      where: { userId },
+      orderBy: { name: "asc" }
+    })
   ]);
 
   return {
