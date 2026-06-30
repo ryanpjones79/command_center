@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
-import { getCalendarEventsForDate } from "@/server/google-calendar-service";
 
 function minutesForDurationBucket(value: string | null | undefined) {
   switch (value) {
@@ -88,24 +87,6 @@ export async function scheduleTaskTimeBlockAction(
       ok: false,
       error: `That window overlaps ${conflictingTask.title}.`
     };
-  }
-
-  try {
-    const calendarEvents = await getCalendarEventsForDate(scheduledStart);
-    const conflictingEvent = calendarEvents.find(
-      (event) =>
-        !event.isAllDay &&
-        overlaps(scheduledStart, scheduledEnd, event.start, event.end)
-    );
-
-    if (conflictingEvent) {
-      return {
-        ok: false,
-        error: `That window overlaps ${conflictingEvent.summary}.`
-      };
-    }
-  } catch {
-    // If Google is temporarily unavailable, do not block manual task placement.
   }
 
   await prisma.executionTask.update({

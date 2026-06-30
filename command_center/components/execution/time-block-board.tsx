@@ -349,7 +349,6 @@ export function TimeBlockBoard({
   const findOpenSlots = (task: BoardTask, limit = 4) => {
     const duration = minutesForDurationBucket(task.estimatedDuration);
     const busy = [
-      ...timedEvents.map((event) => ({ start: event.start, end: event.end })),
       ...localScheduledTasks
         .filter(
           (item) =>
@@ -389,7 +388,6 @@ export function TimeBlockBoard({
         minutesForDurationBucket(task.estimatedDuration)
       );
       const busy = [
-        ...timedEvents.map((event) => ({ start: event.start, end: event.end })),
         ...localScheduledTasks
           .filter(
             (item) =>
@@ -404,7 +402,7 @@ export function TimeBlockBoard({
       if (
         busy.some((item) => overlaps(start, scheduledEnd, item.start, item.end))
       ) {
-        setMessage("That window overlaps a calendar event or placed task.");
+        setMessage("That window overlaps a placed task.");
         return;
       }
 
