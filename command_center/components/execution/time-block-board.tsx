@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   clearTaskTimeBlockAction,
+  scheduleRyanOsBlockAction,
   scheduleTaskTimeBlockAction
 } from "@/app/time-blocks/actions";
 import {
@@ -72,12 +73,75 @@ type TimeBlockBoardProps = {
   unscheduledTasks: BoardTask[];
 };
 
+type RyanOsBlockTemplate = {
+  blockType: "CCHCS" | "Pipeline" | "Rykas";
+  helper: string[];
+  id: string;
+  minutes: number;
+  title: string;
+};
+
 const defaultTimeZone = "America/Los_Angeles";
 const startHour = 6;
 const endHour = 21;
 const slotMinutes = 30;
 const pixelsPerMinute = 2;
 const minimumTimedEventMinutes = 5;
+
+const decisionRules = [
+  "CCHCS deadline / leadership-visible commitment within 48h",
+  "SignalCare conversation available",
+  "Anything 80% done and ready to ship",
+  "Otherwise pipeline block"
+];
+
+const blockTypes = [
+  "Needle Move",
+  "CCHCS",
+  "Pipeline",
+  "Rykas",
+  "Admin",
+  "Personal",
+  "Parking"
+];
+
+const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
+  {
+    blockType: "CCHCS",
+    helper: [
+      "Protect state/leadership-visible work.",
+      "Use a real work block, not residue."
+    ],
+    id: "cchcs",
+    minutes: 90,
+    title: "CCHCS"
+  },
+  {
+    blockType: "Pipeline",
+    helper: [
+      "LinkedIn comments",
+      "Warm DMs",
+      "Follow-ups",
+      "Post",
+      "Metric = conversations, not impressions"
+    ],
+    id: "pipeline",
+    minutes: 30,
+    title: "Pipeline — 30 minutes"
+  },
+  {
+    blockType: "Rykas",
+    helper: [
+      "Ship sold items",
+      "Offers/relist",
+      "List from backlog",
+      "Source only if backlog <10"
+    ],
+    id: "rykas",
+    minutes: 45,
+    title: "Rykas — max 45 minutes"
+  }
+];
 
 function getZonedDateParts(value: Date, timeZone = defaultTimeZone) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -274,6 +338,18 @@ function priorityTone(priority: string) {
   }
 }
 
+function dateKeyForStorage(value: Date, timeZone: string) {
+  const parts = getZonedDateParts(value, timeZone);
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function minutesLabel(minutes: number) {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
 export function TimeBlockBoard({
   calendarEvents,
   date,
@@ -285,6 +361,15 @@ export function TimeBlockBoard({
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [needleMove, setNeedleMove] = useState("");
+  const [decisionRule, setDecisionRule] = useState(decisionRules[0]);
+  const [buildRecipient, setBuildRecipient] = useState("");
+  const [hasEightyPercentItem, setHasEightyPercentItem] = useState(false);
+  const [rykasBacklog, setRykasBacklog] = useState("10");
+  const [shutdownShipped, setShutdownShipped] = useState("");
+  const [shutdownOpen, setShutdownOpen] = useState("");
+  const [shutdownTomorrow, setShutdownTomorrow] = useState("");
+  const loadedStorageKeyRef = useRef("");
   const [message, setMessage] = useState("");
   const [localScheduledTasks, setLocalScheduledTasks] =
     useState(scheduledTasks);
@@ -309,6 +394,77 @@ export function TimeBlockBoard({
       slotStart(date, index, timeZone)
     );
   }, [date, timeZone]);
+  const ryanOsStorageKey = useMemo(
+    () => `ryanos-execution:${dateKeyForStorage(date, timeZone)}`,
+    [date, timeZone]
+  );
+
+  useEffect(() => {
+    const raw = window.localStorage.getItem(ryanOsStorageKey);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as {
+          buildRecipient?: string;
+          decisionRule?: string;
+          hasEightyPercentItem?: boolean;
+          needleMove?: string;
+          rykasBacklog?: string;
+          shutdownOpen?: string;
+          shutdownShipped?: string;
+          shutdownTomorrow?: string;
+        };
+
+        setNeedleMove(parsed.needleMove ?? "");
+        setDecisionRule(parsed.decisionRule ?? decisionRules[0]);
+        setBuildRecipient(parsed.buildRecipient ?? "");
+        setHasEightyPercentItem(Boolean(parsed.hasEightyPercentItem));
+        setRykasBacklog(parsed.rykasBacklog ?? "10");
+        setShutdownShipped(parsed.shutdownShipped ?? "");
+        setShutdownOpen(parsed.shutdownOpen ?? "");
+        setShutdownTomorrow(parsed.shutdownTomorrow ?? "");
+      } catch {
+        setNeedleMove("");
+      }
+    } else {
+      setNeedleMove("");
+      setDecisionRule(decisionRules[0]);
+      setBuildRecipient("");
+      setHasEightyPercentItem(false);
+      setRykasBacklog("10");
+      setShutdownShipped("");
+      setShutdownOpen("");
+      setShutdownTomorrow("");
+    }
+    loadedStorageKeyRef.current = ryanOsStorageKey;
+  }, [ryanOsStorageKey]);
+
+  useEffect(() => {
+    if (loadedStorageKeyRef.current !== ryanOsStorageKey) return;
+
+    window.localStorage.setItem(
+      ryanOsStorageKey,
+      JSON.stringify({
+        buildRecipient,
+        decisionRule,
+        hasEightyPercentItem,
+        needleMove,
+        rykasBacklog,
+        shutdownOpen,
+        shutdownShipped,
+        shutdownTomorrow
+      })
+    );
+  }, [
+    buildRecipient,
+    decisionRule,
+    hasEightyPercentItem,
+    needleMove,
+    rykasBacklog,
+    ryanOsStorageKey,
+    shutdownOpen,
+    shutdownShipped,
+    shutdownTomorrow
+  ]);
 
   const dayHeight = (endHour - startHour) * 60 * pixelsPerMinute;
   const contextEvents = calendarEvents.filter(
@@ -346,13 +502,18 @@ export function TimeBlockBoard({
     );
   }, [timedEvents, localScheduledTasks]);
 
-  const findOpenSlots = (task: BoardTask, limit = 4) => {
-    const duration = minutesForDurationBucket(task.estimatedDuration);
+  const findOpenSlotsForMinutes = (
+    duration: number,
+    limit = 4,
+    excludeTaskId?: string
+  ) => {
     const busy = [
       ...localScheduledTasks
         .filter(
           (item) =>
-            item.id !== task.id && item.scheduledStart && item.scheduledEnd
+            item.id !== excludeTaskId &&
+            item.scheduledStart &&
+            item.scheduledEnd
         )
         .map((item) => ({
           start: item.scheduledStart as Date,
@@ -374,6 +535,13 @@ export function TimeBlockBoard({
       })
       .slice(0, limit);
   };
+
+  const findOpenSlots = (task: BoardTask, limit = 4) =>
+    findOpenSlotsForMinutes(
+      minutesForDurationBucket(task.estimatedDuration),
+      limit,
+      task.id
+    );
 
   const scheduleTask = (taskId: string, start: Date) => {
     const task = [...localUnscheduledTasks, ...localScheduledTasks].find(
@@ -433,6 +601,56 @@ export function TimeBlockBoard({
         setMessage(result.error);
       }
     });
+  };
+
+  const scheduleRyanOsBlock = (templateId: string, start: Date) => {
+    const template = ryanOsBlockTemplates.find(
+      (item) => item.id === templateId
+    );
+    if (!template) {
+      setMessage("RyanOS block not found.");
+      return;
+    }
+
+    const scheduledEnd = addMinutes(start, template.minutes);
+    const busy = localScheduledTasks
+      .filter((item) => item.scheduledStart && item.scheduledEnd)
+      .map((item) => ({
+        start: item.scheduledStart as Date,
+        end: item.scheduledEnd as Date
+      }));
+
+    if (
+      busy.some((item) => overlaps(start, scheduledEnd, item.start, item.end))
+    ) {
+      setMessage("That window overlaps a placed task.");
+      return;
+    }
+
+    setPendingTaskId(`template:${templateId}`);
+    setMessage("");
+    startTransition(async () => {
+      const result = await scheduleRyanOsBlockAction(
+        templateId,
+        start.toISOString()
+      );
+      setPendingTaskId(null);
+      if (result.ok) {
+        setMessage(`${template.title} block saved.`);
+        router.refresh();
+      } else {
+        setMessage(result.error);
+      }
+    });
+  };
+
+  const scheduleDroppedItem = (payload: string, slot: Date) => {
+    if (payload.startsWith("template:")) {
+      scheduleRyanOsBlock(payload.replace("template:", ""), slot);
+      return;
+    }
+
+    scheduleTask(payload, slot);
   };
 
   const clearTask = (taskId: string) => {
@@ -716,9 +934,188 @@ export function TimeBlockBoard({
     </section>
   );
 
+  const rykasBacklogCount = Number.parseInt(rykasBacklog, 10);
+  const shouldWarnRykasBacklog =
+    !Number.isNaN(rykasBacklogCount) && rykasBacklogCount >= 10;
+  const buildNeedsRecipient =
+    /\b(build|artifact|deck|doc|prototype|tool|page|prompt)\b/i.test(
+      needleMove
+    ) && !buildRecipient.trim();
+
+  const renderRyanOsBlocksPanel = () => (
+    <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          Required Daily Blocks
+        </p>
+        <h3 className="mt-1 text-lg font-semibold">Drag or add to the board</h3>
+      </div>
+      <div className="mt-3 space-y-2">
+        {ryanOsBlockTemplates.map((template) => {
+          const openSlots = findOpenSlotsForMinutes(template.minutes, 3);
+          return (
+            <div
+              className="rounded-2xl border bg-background/80 p-3 shadow-sm"
+              draggable
+              key={template.id}
+              onDragStart={(event) => {
+                const payload = `template:${template.id}`;
+                setDraggedTaskId(payload);
+                event.dataTransfer.setData("text/plain", payload);
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold">{template.title}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {template.blockType} / {minutesLabel(template.minutes)}
+                  </p>
+                </div>
+                <span className="rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  {template.blockType}
+                </span>
+              </div>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {template.helper.map((item) => (
+                  <p key={`${template.id}-${item}`}>- {item}</p>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {openSlots.map((slot, index) => (
+                  <button
+                    className={
+                      index === 0
+                        ? "rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
+                        : "rounded-full border px-3 py-1.5 text-xs font-medium text-muted-foreground"
+                    }
+                    disabled={
+                      isPending || pendingTaskId === `template:${template.id}`
+                    }
+                    key={slot.toISOString()}
+                    onClick={() => scheduleRyanOsBlock(template.id, slot)}
+                    type="button"
+                  >
+                    {index === 0 ? "Next " : ""}
+                    {formatClock(slot, timeZone)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   return (
     <div className="space-y-4">
       {taskDetailPanel}
+
+      <section className="relative overflow-hidden rounded-[1.75rem] border bg-slate-950 p-4 text-white shadow-sm sm:p-5">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(16,185,129,0.20),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(245,158,11,0.14),transparent_28%)]" />
+        <div className="relative grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">
+              RyanOS decides what matters
+            </p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">
+              Today's Needle Move
+            </h2>
+            <p className="mt-1 text-sm text-slate-300">
+              Write it as a completed result. Time blocking decides when it
+              happens.
+            </p>
+            <textarea
+              className="mt-4 min-h-[88px] w-full rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-emerald-300/50"
+              onChange={(event) => setNeedleMove(event.target.value)}
+              placeholder="Example: CCHCS draft sent to Maria for review."
+              value={needleMove}
+            />
+            <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_260px]">
+              <select
+                className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white"
+                onChange={(event) => setDecisionRule(event.target.value)}
+                value={decisionRule}
+              >
+                {decisionRules.map((rule) => (
+                  <option key={rule} value={rule}>
+                    {rule}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white placeholder:text-slate-500"
+                onChange={(event) => setBuildRecipient(event.target.value)}
+                placeholder="Named recipient, if build/artifact"
+                value={buildRecipient}
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {blockTypes.map((type) => (
+                <span
+                  className="rounded-full border border-white/10 bg-white/[0.07] px-3 py-1 text-xs text-slate-300"
+                  key={type}
+                >
+                  {type}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.07] p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+              Guardrails
+            </p>
+            <div className="mt-3 grid gap-3">
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  checked={hasEightyPercentItem}
+                  className="h-4 w-4"
+                  onChange={(event) =>
+                    setHasEightyPercentItem(event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                I have something 80% done
+              </label>
+              <label className="grid gap-1 text-sm text-slate-300">
+                Rykas backlog count
+                <input
+                  className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white"
+                  inputMode="numeric"
+                  onChange={(event) => setRykasBacklog(event.target.value)}
+                  value={rykasBacklog}
+                />
+              </label>
+              <div className="space-y-2 text-xs text-slate-300">
+                {buildNeedsRecipient && (
+                  <p className="rounded-xl border border-amber-300/30 bg-amber-300/10 p-2 text-amber-100">
+                    Name the recipient or send this to Parking.
+                  </p>
+                )}
+                {shouldWarnRykasBacklog && (
+                  <p className="rounded-xl border border-amber-300/30 bg-amber-300/10 p-2 text-amber-100">
+                    Rykas backlog is 10+. Do not source. Ship, relist, or list
+                    backlog first.
+                  </p>
+                )}
+                {hasEightyPercentItem && (
+                  <p className="rounded-xl border border-emerald-300/30 bg-emerald-300/10 p-2 text-emerald-100">
+                    Ship / kill / park the 80% item before adding new work.
+                  </p>
+                )}
+                {!buildNeedsRecipient &&
+                  !shouldWarnRykasBacklog &&
+                  !hasEightyPercentItem && (
+                    <p className="text-slate-400">
+                      No active guardrail warnings.
+                    </p>
+                  )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(2,6,23,0.32)] lg:hidden">
         <div className="relative p-4">
@@ -785,6 +1182,7 @@ export function TimeBlockBoard({
       </section>
 
       <div className="grid gap-4 lg:hidden">
+        {renderRyanOsBlocksPanel()}
         {mobileTaskQueue}
 
         {contextEvents.length > 0 && (
@@ -981,7 +1379,7 @@ export function TimeBlockBoard({
                         event.dataTransfer.getData("text/plain") ||
                         draggedTaskId;
                       if (taskId) {
-                        scheduleTask(taskId, slot);
+                        scheduleDroppedItem(taskId, slot);
                       }
                     }}
                     style={{
@@ -1085,6 +1483,7 @@ export function TimeBlockBoard({
         </section>
 
         <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
+          {renderRyanOsBlocksPanel()}
           <section
             className="rounded-2xl border bg-card p-4 shadow-sm"
             onDragOver={(event) => event.preventDefault()}
@@ -1092,7 +1491,7 @@ export function TimeBlockBoard({
               event.preventDefault();
               const taskId =
                 event.dataTransfer.getData("text/plain") || draggedTaskId;
-              if (taskId) {
+              if (taskId && !taskId.startsWith("template:")) {
                 clearTask(taskId);
               }
             }}
@@ -1140,6 +1539,49 @@ export function TimeBlockBoard({
           </section>
         </aside>
       </div>
+
+      <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              End-of-Day Shutdown
+            </p>
+            <h3 className="mt-1 text-lg font-semibold">Close the loop</h3>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Capture only what matters for tomorrow.
+          </p>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <label className="grid gap-1.5 text-sm">
+            Shipped
+            <textarea
+              className="min-h-[92px] rounded-xl border bg-background px-3 py-2 text-sm"
+              onChange={(event) => setShutdownShipped(event.target.value)}
+              placeholder="What actually shipped?"
+              value={shutdownShipped}
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            Still open
+            <textarea
+              className="min-h-[92px] rounded-xl border bg-background px-3 py-2 text-sm"
+              onChange={(event) => setShutdownOpen(event.target.value)}
+              placeholder="What remains open?"
+              value={shutdownOpen}
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            Likely Needle Move tomorrow
+            <textarea
+              className="min-h-[92px] rounded-xl border bg-background px-3 py-2 text-sm"
+              onChange={(event) => setShutdownTomorrow(event.target.value)}
+              placeholder="Completed result for tomorrow."
+              value={shutdownTomorrow}
+            />
+          </label>
+        </div>
+      </section>
     </div>
   );
 }

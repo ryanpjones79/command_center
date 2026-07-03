@@ -43,14 +43,14 @@ export default async function TimeBlocksPage({
         <div className="relative flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-              Calendar Planner
+              RyanOS Execution
             </p>
             <h2 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
-              Time Blocks
+              Today Command Board
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-              Mobile is tap-to-place. Desktop keeps drag-and-drop. Google
-              Calendar remains read-only.
+              RyanOS decides what matters. Time blocking decides when it
+              happens.
             </p>
           </div>
           <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
