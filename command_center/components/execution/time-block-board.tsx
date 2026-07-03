@@ -13,6 +13,10 @@ import {
   formatRecurrenceFrequency,
   formatRecurrenceWeekdays
 } from "@/lib/execution-options";
+import { MorningCard } from "./morning-card";
+import { RyanOsBlockPalette } from "./ryanos-block-palette";
+import { ShutdownPanel } from "./shutdown-panel";
+import { TimeBlockGrid } from "./time-block-grid";
 
 type BoardCalendarEvent = {
   id: string;
@@ -942,180 +946,40 @@ export function TimeBlockBoard({
       needleMove
     ) && !buildRecipient.trim();
 
-  const renderRyanOsBlocksPanel = () => (
-    <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Required Daily Blocks
-        </p>
-        <h3 className="mt-1 text-lg font-semibold">Drag or add to the board</h3>
-      </div>
-      <div className="mt-3 space-y-2">
-        {ryanOsBlockTemplates.map((template) => {
-          const openSlots = findOpenSlotsForMinutes(template.minutes, 3);
-          return (
-            <div
-              className="rounded-2xl border bg-background/80 p-3 shadow-sm"
-              draggable
-              key={template.id}
-              onDragStart={(event) => {
-                const payload = `template:${template.id}`;
-                setDraggedTaskId(payload);
-                event.dataTransfer.setData("text/plain", payload);
-              }}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold">{template.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {template.blockType} / {minutesLabel(template.minutes)}
-                  </p>
-                </div>
-                <span className="rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                  {template.blockType}
-                </span>
-              </div>
-              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                {template.helper.map((item) => (
-                  <p key={`${template.id}-${item}`}>- {item}</p>
-                ))}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {openSlots.map((slot, index) => (
-                  <button
-                    className={
-                      index === 0
-                        ? "rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
-                        : "rounded-full border px-3 py-1.5 text-xs font-medium text-muted-foreground"
-                    }
-                    disabled={
-                      isPending || pendingTaskId === `template:${template.id}`
-                    }
-                    key={slot.toISOString()}
-                    onClick={() => scheduleRyanOsBlock(template.id, slot)}
-                    type="button"
-                  >
-                    {index === 0 ? "Next " : ""}
-                    {formatClock(slot, timeZone)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
+  const ryanOsBlocksPanel = (
+    <RyanOsBlockPalette
+      findOpenSlotsForMinutes={findOpenSlotsForMinutes}
+      formatClock={formatClock}
+      isPending={isPending}
+      minutesLabel={minutesLabel}
+      pendingTaskId={pendingTaskId}
+      scheduleRyanOsBlock={scheduleRyanOsBlock}
+      setDraggedTaskId={setDraggedTaskId}
+      templates={ryanOsBlockTemplates}
+      timeZone={timeZone}
+    />
   );
 
   return (
     <div className="space-y-4">
       {taskDetailPanel}
 
-      <section className="relative overflow-hidden rounded-[1.75rem] border bg-slate-950 p-4 text-white shadow-sm sm:p-5">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(16,185,129,0.20),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(245,158,11,0.14),transparent_28%)]" />
-        <div className="relative grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">
-              RyanOS decides what matters
-            </p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight">
-              Today's Needle Move
-            </h2>
-            <p className="mt-1 text-sm text-slate-300">
-              Write it as a completed result. Time blocking decides when it
-              happens.
-            </p>
-            <textarea
-              className="mt-4 min-h-[88px] w-full rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-emerald-300/50"
-              onChange={(event) => setNeedleMove(event.target.value)}
-              placeholder="Example: CCHCS draft sent to Maria for review."
-              value={needleMove}
-            />
-            <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_260px]">
-              <select
-                className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white"
-                onChange={(event) => setDecisionRule(event.target.value)}
-                value={decisionRule}
-              >
-                {decisionRules.map((rule) => (
-                  <option key={rule} value={rule}>
-                    {rule}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white placeholder:text-slate-500"
-                onChange={(event) => setBuildRecipient(event.target.value)}
-                placeholder="Named recipient, if build/artifact"
-                value={buildRecipient}
-              />
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {blockTypes.map((type) => (
-                <span
-                  className="rounded-full border border-white/10 bg-white/[0.07] px-3 py-1 text-xs text-slate-300"
-                  key={type}
-                >
-                  {type}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/[0.07] p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-              Guardrails
-            </p>
-            <div className="mt-3 grid gap-3">
-              <label className="flex items-center gap-2 text-sm text-slate-300">
-                <input
-                  checked={hasEightyPercentItem}
-                  className="h-4 w-4"
-                  onChange={(event) =>
-                    setHasEightyPercentItem(event.target.checked)
-                  }
-                  type="checkbox"
-                />
-                I have something 80% done
-              </label>
-              <label className="grid gap-1 text-sm text-slate-300">
-                Rykas backlog count
-                <input
-                  className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white"
-                  inputMode="numeric"
-                  onChange={(event) => setRykasBacklog(event.target.value)}
-                  value={rykasBacklog}
-                />
-              </label>
-              <div className="space-y-2 text-xs text-slate-300">
-                {buildNeedsRecipient && (
-                  <p className="rounded-xl border border-amber-300/30 bg-amber-300/10 p-2 text-amber-100">
-                    Name the recipient or send this to Parking.
-                  </p>
-                )}
-                {shouldWarnRykasBacklog && (
-                  <p className="rounded-xl border border-amber-300/30 bg-amber-300/10 p-2 text-amber-100">
-                    Rykas backlog is 10+. Do not source. Ship, relist, or list
-                    backlog first.
-                  </p>
-                )}
-                {hasEightyPercentItem && (
-                  <p className="rounded-xl border border-emerald-300/30 bg-emerald-300/10 p-2 text-emerald-100">
-                    Ship / kill / park the 80% item before adding new work.
-                  </p>
-                )}
-                {!buildNeedsRecipient &&
-                  !shouldWarnRykasBacklog &&
-                  !hasEightyPercentItem && (
-                    <p className="text-slate-400">
-                      No active guardrail warnings.
-                    </p>
-                  )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      <MorningCard
+        blockTypes={blockTypes}
+        buildNeedsRecipient={buildNeedsRecipient}
+        buildRecipient={buildRecipient}
+        decisionRule={decisionRule}
+        decisionRules={decisionRules}
+        hasEightyPercentItem={hasEightyPercentItem}
+        needleMove={needleMove}
+        rykasBacklog={rykasBacklog}
+        setBuildRecipient={setBuildRecipient}
+        setDecisionRule={setDecisionRule}
+        setHasEightyPercentItem={setHasEightyPercentItem}
+        setNeedleMove={setNeedleMove}
+        setRykasBacklog={setRykasBacklog}
+        shouldWarnRykasBacklog={shouldWarnRykasBacklog}
+      />
 
       <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(2,6,23,0.32)] lg:hidden">
         <div className="relative p-4">
@@ -1182,7 +1046,7 @@ export function TimeBlockBoard({
       </section>
 
       <div className="grid gap-4 lg:hidden">
-        {renderRyanOsBlocksPanel()}
+        {ryanOsBlocksPanel}
         {mobileTaskQueue}
 
         {contextEvents.length > 0 && (
@@ -1344,146 +1208,33 @@ export function TimeBlockBoard({
             </div>
           )}
 
-          <div className="min-h-[560px] overflow-auto rounded-xl xl:min-h-0">
-            <div className="grid min-w-[720px] grid-cols-[72px_minmax(0,1fr)]">
-              <div className="relative" style={{ height: dayHeight }}>
-                {Array.from({ length: endHour - startHour + 1 }, (_, index) => (
-                  <div
-                    className="absolute left-0 pr-3 text-right text-xs text-muted-foreground"
-                    key={index}
-                    style={{ top: index * 60 * pixelsPerMinute - 6, width: 64 }}
-                  >
-                    {slotStart(date, index * 2, timeZone).toLocaleTimeString(
-                      "en-US",
-                      {
-                        timeZone,
-                        hour: "numeric"
-                      }
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <div
-                className="relative rounded-xl border bg-background/50"
-                style={{ height: dayHeight }}
-              >
-                {slots.map((slot) => (
-                  <div
-                    className="absolute left-0 right-0 border-t border-border/60"
-                    key={slot.toISOString()}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      const taskId =
-                        event.dataTransfer.getData("text/plain") ||
-                        draggedTaskId;
-                      if (taskId) {
-                        scheduleDroppedItem(taskId, slot);
-                      }
-                    }}
-                    style={{
-                      top: minutesFromStart(slot, timeZone) * pixelsPerMinute,
-                      height: slotMinutes * pixelsPerMinute
-                    }}
-                  />
-                ))}
-
-                {timedEvents.map((event) => {
-                  const top = Math.max(
-                    0,
-                    minutesFromStart(event.start, timeZone) * pixelsPerMinute
-                  );
-                  const height =
-                    durationMinutes(event.start, event.end) * pixelsPerMinute;
-
-                  return (
-                    <div
-                      className="pointer-events-none absolute left-0 right-0 z-[1] border-y border-amber-300/20 bg-amber-300/10"
-                      key={`${event.id}-busy`}
-                      style={{ top, height }}
-                    />
-                  );
-                })}
-
-                {timedEvents.map((event) => {
-                  const top = Math.max(
-                    0,
-                    minutesFromStart(event.start, timeZone) * pixelsPerMinute
-                  );
-                  const height =
-                    durationMinutes(event.start, event.end) * pixelsPerMinute;
-                  return (
-                    <div
-                      className="absolute left-3 right-[52%] z-10 overflow-hidden rounded-lg border border-amber-400/70 bg-amber-300/90 p-2 text-amber-950 shadow-sm"
-                      key={event.id}
-                      style={{ top, height }}
-                    >
-                      <p className="truncate text-xs font-semibold">
-                        {event.summary}
-                      </p>
-                      <p className="text-[11px] opacity-80">
-                        {formatClock(event.start, timeZone)}-
-                        {formatClock(event.end, timeZone)}
-                      </p>
-                    </div>
-                  );
-                })}
-
-                {localScheduledTasks.map((task) => {
-                  if (!task.scheduledStart || !task.scheduledEnd) return null;
-                  const top = Math.max(
-                    0,
-                    minutesFromStart(task.scheduledStart, timeZone) *
-                      pixelsPerMinute
-                  );
-                  const height =
-                    durationMinutes(task.scheduledStart, task.scheduledEnd) *
-                    pixelsPerMinute;
-                  return (
-                    <div
-                      className="absolute left-[50%] right-3 z-20 cursor-grab overflow-hidden rounded-lg border border-primary/50 bg-primary/15 p-2 shadow-sm"
-                      draggable
-                      key={task.id}
-                      onClick={() => setSelectedTaskId(task.id)}
-                      onDragStart={(event) => {
-                        setDraggedTaskId(task.id);
-                        event.dataTransfer.setData("text/plain", task.id);
-                      }}
-                      style={{ top, height }}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-semibold">
-                            {task.title}
-                          </p>
-                          <p className="text-[11px] text-muted-foreground">
-                            {formatClock(task.scheduledStart, timeZone)}-
-                            {formatClock(task.scheduledEnd, timeZone)}
-                          </p>
-                        </div>
-                        <button
-                          className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
-                          disabled={isPending || pendingTaskId === task.id}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            clearTask(task.id);
-                          }}
-                          type="button"
-                        >
-                          Clear
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+          <TimeBlockGrid
+            clearTask={clearTask}
+            date={date}
+            dayHeight={dayHeight}
+            draggedTaskId={draggedTaskId}
+            durationMinutes={durationMinutes}
+            endHour={endHour}
+            formatClock={formatClock}
+            isPending={isPending}
+            localScheduledTasks={localScheduledTasks}
+            minutesFromStart={minutesFromStart}
+            pendingTaskId={pendingTaskId}
+            pixelsPerMinute={pixelsPerMinute}
+            scheduleDroppedItem={scheduleDroppedItem}
+            setDraggedTaskId={setDraggedTaskId}
+            setSelectedTaskId={setSelectedTaskId}
+            slotMinutes={slotMinutes}
+            slotStart={slotStart}
+            slots={slots}
+            startHour={startHour}
+            timedEvents={timedEvents}
+            timeZone={timeZone}
+          />
         </section>
 
         <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
-          {renderRyanOsBlocksPanel()}
+          {ryanOsBlocksPanel}
           <section
             className="rounded-2xl border bg-card p-4 shadow-sm"
             onDragOver={(event) => event.preventDefault()}
@@ -1540,48 +1291,14 @@ export function TimeBlockBoard({
         </aside>
       </div>
 
-      <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              End-of-Day Shutdown
-            </p>
-            <h3 className="mt-1 text-lg font-semibold">Close the loop</h3>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Capture only what matters for tomorrow.
-          </p>
-        </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <label className="grid gap-1.5 text-sm">
-            Shipped
-            <textarea
-              className="min-h-[92px] rounded-xl border bg-background px-3 py-2 text-sm"
-              onChange={(event) => setShutdownShipped(event.target.value)}
-              placeholder="What actually shipped?"
-              value={shutdownShipped}
-            />
-          </label>
-          <label className="grid gap-1.5 text-sm">
-            Still open
-            <textarea
-              className="min-h-[92px] rounded-xl border bg-background px-3 py-2 text-sm"
-              onChange={(event) => setShutdownOpen(event.target.value)}
-              placeholder="What remains open?"
-              value={shutdownOpen}
-            />
-          </label>
-          <label className="grid gap-1.5 text-sm">
-            Likely Needle Move tomorrow
-            <textarea
-              className="min-h-[92px] rounded-xl border bg-background px-3 py-2 text-sm"
-              onChange={(event) => setShutdownTomorrow(event.target.value)}
-              placeholder="Completed result for tomorrow."
-              value={shutdownTomorrow}
-            />
-          </label>
-        </div>
-      </section>
+      <ShutdownPanel
+        setShutdownOpen={setShutdownOpen}
+        setShutdownShipped={setShutdownShipped}
+        setShutdownTomorrow={setShutdownTomorrow}
+        shutdownOpen={shutdownOpen}
+        shutdownShipped={shutdownShipped}
+        shutdownTomorrow={shutdownTomorrow}
+      />
     </div>
   );
 }
