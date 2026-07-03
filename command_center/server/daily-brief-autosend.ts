@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { sendDailyBriefEmail } from "@/server/daily-brief-service";
+import {
+  getDailyBriefReferenceDate,
+  sendDailyBriefEmail
+} from "@/server/daily-brief-service";
 
 type DailyBriefAutosendResult =
   | {
@@ -66,11 +69,16 @@ export function shouldSendNow(now: Date) {
     sendMinute,
     local,
     dateKey: `${local.year}-${local.month}-${local.day}`,
-    inWindow: local.hour === sendHour && local.minute >= sendMinute && local.minute < sendMinute + 15
+    inWindow:
+      local.hour === sendHour &&
+      local.minute >= sendMinute &&
+      local.minute < sendMinute + 15
   };
 }
 
-export async function runDailyBriefAutosend(now = new Date()): Promise<DailyBriefAutosendResult> {
+export async function runDailyBriefAutosend(
+  now = new Date()
+): Promise<DailyBriefAutosendResult> {
   if (process.env.FEATURE_DAILY_BRIEF_AUTOSEND !== "true") {
     return { ok: true, skipped: "FEATURE_DAILY_BRIEF_AUTOSEND is false" };
   }
@@ -100,7 +108,7 @@ export async function runDailyBriefAutosend(now = new Date()): Promise<DailyBrie
   }
 
   try {
-    const brief = await sendDailyBriefEmail(now);
+    const brief = await sendDailyBriefEmail(getDailyBriefReferenceDate(now));
 
     await prisma.dailyBriefDispatch.upsert({
       where: { dateKey: timing.dateKey },
@@ -125,7 +133,10 @@ export async function runDailyBriefAutosend(now = new Date()): Promise<DailyBrie
       emailTo: brief.emailTo
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown daily brief send failure";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Unknown daily brief send failure";
 
     await prisma.dailyBriefDispatch.upsert({
       where: { dateKey: timing.dateKey },

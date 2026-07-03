@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { DAILY_BRIEF_PROMPT_ENHANCEMENTS, DAILY_BRIEF_PROMPT_VERSION } from "@/server/daily-brief-prompt";
+import {
+  DAILY_BRIEF_PROMPT_ENHANCEMENTS,
+  DAILY_BRIEF_PROMPT_VERSION
+} from "@/server/daily-brief-prompt";
 import { getActionSheetData } from "@/server/execution-service";
 import {
   deriveWorkBlocksFromEvents,
@@ -8,12 +11,21 @@ import {
   type CalendarEvent,
   type WorkBlock
 } from "@/server/google-calendar-service";
-import { getGoogleConfigSnapshot, getGoogleGmailClient, getMissingGoogleConfigKeys } from "@/server/google-client";
-import { getTodayPlanningRow, type DailyPlanningInputs } from "@/server/google-sheets-service";
+import {
+  getGoogleConfigSnapshot,
+  getGoogleGmailClient,
+  getMissingGoogleConfigKeys
+} from "@/server/google-client";
+import {
+  getTodayPlanningRow,
+  type DailyPlanningInputs
+} from "@/server/google-sheets-service";
 import { getDailyBriefNews, type DailyNewsTopic } from "@/server/news-service";
 
 export type DailyBriefStatus = "ok" | "missing";
-type BriefExecutionTask = Awaited<ReturnType<typeof getActionSheetData>>["sections"]["today"][number];
+type BriefExecutionTask = Awaited<
+  ReturnType<typeof getActionSheetData>
+>["sections"]["today"][number];
 
 type DailyBriefExecutionContext = {
   outcomeTasks: BriefExecutionTask[];
@@ -55,7 +67,29 @@ const briefSectionOrder = [
   "NEWS WATCH"
 ] as const;
 
-const noCleanWorkBlockLine = "No clean work block. Use short execution windows.";
+const noCleanWorkBlockLine =
+  "No clean work block. Use short execution windows.";
+const defaultDailyBriefTimeZone = "America/Los_Angeles";
+
+function getDailyBriefTimeZone() {
+  return process.env.DAILY_BRIEF_TIMEZONE || defaultDailyBriefTimeZone;
+}
+
+export function getDailyBriefReferenceDate(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: getDailyBriefTimeZone(),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(now);
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = Number.parseInt(map.year, 10);
+  const month = Number.parseInt(map.month, 10);
+  const day = Number.parseInt(map.day, 10);
+
+  return new Date(Date.UTC(year, month - 1, day, 12));
+}
 
 function formatDateLine(value: Date) {
   return value.toLocaleDateString("en-US", {
@@ -113,11 +147,16 @@ async function resolveDailyBriefUserId(userId?: string) {
 }
 
 function sameOrBeforeDay(left: Date, right: Date) {
-  return new Date(left.getFullYear(), left.getMonth(), left.getDate()).getTime() <=
-    new Date(right.getFullYear(), right.getMonth(), right.getDate()).getTime();
+  return (
+    new Date(left.getFullYear(), left.getMonth(), left.getDate()).getTime() <=
+    new Date(right.getFullYear(), right.getMonth(), right.getDate()).getTime()
+  );
 }
 
-function durationFitScore(estimatedDuration: string | null | undefined, minutes: number) {
+function durationFitScore(
+  estimatedDuration: string | null | undefined,
+  minutes: number
+) {
   if (!estimatedDuration) {
     return 1;
   }
@@ -144,7 +183,11 @@ function durationFitScore(estimatedDuration: string | null | undefined, minutes:
   }
 }
 
-function scoreTaskForWorkBlock(task: BriefExecutionTask, minutes: number, referenceDate: Date) {
+function scoreTaskForWorkBlock(
+  task: BriefExecutionTask,
+  minutes: number,
+  referenceDate: Date
+) {
   let score = durationFitScore(task.estimatedDuration, minutes);
 
   if (task.pinToTodayUntilDone) score += 2;
@@ -157,19 +200,27 @@ function scoreTaskForWorkBlock(task: BriefExecutionTask, minutes: number, refere
   return score;
 }
 
-function buildExecutionContext(actionSheetData: Awaited<ReturnType<typeof getActionSheetData>>): DailyBriefExecutionContext {
-  const outcomeTasks = [...actionSheetData.sections.today, ...actionSheetData.sections.thisWeek]
+function buildExecutionContext(
+  actionSheetData: Awaited<ReturnType<typeof getActionSheetData>>
+): DailyBriefExecutionContext {
+  const outcomeTasks = [
+    ...actionSheetData.sections.today,
+    ...actionSheetData.sections.thisWeek
+  ]
     .filter((task) => !task.isBlocked)
     .slice(0, 8);
   const quickStartTasks = [
     ...actionSheetData.overdueFollowUps,
     ...actionSheetData.sections.today.filter(
       (task) =>
-        task.estimatedDuration === "UNDER_30_MIN" || task.estimatedDuration === "THIRTY_TO_SIXTY_MIN"
+        task.estimatedDuration === "UNDER_30_MIN" ||
+        task.estimatedDuration === "THIRTY_TO_SIXTY_MIN"
     )
   ].slice(0, 6);
   const quickWinTasks = actionSheetData.sections.quickWins
-    .filter((task) => task.whenBucket === "TODAY" || task.whenBucket === "THIS_WEEK")
+    .filter(
+      (task) => task.whenBucket === "TODAY" || task.whenBucket === "THIS_WEEK"
+    )
     .slice(0, 6);
 
   return {
@@ -180,8 +231,12 @@ function buildExecutionContext(actionSheetData: Awaited<ReturnType<typeof getAct
       .map((item) => ("title" in item ? item.title : item.name))
       .filter(Boolean)
       .slice(0, 3),
-    overdueFollowUpTitles: actionSheetData.overdueFollowUps.map((task) => task.title).slice(0, 3),
-    deferTitles: actionSheetData.sections.parkingLot.map((task) => task.title).slice(0, 3)
+    overdueFollowUpTitles: actionSheetData.overdueFollowUps
+      .map((task) => task.title)
+      .slice(0, 3),
+    deferTitles: actionSheetData.sections.parkingLot
+      .map((task) => task.title)
+      .slice(0, 3)
   };
 }
 
@@ -190,7 +245,9 @@ function mergeIntervals(events: CalendarEvent[]) {
     return [];
   }
 
-  const sorted = [...events].sort((left, right) => left.start.getTime() - right.start.getTime());
+  const sorted = [...events].sort(
+    (left, right) => left.start.getTime() - right.start.getTime()
+  );
   const merged = [
     {
       start: sorted[0].start,
@@ -201,7 +258,9 @@ function mergeIntervals(events: CalendarEvent[]) {
   for (const event of sorted.slice(1)) {
     const current = merged[merged.length - 1];
     if (event.start.getTime() <= current.end.getTime()) {
-      current.end = new Date(Math.max(current.end.getTime(), event.end.getTime()));
+      current.end = new Date(
+        Math.max(current.end.getTime(), event.end.getTime())
+      );
       continue;
     }
 
@@ -214,10 +273,18 @@ function mergeIntervals(events: CalendarEvent[]) {
   return merged;
 }
 
-function summarizeSchedulePressure(schedule: CalendarEvent[], workBlocks: WorkBlock[]) {
+function summarizeSchedulePressure(
+  schedule: CalendarEvent[],
+  workBlocks: WorkBlock[]
+) {
   const mergedBusy = mergeIntervals(schedule);
   const busyMinutes = mergedBusy.reduce(
-    (total, interval) => total + Math.max(0, Math.round((interval.end.getTime() - interval.start.getTime()) / 60000)),
+    (total, interval) =>
+      total +
+      Math.max(
+        0,
+        Math.round((interval.end.getTime() - interval.start.getTime()) / 60000)
+      ),
     0
   );
   const overlapCount = schedule.reduce((count, event, index) => {
@@ -228,9 +295,13 @@ function summarizeSchedulePressure(schedule: CalendarEvent[], workBlocks: WorkBl
 
     return next.start.getTime() < event.end.getTime() ? count + 1 : count;
   }, 0);
-  const longestBlockMinutes = workBlocks.reduce((max, block) => Math.max(max, block.minutes), 0);
+  const longestBlockMinutes = workBlocks.reduce(
+    (max, block) => Math.max(max, block.minutes),
+    0
+  );
   const meetingHeavy = schedule.length >= 5 || busyMinutes >= 240;
-  const fragmented = workBlocks.length === 0 || longestBlockMinutes < 120 || overlapCount > 0;
+  const fragmented =
+    workBlocks.length === 0 || longestBlockMinutes < 120 || overlapCount > 0;
 
   return {
     meetingHeavy,
@@ -238,7 +309,10 @@ function summarizeSchedulePressure(schedule: CalendarEvent[], workBlocks: WorkBl
   };
 }
 
-function chooseTopOutcomes(planning: DailyPlanningInputs, executionContext: DailyBriefExecutionContext | null) {
+function chooseTopOutcomes(
+  planning: DailyPlanningInputs,
+  executionContext: DailyBriefExecutionContext | null
+) {
   return uniqueNonEmpty([
     planning.mustBeforeNoon,
     ...planning.topPriorities,
@@ -247,30 +321,50 @@ function chooseTopOutcomes(planning: DailyPlanningInputs, executionContext: Dail
   ]).slice(0, 3);
 }
 
-function buildMission(planning: DailyPlanningInputs, outcomes: string[], meetingHeavy: boolean, fragmented: boolean) {
-  const primary = outcomes[0] ?? planning.mustBeforeNoon ?? planning.topPriorities[0] ?? "Protect one meaningful win.";
+function buildMission(
+  planning: DailyPlanningInputs,
+  outcomes: string[],
+  meetingHeavy: boolean,
+  fragmented: boolean
+) {
+  const primary =
+    outcomes[0] ??
+    planning.mustBeforeNoon ??
+    planning.topPriorities[0] ??
+    "Protect one meaningful win.";
   const secondary = outcomes[1];
 
-  if (planning.mustBeforeNoon && primary.toLowerCase() !== planning.mustBeforeNoon.toLowerCase()) {
+  if (
+    planning.mustBeforeNoon &&
+    primary.toLowerCase() !== planning.mustBeforeNoon.toLowerCase()
+  ) {
     return `Clear ${planning.mustBeforeNoon} before noon, then move ${primary}.`;
   }
 
   if (meetingHeavy || fragmented) {
-    return secondary ? `Protect ${primary}. Treat ${secondary} as secondary if a second block opens.` : `Protect ${primary}.`;
+    return secondary
+      ? `Protect ${primary}. Treat ${secondary} as secondary if a second block opens.`
+      : `Protect ${primary}.`;
   }
 
   return secondary ? `Move ${primary}, then ${secondary}.` : `Move ${primary}.`;
 }
 
 function buildMorningLaunch(planning: DailyPlanningInputs) {
-  return uniqueNonEmpty([...planning.morningLaunch, planning.outlookSweep]).slice(0, 3);
+  return uniqueNonEmpty([
+    ...planning.morningLaunch,
+    planning.outlookSweep
+  ]).slice(0, 3);
 }
 
 function buildMealPlanLines() {
   return ["Breakfast:", "Lunch:", "Dinner:", "Snack:"];
 }
 
-function buildQuickWins(planning: DailyPlanningInputs, executionContext: DailyBriefExecutionContext | null) {
+function buildQuickWins(
+  planning: DailyPlanningInputs,
+  executionContext: DailyBriefExecutionContext | null
+) {
   return uniqueNonEmpty([
     ...planning.quickWins,
     ...(executionContext?.quickWinTasks.map((task) => task.title) ?? [])
@@ -279,7 +373,7 @@ function buildQuickWins(planning: DailyPlanningInputs, executionContext: DailyBr
 
 function getBriefLocalHour(value: Date) {
   const hour = new Intl.DateTimeFormat("en-US", {
-    timeZone: process.env.DAILY_BRIEF_TIMEZONE || "America/Los_Angeles",
+    timeZone: getDailyBriefTimeZone(),
     hour: "2-digit",
     hourCycle: "h23"
   }).format(value);
@@ -296,7 +390,8 @@ function buildWorkBlockLines(
 ) {
   if (planning.availableWorkBlocks.length > 0) {
     return planning.availableWorkBlocks.slice(0, 3).map((block, index) => {
-      const target = executionContext?.outcomeTasks[index]?.title ?? outcomes[index];
+      const target =
+        executionContext?.outcomeTasks[index]?.title ?? outcomes[index];
       return target ? `${block} -> ${target}` : block;
     });
   }
@@ -317,33 +412,49 @@ function buildWorkBlockLines(
       return null;
     }
 
-    const candidates = executionContext.outcomeTasks.filter((task) => !usedTitles.has(task.title));
+    const candidates = executionContext.outcomeTasks.filter(
+      (task) => !usedTitles.has(task.title)
+    );
     if (candidates.length === 0) {
       return null;
     }
 
     return [...candidates].sort((left, right) => {
       const scoreDiff =
-        scoreTaskForWorkBlock(right, block.minutes, referenceDate) - scoreTaskForWorkBlock(left, block.minutes, referenceDate);
+        scoreTaskForWorkBlock(right, block.minutes, referenceDate) -
+        scoreTaskForWorkBlock(left, block.minutes, referenceDate);
       if (scoreDiff !== 0) return scoreDiff;
 
       const dueDiff =
-        (left.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER) - (right.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER);
+        (left.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+        (right.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER);
       if (dueDiff !== 0) return dueDiff;
 
       return left.updatedAt.getTime() - right.updatedAt.getTime();
     })[0];
   };
 
-  const preNoonBlock = workBlocks.find((block) => getBriefLocalHour(block.start) < 12);
+  const preNoonBlock = workBlocks.find(
+    (block) => getBriefLocalHour(block.start) < 12
+  );
   if (planning.mustBeforeNoon && preNoonBlock) {
-    const followOn = primary && planning.mustBeforeNoon.toLowerCase() !== primary.toLowerCase() ? `, then ${primary}` : "";
-    lines.push(`${preNoonBlock.label} -> ${planning.mustBeforeNoon} first${followOn}`);
+    const followOn =
+      primary && planning.mustBeforeNoon.toLowerCase() !== primary.toLowerCase()
+        ? `, then ${primary}`
+        : "";
+    lines.push(
+      `${preNoonBlock.label} -> ${planning.mustBeforeNoon} first${followOn}`
+    );
     usedTitles.add(planning.mustBeforeNoon);
-    blockIndex = workBlocks.findIndex((block) => block.label === preNoonBlock.label) + 1;
+    blockIndex =
+      workBlocks.findIndex((block) => block.label === preNoonBlock.label) + 1;
   }
 
-  for (let index = blockIndex; index < workBlocks.length && lines.length < 3; index += 1) {
+  for (
+    let index = blockIndex;
+    index < workBlocks.length && lines.length < 3;
+    index += 1
+  ) {
     const block = workBlocks[index];
     const matchedTask = pickTaskForBlock(block);
     if (matchedTask) {
@@ -352,7 +463,9 @@ function buildWorkBlockLines(
       continue;
     }
 
-    const target = [primary, secondary, tertiary].find((item) => item && !usedTitles.has(item));
+    const target = [primary, secondary, tertiary].find(
+      (item) => item && !usedTitles.has(item)
+    );
     if (target) {
       usedTitles.add(target);
       lines.push(`${block.label} -> ${target}`);
@@ -365,7 +478,11 @@ function buildWorkBlockLines(
   return lines.slice(0, 3);
 }
 
-function buildRecommendedPlan(planning: DailyPlanningInputs, outcomes: string[], workBlockLines: string[]) {
+function buildRecommendedPlan(
+  planning: DailyPlanningInputs,
+  outcomes: string[],
+  workBlockLines: string[]
+) {
   const blockPhrase = (line: string | undefined, preposition: "in" | "via") => {
     if (!line || line.startsWith(noCleanWorkBlockLine)) {
       return "";
@@ -386,9 +503,11 @@ function buildRecommendedPlan(planning: DailyPlanningInputs, outcomes: string[],
   );
   const then = thenTarget
     ? `${thenTarget}${blockPhrase(workBlockLines[1], "in")}.`
-    : buildMorningLaunch(planning).join("; ") || "Run the launch checklist and protect the next open block.";
+    : buildMorningLaunch(planning).join("; ") ||
+      "Run the launch checklist and protect the next open block.";
 
-  const lastTarget = outcomes[2] ?? planning.quickWins[0] ?? planning.outlookSweep;
+  const lastTarget =
+    outcomes[2] ?? planning.quickWins[0] ?? planning.outlookSweep;
   const last = lastTarget
     ? `${lastTarget}${blockPhrase(workBlockLines[2], "in")}.`
     : "Use short gaps for cleanup only.";
@@ -457,7 +576,10 @@ function parseBriefSections(text: string) {
 }
 
 function buildNewsLines(newsTopics: DailyNewsTopic[], includeLinks: boolean) {
-  const lines = ["NEWS WATCH", "Optional. Read only after today's execution tasks are complete."];
+  const lines = [
+    "NEWS WATCH",
+    "Optional. Read only after today's execution tasks are complete."
+  ];
 
   for (const topic of newsTopics) {
     lines.push(topic.label);
@@ -493,11 +615,22 @@ function buildBriefText(
 ) {
   const outcomes = chooseTopOutcomes(planning, executionContext);
   const scheduleSummary = summarizeSchedulePressure(schedule, workBlocks);
-  const mission = buildMission(planning, outcomes, scheduleSummary.meetingHeavy, scheduleSummary.fragmented);
+  const mission = buildMission(
+    planning,
+    outcomes,
+    scheduleSummary.meetingHeavy,
+    scheduleSummary.fragmented
+  );
   const morningLaunch = buildMorningLaunch(planning);
   const mealPlan = buildMealPlanLines();
   const quickWins = buildQuickWins(planning, executionContext);
-  const workBlockLines = buildWorkBlockLines(planning, workBlocks, outcomes, executionContext, referenceDate);
+  const workBlockLines = buildWorkBlockLines(
+    planning,
+    workBlocks,
+    outcomes,
+    executionContext,
+    referenceDate
+  );
   const plan = buildRecommendedPlan(planning, outcomes, workBlockLines);
   const watchouts = buildWatchouts(
     outcomes,
@@ -506,7 +639,9 @@ function buildBriefText(
     scheduleSummary.fragmented,
     executionContext
   );
-  const gratitude = planning.gratitude.trim() ? planning.gratitude.trim() : "Not filled.";
+  const gratitude = planning.gratitude.trim()
+    ? planning.gratitude.trim()
+    : "Not filled.";
   const relationship = planning.relationshipConnection.trim()
     ? planning.relationshipConnection.trim()
     : "Not filled.";
@@ -519,13 +654,17 @@ function buildBriefText(
     `- ${mission}`,
     "",
     "MORNING LAUNCH",
-    ...(morningLaunch.length > 0 ? morningLaunch.map((item) => `- ${item}`) : ["- No morning launch items provided."]),
+    ...(morningLaunch.length > 0
+      ? morningLaunch.map((item) => `- ${item}`)
+      : ["- No morning launch items provided."]),
     "",
     "MEAL PLAN",
     ...mealPlan,
     "",
     "TOP 3 OUTCOMES",
-    ...(outcomes.length > 0 ? outcomes.map((item) => `- ${item}`) : ["- No top outcomes provided."]),
+    ...(outcomes.length > 0
+      ? outcomes.map((item) => `- ${item}`)
+      : ["- No top outcomes provided."]),
     "",
     "DECISION FILTER",
     "- Do Now -> urgent, short, high leverage, or blocking",
@@ -535,10 +674,14 @@ function buildBriefText(
     "- Reference -> useful, no action",
     "",
     "SCHEDULE SNAPSHOT",
-    ...(schedule.length > 0 ? schedule.map((event) => `- ${formatCalendarEventLine(event)}`) : ["- No calendar commitments found."]),
+    ...(schedule.length > 0
+      ? schedule.map((event) => `- ${formatCalendarEventLine(event)}`)
+      : ["- No calendar commitments found."]),
     "",
     "BEST WORK BLOCKS",
-    ...(workBlockLines.length > 0 ? workBlockLines.map((item) => `- ${item}`) : ["- No bounded work block available."]),
+    ...(workBlockLines.length > 0
+      ? workBlockLines.map((item) => `- ${item}`)
+      : ["- No bounded work block available."]),
     "",
     "RECOMMENDED PLAN",
     `- First: ${plan.first}`,
@@ -546,7 +689,9 @@ function buildBriefText(
     `- Last: ${plan.last}`,
     "",
     "QUICK WINS",
-    ...(quickWins.length > 0 ? quickWins.map((item) => `- ${item}`) : ["- No quick wins provided."]),
+    ...(quickWins.length > 0
+      ? quickWins.map((item) => `- ${item}`)
+      : ["- No quick wins provided."]),
     "",
     "GRATITUDE + CONNECTION",
     `- ${gratitude}`,
@@ -572,7 +717,9 @@ function escapeHtml(value: string) {
 }
 
 function sanitizeHref(value: string) {
-  return value.startsWith("https://") || value.startsWith("http://") ? value : "#";
+  return value.startsWith("https://") || value.startsWith("http://")
+    ? value
+    : "#";
 }
 
 function renderSectionHtml(lines: string[]) {
@@ -584,11 +731,16 @@ function renderSectionHtml(lines: string[]) {
   const allBullets = trimmedLines.every((line) => line.startsWith("- "));
   if (allBullets) {
     return `<ul style="margin:0;padding-left:18px;">${trimmedLines
-      .map((line) => `<li style="margin:0 0 6px;">${escapeHtml(line.slice(2))}</li>`)
+      .map(
+        (line) =>
+          `<li style="margin:0 0 6px;">${escapeHtml(line.slice(2))}</li>`
+      )
       .join("")}</ul>`;
   }
 
-  return trimmedLines.map((line) => `<p style="margin:0 0 8px;">${escapeHtml(line)}</p>`).join("");
+  return trimmedLines
+    .map((line) => `<p style="margin:0 0 8px;">${escapeHtml(line)}</p>`)
+    .join("");
 }
 
 function buildDailyBriefHtml(brief: DailyBriefData) {
@@ -658,7 +810,10 @@ function buildDailyBriefHtml(brief: DailyBriefData) {
   `;
 }
 
-export async function getDailyBriefData(referenceDate = new Date(), userId?: string): Promise<DailyBriefData> {
+export async function getDailyBriefData(
+  referenceDate = getDailyBriefReferenceDate(),
+  userId?: string
+): Promise<DailyBriefData> {
   const config = getGoogleConfigSnapshot();
   const warnings: string[] = [];
   const missingInputs: string[] = [];
@@ -666,7 +821,9 @@ export async function getDailyBriefData(referenceDate = new Date(), userId?: str
   const resolvedUserId = await resolveDailyBriefUserId(userId);
 
   if (missingConfig.length > 0) {
-    missingInputs.push(`Google configuration missing: ${missingConfig.join(", ")}`);
+    missingInputs.push(
+      `Google configuration missing: ${missingConfig.join(", ")}`
+    );
   }
 
   let planning: DailyPlanningInputs | null = null;
@@ -676,17 +833,22 @@ export async function getDailyBriefData(referenceDate = new Date(), userId?: str
   let executionContext: DailyBriefExecutionContext | null = null;
 
   if (missingInputs.length === 0) {
-    const [planningResult, scheduleResult, newsResult, actionSheetResult] = await Promise.allSettled([
-      getTodayPlanningRow(referenceDate),
-      getTodaysCalendarEvents(referenceDate),
-      getDailyBriefNews(3),
-      resolvedUserId ? getActionSheetData(resolvedUserId) : Promise.resolve(null)
-    ]);
+    const [planningResult, scheduleResult, newsResult, actionSheetResult] =
+      await Promise.allSettled([
+        getTodayPlanningRow(referenceDate),
+        getTodaysCalendarEvents(referenceDate),
+        getDailyBriefNews(3),
+        resolvedUserId
+          ? getActionSheetData(resolvedUserId)
+          : Promise.resolve(null)
+      ]);
 
     if (planningResult.status === "fulfilled") {
       planning = planningResult.value;
       if (!planning) {
-        missingInputs.push(`No planning row found for ${referenceDate.toISOString().slice(0, 10)} in ${config.sheetName}.`);
+        missingInputs.push(
+          `No planning row found for ${referenceDate.toISOString().slice(0, 10)} in ${config.sheetName}.`
+        );
       }
     } else {
       missingInputs.push(
@@ -711,7 +873,9 @@ export async function getDailyBriefData(referenceDate = new Date(), userId?: str
     }
 
     if (actionSheetResult.status === "fulfilled") {
-      executionContext = actionSheetResult.value ? buildExecutionContext(actionSheetResult.value) : null;
+      executionContext = actionSheetResult.value
+        ? buildExecutionContext(actionSheetResult.value)
+        : null;
       if (!resolvedUserId) {
         warnings.push("Action Sheet sync unavailable: no app user found.");
       }
@@ -724,7 +888,13 @@ export async function getDailyBriefData(referenceDate = new Date(), userId?: str
 
   if (planning) {
     workBlocks =
-      planning.availableWorkBlocks.length > 0 ? [] : deriveWorkBlocksFromEvents(schedule, referenceDate, planning.workdayWindow);
+      planning.availableWorkBlocks.length > 0
+        ? []
+        : deriveWorkBlocksFromEvents(
+            schedule,
+            referenceDate,
+            planning.workdayWindow
+          );
   }
 
   return {
@@ -732,11 +902,27 @@ export async function getDailyBriefData(referenceDate = new Date(), userId?: str
     briefText:
       missingInputs.length > 0 || !planning
         ? buildMissingBrief(referenceDate, missingInputs)
-        : buildBriefText(referenceDate, planning, schedule, workBlocks, newsTopics, false, executionContext),
+        : buildBriefText(
+            referenceDate,
+            planning,
+            schedule,
+            workBlocks,
+            newsTopics,
+            false,
+            executionContext
+          ),
     emailText:
       missingInputs.length > 0 || !planning
         ? buildMissingBrief(referenceDate, missingInputs)
-        : buildBriefText(referenceDate, planning, schedule, workBlocks, newsTopics, true, executionContext),
+        : buildBriefText(
+            referenceDate,
+            planning,
+            schedule,
+            workBlocks,
+            newsTopics,
+            true,
+            executionContext
+          ),
     date: referenceDate,
     planning,
     schedule,
@@ -750,7 +936,12 @@ export async function getDailyBriefData(referenceDate = new Date(), userId?: str
   };
 }
 
-function buildRawEmail(to: string, subject: string, textBody: string, htmlBody: string) {
+function buildRawEmail(
+  to: string,
+  subject: string,
+  textBody: string,
+  htmlBody: string
+) {
   const boundary = `daily-brief-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   return Buffer.from(
@@ -777,10 +968,15 @@ function buildRawEmail(to: string, subject: string, textBody: string, htmlBody: 
   ).toString("base64url");
 }
 
-export async function sendDailyBriefEmail(referenceDate = new Date(), userId?: string) {
+export async function sendDailyBriefEmail(
+  referenceDate = getDailyBriefReferenceDate(),
+  userId?: string
+) {
   const brief = await getDailyBriefData(referenceDate, userId);
   if (brief.status !== "ok") {
-    throw new Error("Daily Brief is missing required inputs. Email send skipped.");
+    throw new Error(
+      "Daily Brief is missing required inputs. Email send skipped."
+    );
   }
 
   if (!brief.emailTo) {
@@ -792,7 +988,12 @@ export async function sendDailyBriefEmail(referenceDate = new Date(), userId?: s
   await gmail.users.messages.send({
     userId: "me",
     requestBody: {
-      raw: buildRawEmail(brief.emailTo, `Daily Brief - ${formatDateLine(referenceDate)}`, brief.emailText, htmlBody)
+      raw: buildRawEmail(
+        brief.emailTo,
+        `Daily Brief - ${formatDateLine(referenceDate)}`,
+        brief.emailText,
+        htmlBody
+      )
     }
   });
 
