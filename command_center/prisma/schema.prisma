@@ -256,3 +256,26 @@ model DailyBriefDispatch {
   createdAt DateTime @default(now())
   sentAt    DateTime?
 }
+
+model ContactLead {
+  id             String   @id @default(cuid())
+  name           String
+  email          String
+  company        String?
+  businessType   String?
+  revenueBand    String?
+  amazonPresence String?
+  multipleSellers String?
+  pricingIssues  String?
+  supportNeed    String?
+  catalogSize    String?
+  primaryGoal    String?
+  timeline       String?
+  message        String?
+  requestedAsset String?
+  source         String?
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([email, createdAt])
+}
