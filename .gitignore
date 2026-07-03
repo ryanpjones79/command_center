@@ -38,6 +38,20 @@ oppe narr v5.sql
 oppe_narr_v5_patched.sql
 pyproject.toml
 
+# Generated report/render artifacts kept out of app commits
+__pycache__/
+debug_*.png
+mat_discrepancy_*.[chjp]*
+mat_discrepancy_*_page*.png
+mat_discrepancy_visuals_*/
+mat_discrepancy_workflow_package_*/
+mat_workflow_*_test*
+sq_tox_shareable_report_20*
+stimulant_fentanyl_trend_*20*
+workflow_*definitions.xlsx
+workflow_methodology_and_field_definitions.xlsx
+portable_handoff/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
