@@ -515,7 +515,8 @@ export async function getTimeBlockPlannerData(
       task.scheduledStart < dayRange.end
     );
 
-  const [calendarEvents, tasks, domains, projects] = await Promise.all([
+  const [calendarEvents, tasks, domains, projects, dailyPlan, rykasDay] =
+    await Promise.all([
     getCalendarEventsForDate(referenceDate),
     prisma.executionTask.findMany({
       where: {
@@ -532,6 +533,16 @@ export async function getTimeBlockPlannerData(
       where: { userId },
       include: { domain: true },
       orderBy: { name: "asc" }
+    }),
+    prisma.dailyPlan.upsert({
+      where: { userId_date: { userId, date: dayRange.start } },
+      update: {},
+      create: { userId, date: dayRange.start }
+    }),
+    prisma.rykasDay.upsert({
+      where: { userId_date: { userId, date: dayRange.start } },
+      update: {},
+      create: { userId, date: dayRange.start }
     })
   ]);
 
@@ -540,8 +551,17 @@ export async function getTimeBlockPlannerData(
     date: referenceDate,
     timeZone: dayRange.timeZone,
     calendarEvents,
+    dailyPlan: {
+      dateKey: dayRange.start.toISOString().slice(0, 10),
+      needleMove: dailyPlan.needleMove,
+      ruleStep: dailyPlan.ruleStep,
+      shutdownNote: dailyPlan.shutdownNote
+    },
     domains,
     projects,
+    rykasDay: {
+      backlogAfter: rykasDay.backlogAfter
+    },
     scheduledTasks: sortedTasks.filter((task) =>
       isScheduledOnSelectedDay(task)
     ),

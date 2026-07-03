@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   clearTaskTimeBlockAction,
+  importRyanOsLocalStateAction,
+  saveDailyPlanAction,
+  saveRykasBacklogAction,
   scheduleRyanOsBlockAction,
   scheduleTaskTimeBlockAction
 } from "@/app/time-blocks/actions";
@@ -71,7 +74,16 @@ type AgendaItem =
 
 type TimeBlockBoardProps = {
   calendarEvents: BoardCalendarEvent[];
+  dailyPlan: {
+    dateKey: string;
+    needleMove: string | null;
+    ruleStep: number | null;
+    shutdownNote: string | null;
+  };
   date: Date;
+  rykasDay: {
+    backlogAfter: number;
+  };
   scheduledTasks: BoardTask[];
   timeZone: string;
   unscheduledTasks: BoardTask[];
@@ -342,11 +354,6 @@ function priorityTone(priority: string) {
   }
 }
 
-function dateKeyForStorage(value: Date, timeZone: string) {
-  const parts = getZonedDateParts(value, timeZone);
-  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
-}
-
 function minutesLabel(minutes: number) {
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
@@ -356,7 +363,9 @@ function minutesLabel(minutes: number) {
 
 export function TimeBlockBoard({
   calendarEvents,
+  dailyPlan,
   date,
+  rykasDay,
   scheduledTasks,
   timeZone,
   unscheduledTasks
@@ -365,15 +374,20 @@ export function TimeBlockBoard({
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [needleMove, setNeedleMove] = useState("");
-  const [decisionRule, setDecisionRule] = useState(decisionRules[0]);
+  const [needleMove, setNeedleMove] = useState(dailyPlan.needleMove ?? "");
+  const [decisionRule, setDecisionRule] = useState(
+    decisionRules[Math.max(0, Math.min(3, (dailyPlan.ruleStep ?? 1) - 1))]
+  );
   const [buildRecipient, setBuildRecipient] = useState("");
   const [hasEightyPercentItem, setHasEightyPercentItem] = useState(false);
-  const [rykasBacklog, setRykasBacklog] = useState("10");
+  const [rykasBacklog, setRykasBacklog] = useState(
+    String(rykasDay.backlogAfter)
+  );
   const [shutdownShipped, setShutdownShipped] = useState("");
   const [shutdownOpen, setShutdownOpen] = useState("");
-  const [shutdownTomorrow, setShutdownTomorrow] = useState("");
-  const loadedStorageKeyRef = useRef("");
+  const [shutdownTomorrow, setShutdownTomorrow] = useState(
+    dailyPlan.shutdownNote ?? ""
+  );
   const [message, setMessage] = useState("");
   const [localScheduledTasks, setLocalScheduledTasks] =
     useState(scheduledTasks);
@@ -398,77 +412,73 @@ export function TimeBlockBoard({
       slotStart(date, index, timeZone)
     );
   }, [date, timeZone]);
-  const ryanOsStorageKey = useMemo(
-    () => `ryanos-execution:${dateKeyForStorage(date, timeZone)}`,
-    [date, timeZone]
-  );
+  useEffect(() => {
+    setNeedleMove(dailyPlan.needleMove ?? "");
+    setDecisionRule(
+      decisionRules[Math.max(0, Math.min(3, (dailyPlan.ruleStep ?? 1) - 1))]
+    );
+    setRykasBacklog(String(rykasDay.backlogAfter));
+    setShutdownTomorrow(dailyPlan.shutdownNote ?? "");
+  }, [dailyPlan, rykasDay]);
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(ryanOsStorageKey);
+    const storageKey = `ryanos-execution:${dailyPlan.dateKey}`;
+    const raw = window.localStorage.getItem(storageKey);
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as {
-          buildRecipient?: string;
           decisionRule?: string;
-          hasEightyPercentItem?: boolean;
           needleMove?: string;
           rykasBacklog?: string;
-          shutdownOpen?: string;
-          shutdownShipped?: string;
           shutdownTomorrow?: string;
         };
 
         setNeedleMove(parsed.needleMove ?? "");
-        setDecisionRule(parsed.decisionRule ?? decisionRules[0]);
-        setBuildRecipient(parsed.buildRecipient ?? "");
-        setHasEightyPercentItem(Boolean(parsed.hasEightyPercentItem));
-        setRykasBacklog(parsed.rykasBacklog ?? "10");
-        setShutdownShipped(parsed.shutdownShipped ?? "");
-        setShutdownOpen(parsed.shutdownOpen ?? "");
+        setDecisionRule(
+          typeof parsed.decisionRule === "string"
+            ? parsed.decisionRule
+            : decisionRules[0]
+        );
+        setRykasBacklog(parsed.rykasBacklog ?? String(rykasDay.backlogAfter));
         setShutdownTomorrow(parsed.shutdownTomorrow ?? "");
+        window.localStorage.removeItem(storageKey);
+        startTransition(async () => {
+          await importRyanOsLocalStateAction(dailyPlan.dateKey, parsed);
+          router.refresh();
+        });
       } catch {
         setNeedleMove("");
       }
-    } else {
-      setNeedleMove("");
-      setDecisionRule(decisionRules[0]);
-      setBuildRecipient("");
-      setHasEightyPercentItem(false);
-      setRykasBacklog("10");
-      setShutdownShipped("");
-      setShutdownOpen("");
-      setShutdownTomorrow("");
     }
-    loadedStorageKeyRef.current = ryanOsStorageKey;
-  }, [ryanOsStorageKey]);
+  }, [dailyPlan.dateKey, router, rykasDay.backlogAfter]);
 
   useEffect(() => {
-    if (loadedStorageKeyRef.current !== ryanOsStorageKey) return;
+    const timeout = window.setTimeout(() => {
+      const ruleStep = decisionRules.indexOf(decisionRule) + 1;
+      startTransition(() => {
+        void saveDailyPlanAction(dailyPlan.dateKey, {
+          needleMove,
+          ruleStep: ruleStep > 0 ? ruleStep : 1,
+          shutdownNote: shutdownTomorrow
+        });
+      });
+    }, 600);
 
-    window.localStorage.setItem(
-      ryanOsStorageKey,
-      JSON.stringify({
-        buildRecipient,
-        decisionRule,
-        hasEightyPercentItem,
-        needleMove,
-        rykasBacklog,
-        shutdownOpen,
-        shutdownShipped,
-        shutdownTomorrow
-      })
-    );
-  }, [
-    buildRecipient,
-    decisionRule,
-    hasEightyPercentItem,
-    needleMove,
-    rykasBacklog,
-    ryanOsStorageKey,
-    shutdownOpen,
-    shutdownShipped,
-    shutdownTomorrow
-  ]);
+    return () => window.clearTimeout(timeout);
+  }, [dailyPlan.dateKey, decisionRule, needleMove, shutdownTomorrow]);
+
+  useEffect(() => {
+    const backlog = Number.parseInt(rykasBacklog, 10);
+    if (Number.isNaN(backlog)) return;
+
+    const timeout = window.setTimeout(() => {
+      startTransition(() => {
+        void saveRykasBacklogAction(dailyPlan.dateKey, Math.max(0, backlog));
+      });
+    }, 600);
+
+    return () => window.clearTimeout(timeout);
+  }, [dailyPlan.dateKey, rykasBacklog]);
 
   const dayHeight = (endHour - startHour) * 60 * pixelsPerMinute;
   const contextEvents = calendarEvents.filter(

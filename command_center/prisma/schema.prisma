@@ -81,18 +81,24 @@ enum ExecutionRecurrenceFrequency {
 }
 
 model User {
-  id                String               @id @default(cuid())
-  email             String               @unique
+  id                String              @id @default(cuid())
+  email             String              @unique
   passwordHash      String
   name              String?
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
   settings          UserSettings?
   watchlist         WatchlistTicker[]
   savedFilters      SavedSignalFilter[]
   executionDomains  ExecutionDomain[]
   executionProjects ExecutionProject[]
   executionTasks    ExecutionTask[]
+  dailyPlans        DailyPlan[]
+  queueItems        QueueItem[]
+  pipelineActions   PipelineAction[]
+  rykasDays         RykasDay[]
+  parkedIdeas       ParkedIdea[]
+  weeklyResets      WeeklyReset[]
 }
 
 model UserSettings {
@@ -144,7 +150,7 @@ model PriceBar {
 }
 
 model FetchState {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   symbol        String
   provider      String
   lastFetchedAt DateTime
@@ -185,96 +191,205 @@ model ExecutionDomain {
 }
 
 model ExecutionProject {
-  id            String                 @id @default(cuid())
-  userId        String
-  domainId      String
-  name          String
-  status        ExecutionProjectStatus @default(ON_TRACK)
-  activeStatus  ExecutionActiveStatus  @default(ACTIVE_NOW)
-  weeklyFocus   ExecutionWeeklyFocus   @default(NONE)
-  priority      ExecutionPriority      @default(MEDIUM)
-  nextAction    String?
-  waitingOn     String?
-  blocked       Boolean                @default(false)
-  note          String?
+  id             String                 @id @default(cuid())
+  userId         String
+  domainId       String
+  name           String
+  status         ExecutionProjectStatus @default(ON_TRACK)
+  activeStatus   ExecutionActiveStatus  @default(ACTIVE_NOW)
+  weeklyFocus    ExecutionWeeklyFocus   @default(NONE)
+  priority       ExecutionPriority      @default(MEDIUM)
+  nextAction     String?
+  waitingOn      String?
+  blocked        Boolean                @default(false)
+  note           String?
   lastReviewedAt DateTime?
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
-  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  domain        ExecutionDomain        @relation(fields: [domainId], references: [id], onDelete: Cascade)
-  tasks         ExecutionTask[]
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain         ExecutionDomain        @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  tasks          ExecutionTask[]
 
   @@unique([userId, name])
   @@index([userId, activeStatus, weeklyFocus, priority])
 }
 
 model ExecutionTask {
-  id           String              @id @default(cuid())
-  userId       String
-  domainId     String
-  projectId    String?
-  title        String
-  type         ExecutionTaskType   @default(ACTION)
-  estimatedDuration ExecutionDurationBucket?
-  status       ExecutionTaskStatus @default(NOT_STARTED)
-  priority     ExecutionPriority   @default(MEDIUM)
-  whenBucket   ExecutionWhenBucket @default(LATER)
-  dueDate      DateTime?
-  followUpDate DateTime?
-  waitingOn    String?
-  note         String?
-  source       String?
-  isBlocked    Boolean             @default(false)
-  pinToTodayUntilDone Boolean      @default(false)
+  id                  String                       @id @default(cuid())
+  userId              String
+  domainId            String
+  projectId           String?
+  title               String
+  type                ExecutionTaskType            @default(ACTION)
+  estimatedDuration   ExecutionDurationBucket?
+  status              ExecutionTaskStatus          @default(NOT_STARTED)
+  priority            ExecutionPriority            @default(MEDIUM)
+  whenBucket          ExecutionWhenBucket          @default(LATER)
+  dueDate             DateTime?
+  followUpDate        DateTime?
+  waitingOn           String?
+  note                String?
+  source              String?
+  isBlocked           Boolean                      @default(false)
+  pinToTodayUntilDone Boolean                      @default(false)
   recurrenceFrequency ExecutionRecurrenceFrequency @default(NONE)
-  recurrenceWeekdays String?
-  recurrenceEndDate DateTime?
-  recurrenceParentId String?
-  scheduledStart DateTime?
-  scheduledEnd DateTime?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
-  completedAt  DateTime?
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  domain       ExecutionDomain     @relation(fields: [domainId], references: [id], onDelete: Cascade)
-  project      ExecutionProject?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  recurrenceWeekdays  String?
+  recurrenceEndDate   DateTime?
+  recurrenceParentId  String?
+  scheduledStart      DateTime?
+  scheduledEnd        DateTime?
+  // RyanOS extensions. Allowed blockType values: cchcs, pipeline, rykas, admin, personal.
+  blockType           String?
+  isNeedle            Boolean                      @default(false)
+  isBuild             Boolean                      @default(false)
+  recipient           String?
+  owedToLeadership    Boolean                      @default(false)
+  shippedAt           DateTime?
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @updatedAt
+  completedAt         DateTime?
+  user                User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain              ExecutionDomain              @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  project             ExecutionProject?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   @@index([userId, whenBucket, status, priority, dueDate])
   @@index([userId, followUpDate])
   @@index([userId, recurrenceFrequency])
   @@index([recurrenceParentId])
   @@index([userId, scheduledStart])
+  @@index([userId, blockType, scheduledStart])
+  @@index([userId, isNeedle, scheduledStart])
+  @@index([userId, shippedAt])
   @@index([projectId, status])
 }
 
-model DailyBriefDispatch {
+model DailyPlan {
+  id             String   @id @default(cuid())
+  userId         String
+  date           DateTime
+  needleMove     String?
+  ruleStep       Int?
+  needleTaskId   String?
+  rykasDismissed Boolean  @default(false)
+  shutdownNote   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model QueueItem {
+  id         String    @id @default(cuid())
+  userId     String
+  title      String
+  lane       String
+  recipient  String
+  nextAction String
+  status     String    @default("queued")
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@index([userId, resolvedAt])
+}
+
+model PipelineAction {
   id        String   @id @default(cuid())
-  dateKey   String   @unique
-  emailTo   String
-  status    String   @default("SENT")
-  error     String?
+  userId    String
+  date      DateTime
+  type      String
+  withWhom  String?
+  note      String?
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date, type])
+  @@index([userId, createdAt])
+}
+
+model RykasDay {
+  id           String   @id @default(cuid())
+  userId       String
+  date         DateTime
+  toShip       String?
+  offersDone   Boolean  @default(false)
+  listedCount  Int      @default(0)
+  sourced      Boolean  @default(false)
+  backlogAfter Int      @default(0)
+  capOverride  Boolean  @default(false)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model ParkedIdea {
+  id               String   @id @default(cuid())
+  userId           String
+  idea             String
+  lane             String
+  triggerCondition String?
+  status           String   @default("parked")
+  renewals         Int      @default(0)
+  parkedAt         DateTime @default(now())
+  touchedAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, touchedAt])
+  @@index([userId, parkedAt])
+}
+
+model WeeklyReset {
+  id             String    @id @default(cuid())
+  userId         String
+  weekOf         DateTime
+  loopsShipped   Int       @default(0)
+  loopsKilled    Int       @default(0)
+  loopsParked    Int       @default(0)
+  conversations  Int       @default(0)
+  ships          Int       @default(0)
+  rykasBacklog   Int       @default(0)
+  overridesCount Int       @default(0)
+  outcomes       String
+  promotedIdeaId String?
+  completedAt    DateTime?
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekOf])
+  @@index([userId, completedAt])
+}
+
+model DailyBriefDispatch {
+  id        String    @id @default(cuid())
+  dateKey   String    @unique
+  emailTo   String
+  status    String    @default("SENT")
+  error     String?
+  createdAt DateTime  @default(now())
   sentAt    DateTime?
 }
 
 model ContactLead {
-  id             String   @id @default(cuid())
-  name           String
-  email          String
-  company        String?
-  businessType   String?
-  revenueBand    String?
-  amazonPresence String?
+  id              String   @id @default(cuid())
+  name            String
+  email           String
+  company         String?
+  businessType    String?
+  revenueBand     String?
+  amazonPresence  String?
   multipleSellers String?
-  pricingIssues  String?
-  supportNeed    String?
-  catalogSize    String?
-  primaryGoal    String?
-  timeline       String?
-  message        String?
-  requestedAsset String?
-  source         String?
-  createdAt      DateTime @default(now())
+  pricingIssues   String?
+  supportNeed     String?
+  catalogSize     String?
+  primaryGoal     String?
+  timeline        String?
+  message         String?
+  requestedAsset  String?
+  source          String?
+  createdAt       DateTime @default(now())
 
   @@index([createdAt])
   @@index([email, createdAt])

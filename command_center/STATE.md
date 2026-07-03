@@ -26,3 +26,28 @@
 - Next:
   - Add `docs/MODEL.md` and `docs/DESIGN.md`.
   - Then implement the RyanOS persisted model, one-time localStorage import, block identity colors, and one-needle-per-user-day invariant.
+
+## 2026-07-02 MVP Scope + S2
+
+- Added `docs/MVP-SCOPE.md`, `docs/MODEL.md`, and `docs/DESIGN.md` to this repo.
+- MVP-SCOPE supersedes DESIGN where they conflict.
+- S2 shipped:
+  - Added RyanOS MVP Prisma model to both schema files:
+    - `ExecutionTask` RyanOS extensions.
+    - `DailyPlan`, `QueueItem`, `PipelineAction`, `RykasDay`, `ParkedIdea`, `WeeklyReset`.
+  - Excluded frozen/cut models from MVP: `Pattern`, `Touch`, `GuardrailOverride`.
+  - Added one SQLite migration: `20260702000000_add_ryanos_mvp_model`.
+  - Time-block loader now creates/returns `DailyPlan` and `RykasDay`.
+  - Time-block board imports legacy `ryanos-execution:${dateKey}` once, writes it into Prisma, removes the key, and no longer writes the old localStorage path.
+  - DailyPlan fields and Rykas backlog now autosave through server actions.
+- Verification:
+  - `node scripts/prisma-command.mjs format` passed for SQLite and Postgres schemas.
+  - `node scripts/prisma-command.mjs generate` passed for SQLite and Postgres schemas.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - `npm run test` passed: 2 files, 6 tests.
+  - `prisma migrate dev` could not run because the environment is non-interactive.
+  - `prisma migrate deploy` hit pre-existing local SQLite migration drift on `20260629144500_add_execution_task_recurrence` duplicate column.
+  - Local SQLite schema was synced safely with `node scripts/prisma-command.mjs db push --skip-generate`.
+- Next:
+  - S3 Blocks: 5 type colors on the grid, needle star, server-enforced one needle per user/day, and shipped tap action.

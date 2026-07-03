@@ -48,6 +48,51 @@ const ryanOsBlockTemplates: Record<string, RyanOsBlockTemplate> = {
   }
 };
 
+const decisionRules = [
+  "CCHCS deadline / leadership-visible commitment within 48h",
+  "SignalCare conversation available",
+  "Anything 80% done and ready to ship",
+  "Otherwise pipeline block"
+];
+
+type RyanOsLocalStatePayload = {
+  decisionRule?: unknown;
+  needleMove?: unknown;
+  rykasBacklog?: unknown;
+  shutdownTomorrow?: unknown;
+};
+
+function dateOnlyFromKey(dateKey: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return null;
+  const parsed = new Date(`${dateKey}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function ruleStepFromDecisionRule(value: unknown) {
+  if (typeof value !== "string") return null;
+  const index = decisionRules.indexOf(value);
+  return index >= 0 ? index + 1 : null;
+}
+
+function parseBacklog(value: unknown) {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : Number.parseInt(typeof value === "string" ? value : "", 10);
+  if (Number.isNaN(parsed)) return 0;
+  return Math.max(0, parsed);
+}
+
+function revalidateTimeBlockSurfaces() {
+  revalidatePath("/time-blocks");
+  revalidatePath("/");
+  revalidatePath("/tasks");
+}
+
 function minutesForDurationBucket(value: string | null | undefined) {
   switch (value) {
     case "UNDER_30_MIN":
@@ -142,9 +187,7 @@ export async function scheduleTaskTimeBlockAction(
     }
   });
 
-  revalidatePath("/time-blocks");
-  revalidatePath("/");
-  revalidatePath("/tasks");
+  revalidateTimeBlockSurfaces();
 
   return { ok: true, error: "" };
 }
@@ -205,15 +248,14 @@ export async function scheduleRyanOsBlockAction(
       whenBucket: whenBucketForDate(scheduledStart),
       note: template.note,
       source: `RyanOS:${template.blockType}`,
+      blockType: template.blockType.toLowerCase(),
       scheduledStart,
       scheduledEnd,
       pinToTodayUntilDone: template.blockType === "CCHCS"
     }
   });
 
-  revalidatePath("/time-blocks");
-  revalidatePath("/");
-  revalidatePath("/tasks");
+  revalidateTimeBlockSurfaces();
 
   return { ok: true, error: "" };
 }
@@ -237,9 +279,114 @@ export async function clearTaskTimeBlockAction(taskId: string) {
     }
   });
 
-  revalidatePath("/time-blocks");
-  revalidatePath("/");
-  revalidatePath("/tasks");
+  revalidateTimeBlockSurfaces();
+
+  return { ok: true, error: "" };
+}
+
+export async function importRyanOsLocalStateAction(
+  dateKey: string,
+  payload: RyanOsLocalStatePayload
+) {
+  const user = await requireUser();
+  const date = dateOnlyFromKey(dateKey);
+
+  if (!date) {
+    return { ok: false, error: "Invalid RyanOS date." };
+  }
+
+  const needleMove = stringValue(payload.needleMove);
+  const shutdownNote = stringValue(payload.shutdownTomorrow);
+  const ruleStep = ruleStepFromDecisionRule(payload.decisionRule);
+  const backlogAfter = parseBacklog(payload.rykasBacklog);
+
+  await prisma.$transaction([
+    prisma.dailyPlan.upsert({
+      where: { userId_date: { userId: user.id, date } },
+      update: {
+        ...(needleMove ? { needleMove } : {}),
+        ...(ruleStep ? { ruleStep } : {}),
+        ...(shutdownNote ? { shutdownNote } : {})
+      },
+      create: {
+        userId: user.id,
+        date,
+        needleMove: needleMove || null,
+        ruleStep,
+        shutdownNote: shutdownNote || null
+      }
+    }),
+    prisma.rykasDay.upsert({
+      where: { userId_date: { userId: user.id, date } },
+      update: { backlogAfter },
+      create: { userId: user.id, date, backlogAfter }
+    })
+  ]);
+
+  revalidateTimeBlockSurfaces();
+
+  return { ok: true, error: "" };
+}
+
+export async function saveDailyPlanAction(
+  dateKey: string,
+  input: { needleMove?: string; ruleStep?: number | null; shutdownNote?: string }
+) {
+  const user = await requireUser();
+  const date = dateOnlyFromKey(dateKey);
+
+  if (!date) {
+    return { ok: false, error: "Invalid RyanOS date." };
+  }
+
+  const ruleStep =
+    typeof input.ruleStep === "number" && input.ruleStep >= 1 && input.ruleStep <= 4
+      ? input.ruleStep
+      : null;
+
+  await prisma.dailyPlan.upsert({
+    where: { userId_date: { userId: user.id, date } },
+    update: {
+      needleMove: stringValue(input.needleMove) || null,
+      ruleStep,
+      shutdownNote: stringValue(input.shutdownNote) || null
+    },
+    create: {
+      userId: user.id,
+      date,
+      needleMove: stringValue(input.needleMove) || null,
+      ruleStep,
+      shutdownNote: stringValue(input.shutdownNote) || null
+    }
+  });
+
+  revalidateTimeBlockSurfaces();
+
+  return { ok: true, error: "" };
+}
+
+export async function saveRykasBacklogAction(
+  dateKey: string,
+  backlogAfter: number
+) {
+  const user = await requireUser();
+  const date = dateOnlyFromKey(dateKey);
+
+  if (!date) {
+    return { ok: false, error: "Invalid RyanOS date." };
+  }
+
+  await prisma.rykasDay.upsert({
+    where: { userId_date: { userId: user.id, date } },
+    update: { backlogAfter: Math.max(0, backlogAfter) },
+    create: {
+      userId: user.id,
+      date,
+      backlogAfter: Math.max(0, backlogAfter)
+    }
+  });
+
+  revalidateTimeBlockSurfaces();
 
   return { ok: true, error: "" };
 }
