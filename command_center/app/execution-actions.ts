@@ -19,11 +19,23 @@ import { ensureExecutionSetup } from "@/server/execution-service";
 
 function revalidateExecution() {
   revalidatePath("/");
+  revalidatePath("/time-blocks");
   revalidatePath("/weekly-review");
   revalidatePath("/tasks");
   revalidatePath("/projects");
-  revalidatePath("/settings");
-  revalidatePath("/print/action-sheet");
+}
+
+function revalidateTasksOnly() {
+  revalidatePath("/");
+  revalidatePath("/time-blocks");
+  revalidatePath("/tasks");
+}
+
+function revalidateProjectsOnly() {
+  revalidatePath("/");
+  revalidatePath("/weekly-review");
+  revalidatePath("/tasks");
+  revalidatePath("/projects");
 }
 
 function parseDate(value: string | null | undefined) {
@@ -182,7 +194,7 @@ async function completeExecutionTask(task: NonNullable<Awaited<ReturnType<typeof
 export async function seedExecutionDomainsAction() {
   const user = await requireUser();
   await ensureExecutionSetup(user.id);
-  revalidateExecution();
+  revalidateProjectsOnly();
 }
 
 export async function createExecutionDomainAction(_prevState: unknown, formData: FormData) {
@@ -215,7 +227,7 @@ export async function createExecutionDomainAction(_prevState: unknown, formData:
     }
   });
 
-  revalidateExecution();
+  revalidateProjectsOnly();
   return { ok: true, error: "" };
 }
 
@@ -262,7 +274,7 @@ export async function createExecutionProjectAction(_prevState: unknown, formData
     }
   });
 
-  revalidateExecution();
+  revalidateProjectsOnly();
   return { ok: true, error: "" };
 }
 
@@ -304,7 +316,7 @@ export async function updateExecutionProjectAction(formData: FormData) {
     }
   });
 
-  revalidateExecution();
+  revalidateProjectsOnly();
 }
 
 export async function deleteExecutionProjectAction(formData: FormData) {
@@ -318,7 +330,7 @@ export async function deleteExecutionProjectAction(formData: FormData) {
     data: { projectId: null }
   });
   await prisma.executionProject.delete({ where: { id: project.id } });
-  revalidateExecution();
+  revalidateProjectsOnly();
 }
 
 export async function toggleExecutionProjectTopThreeAction(projectId: string) {
@@ -334,7 +346,7 @@ export async function toggleExecutionProjectTopThreeAction(projectId: string) {
     }
   });
 
-  revalidateExecution();
+  revalidateProjectsOnly();
 }
 
 export async function setExecutionProjectActiveStatusAction(projectId: string, activeStatus: ExecutionActiveStatus) {
@@ -357,7 +369,7 @@ export async function setExecutionProjectActiveStatusAction(projectId: string, a
     }
   });
 
-  revalidateExecution();
+  revalidateTasksOnly();
 }
 
 export async function markExecutionProjectReviewedAction(projectId: string) {
@@ -370,7 +382,7 @@ export async function markExecutionProjectReviewedAction(projectId: string) {
     data: { lastReviewedAt: new Date() }
   });
 
-  revalidateExecution();
+  revalidateTasksOnly();
 }
 
 export async function createExecutionTaskAction(_prevState: unknown, formData: FormData) {
@@ -432,7 +444,7 @@ export async function createExecutionTaskAction(_prevState: unknown, formData: F
     }
   });
 
-  revalidateExecution();
+  revalidateTasksOnly();
   return { ok: true, error: "" };
 }
 
@@ -500,7 +512,7 @@ export async function updateExecutionTaskAction(formData: FormData) {
     });
   }
 
-  revalidateExecution();
+  revalidateTasksOnly();
 }
 
 export async function deleteExecutionTaskAction(formData: FormData) {
@@ -510,7 +522,7 @@ export async function deleteExecutionTaskAction(formData: FormData) {
   if (!task) return;
 
   await prisma.executionTask.delete({ where: { id: task.id } });
-  revalidateExecution();
+  revalidateTasksOnly();
 }
 
 export async function markExecutionTaskStatusAction(
@@ -535,7 +547,7 @@ export async function markExecutionTaskStatusAction(
     });
   }
 
-  revalidateExecution();
+  revalidateTasksOnly();
 }
 
 export async function nudgeExecutionTaskFollowUpAction(taskId: string, days: number) {
@@ -553,7 +565,7 @@ export async function nudgeExecutionTaskFollowUpAction(taskId: string, days: num
     }
   });
 
-  revalidateExecution();
+  revalidateTasksOnly();
 }
 
 export async function bulkUpdateExecutionTasksAction(formData: FormData) {
@@ -575,7 +587,7 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
       where: { userId: user.id, id: { in: ownedTaskIds } },
       data: { projectId: targetProjectId || null }
     });
-    revalidateExecution();
+    revalidateTasksOnly();
     return;
   }
 
@@ -584,7 +596,7 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
       where: { userId: user.id, id: { in: ownedTaskIds } },
       data: { pinToTodayUntilDone: bulkAction === "PIN_TODAY" }
     });
-    revalidateExecution();
+    revalidateTasksOnly();
     return;
   }
 
@@ -608,7 +620,7 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
       )
     );
 
-    revalidateExecution();
+    revalidateTasksOnly();
     return;
   }
 
@@ -645,7 +657,7 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
     });
 
     await Promise.all(tasks.filter((task) => task.status !== "DONE").map((task) => completeExecutionTask(task)));
-    revalidateExecution();
+    revalidateTasksOnly();
     return;
   }
 
@@ -656,7 +668,7 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
     data: updates
   });
 
-  revalidateExecution();
+  revalidateTasksOnly();
 }
 
 export async function quickCaptureExecutionTaskAction(_prevState: unknown, formData: FormData) {
@@ -685,6 +697,6 @@ export async function quickCaptureExecutionTaskAction(_prevState: unknown, formD
     }
   });
 
-  revalidateExecution();
+  revalidateTasksOnly();
   return { ok: true, error: "" };
 }

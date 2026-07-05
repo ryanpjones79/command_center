@@ -7,6 +7,7 @@ import {
 } from "@/app/execution-actions";
 import type { ReactNode } from "react";
 import { CreateTaskForm } from "@/components/execution/create-task-form";
+import { SubmitButton } from "@/components/execution/submit-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -95,8 +96,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
         </p>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <Card className="h-fit">
+      <section className="grid gap-4 xl:grid-cols-[minmax(430px,470px)_minmax(0,1fr)]">
+        <Card className="h-fit overflow-hidden">
           <CardHeader>
             <CardTitle className="text-base">Add Task</CardTitle>
           </CardHeader>
@@ -114,9 +115,9 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
               <CardTitle className="text-base">Filters</CardTitle>
             </CardHeader>
             <CardContent>
-              <form className="grid gap-3 md:grid-cols-6" method="get">
+              <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,2fr)_repeat(5,minmax(132px,1fr))_auto]" method="get">
                 <input
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm md:col-span-2"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                   defaultValue={q}
                   name="q"
                   placeholder="Search task, note, source, waiting on"
@@ -181,9 +182,9 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                     </option>
                   ))}
                 </select>
-                <button className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" type="submit">
+                <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" pendingLabel="Applying..." type="submit">
                   Apply
-                </button>
+                </SubmitButton>
               </form>
             </CardContent>
           </Card>
@@ -216,9 +217,9 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                     </option>
                   ))}
                 </select>
-                <button className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" type="submit">
+                <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" pendingLabel="Applying..." type="submit">
                   Apply to Selected
-                </button>
+                </SubmitButton>
               </form>
             </CardContent>
           </Card>
@@ -318,19 +319,19 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
 
                   <div className="mt-4 flex flex-wrap gap-2">
                     <form action={markDoneAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         Mark Done
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={bumpTwoDaysAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         Follow Up +2d
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={bumpWeekAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         Follow Up +1w
-                      </button>
+                      </SubmitButton>
                     </form>
                   </div>
 
@@ -510,15 +511,15 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                           Keep on Today until done
                         </label>
                       </div>
-                      <button className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" type="submit">
+                      <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-70" pendingLabel="Saving..." type="submit">
                         Save
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={deleteExecutionTaskAction} className="mt-3">
                       <input name="taskId" type="hidden" value={task.id} />
-                      <button className="h-9 rounded-md border border-destructive px-4 text-sm text-destructive" type="submit">
+                      <SubmitButton className="h-9 rounded-md border border-destructive px-4 text-sm text-destructive disabled:opacity-60" pendingLabel="Deleting..." type="submit">
                         Delete Task
-                      </button>
+                      </SubmitButton>
                     </form>
                   </details>
                 </CardContent>

@@ -59,8 +59,8 @@ export function CreateTaskForm({
     domains.find((domain) => domain.name.toLowerCase() === "work")?.id ?? domains[0]?.id ?? "";
 
   return (
-    <form action={formAction} className="space-y-3">
-      <div className="grid gap-2 sm:grid-cols-2">
+    <form action={formAction} className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2">
         <Field label="Area">
           <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={defaultDomainId} name="domainId">
             {domains.map((domain) => (
@@ -84,7 +84,7 @@ export function CreateTaskForm({
       <Field label="Task name">
         <Input name="title" placeholder="What needs to happen?" required />
       </Field>
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-3">
         <Field label="Task type">
           <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="ACTION" name="type">
             {executionSelectOptions.taskTypes.map((value) => (
@@ -117,7 +117,7 @@ export function CreateTaskForm({
           </select>
         </Field>
       </div>
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2">
         <Field label="Planning bucket" help="Where this should live until you schedule or finish it.">
           <select
             className="h-9 rounded-md border border-input bg-background px-3 text-sm"
@@ -148,7 +148,7 @@ export function CreateTaskForm({
           ))}
         </select>
       </Field>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-3 md:grid-cols-2">
         <Field label="Repeats" help="Creates the next copy when you complete this one.">
           <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="NONE" name="recurrenceFrequency">
             {executionSelectOptions.recurrenceFrequencies.map((value) => (
@@ -166,7 +166,7 @@ export function CreateTaskForm({
         </Field>
       </div>
       <Field label="Custom weekdays" help="Used only when Repeats is set to Custom weekdays.">
-        <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-7">
           {executionWeekdayOptions.map((day) => (
             <label
               className="flex h-9 items-center justify-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground"
@@ -187,7 +187,7 @@ export function CreateTaskForm({
             ))}
         </div>
       </Field>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-3 md:grid-cols-2">
         <Field label="Waiting on" help="Person, team, or dependency blocking the next move.">
           <Input name="waitingOn" placeholder="Name or dependency" />
         </Field>
