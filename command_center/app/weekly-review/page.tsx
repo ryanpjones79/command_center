@@ -5,6 +5,7 @@ import {
   toggleExecutionProjectTopThreeAction,
   updateExecutionProjectAction
 } from "@/app/execution-actions";
+import Link from "next/link";
 import { CreateProjectForm } from "@/components/execution/create-project-form";
 import { SubmitButton } from "@/components/execution/submit-button";
 import { Badge } from "@/components/ui/badge";
@@ -280,11 +281,14 @@ export default async function WeeklyReviewPage() {
                       <div className="mt-3 space-y-2">
                         {project.tasks.map((task) => {
                           const signals = taskSignals(task, today, staleTaskCutoff);
+                          const taskHref = `/tasks?q=${encodeURIComponent(task.title)}`;
                           return (
                             <div className="rounded-lg border bg-background/70 p-3" key={task.id}>
                               <div className="flex flex-wrap items-start justify-between gap-2">
                                 <div className="min-w-0">
-                                  <p className="text-sm font-medium">{task.title}</p>
+                                  <Link className="text-sm font-medium underline-offset-4 hover:underline" href={taskHref}>
+                                    {task.title}
+                                  </Link>
                                   <p className="mt-1 text-xs text-muted-foreground">
                                     {formatExecutionLabel(task.status)} / {formatExecutionLabel(task.whenBucket)}
                                     {task.estimatedDuration ? ` / ${formatExecutionDurationBucket(task.estimatedDuration)}` : ""}
@@ -304,6 +308,9 @@ export default async function WeeklyReviewPage() {
                                 <span>Waiting: {task.waitingOn || "None"}</span>
                                 <span>Updated: {formatShortDate(task.updatedAt)}</span>
                               </div>
+                              <Link className="mt-2 inline-flex text-xs font-medium text-primary underline-offset-4 hover:underline" href={taskHref}>
+                                Open in Tasks
+                              </Link>
                             </div>
                           );
                         })}
