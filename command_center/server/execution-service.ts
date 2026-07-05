@@ -454,6 +454,7 @@ export async function getTaskMaintenanceData(
     projectId?: string;
     priority?: string;
     q?: string;
+    taskId?: string;
   }
 ) {
   await ensureExecutionSetup(userId);
@@ -462,6 +463,7 @@ export async function getTaskMaintenanceData(
     prisma.executionTask.findMany({
       where: {
         userId,
+        ...(filters?.taskId ? { id: filters.taskId } : {}),
         ...(filters?.whenBucket
           ? { whenBucket: filters.whenBucket as never }
           : {}),

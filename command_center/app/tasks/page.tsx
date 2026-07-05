@@ -72,6 +72,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const domainId = typeof params.domainId === "string" ? params.domainId : undefined;
   const projectId = typeof params.projectId === "string" ? params.projectId : undefined;
   const priority = typeof params.priority === "string" ? params.priority : undefined;
+  const taskId = typeof params.taskId === "string" ? params.taskId : undefined;
   const bulkUpdated = typeof params.bulkUpdated === "string" ? Number.parseInt(params.bulkUpdated, 10) : 0;
   const bulkAction = typeof params.bulkAction === "string" ? params.bulkAction : undefined;
   const bulkError = typeof params.bulkError === "string" ? params.bulkError : undefined;
@@ -82,6 +83,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   if (domainId) currentFilters.set("domainId", domainId);
   if (projectId) currentFilters.set("projectId", projectId);
   if (priority) currentFilters.set("priority", priority);
+  if (taskId) currentFilters.set("taskId", taskId);
   const returnTo = currentFilters.toString() ? `/tasks?${currentFilters.toString()}` : "/tasks";
 
   const { tasks, domains, projects } = await getTaskMaintenanceData(user.id, {
@@ -90,7 +92,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
     status,
     domainId,
     projectId,
-    priority
+    priority,
+    taskId
   });
 
   const projectOptions = domainId
@@ -273,9 +276,10 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
             const markDoneAction = markExecutionTaskStatusAction.bind(null, task.id, "DONE", undefined);
             const selectedRecurrenceWeekdays = parseRecurrenceWeekdays(task.recurrenceWeekdays);
             const recurrenceWeekdayLabel = formatRecurrenceWeekdays(task.recurrenceWeekdays);
+            const isLinkedTask = task.id === taskId;
 
             return (
-              <Card key={task.id}>
+              <Card className={isLinkedTask ? "border-primary/60 ring-2 ring-primary/20" : ""} id={`task-${task.id}`} key={task.id}>
                 <CardContent className="pt-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
@@ -370,7 +374,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                     </form>
                   </div>
 
-                  <details className="mt-4 rounded-lg border border-border/70 p-3">
+                  <details className="mt-4 rounded-lg border border-border/70 p-3" open={isLinkedTask || undefined}>
                     <summary className="cursor-pointer text-sm font-medium">Edit Task</summary>
                     <form action={updateExecutionTaskAction} className="mt-3 grid gap-3">
                       <input name="taskId" type="hidden" value={task.id} />

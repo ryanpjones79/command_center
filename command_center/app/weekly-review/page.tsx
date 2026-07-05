@@ -281,7 +281,7 @@ export default async function WeeklyReviewPage() {
                       <div className="mt-3 space-y-2">
                         {project.tasks.map((task) => {
                           const signals = taskSignals(task, today, staleTaskCutoff);
-                          const taskHref = `/tasks?q=${encodeURIComponent(task.title)}`;
+                          const taskHref = `/tasks?taskId=${encodeURIComponent(task.id)}`;
                           return (
                             <div className="rounded-lg border bg-background/70 p-3" key={task.id}>
                               <div className="flex flex-wrap items-start justify-between gap-2">
