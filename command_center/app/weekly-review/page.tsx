@@ -283,12 +283,16 @@ export default async function WeeklyReviewPage() {
                           const signals = taskSignals(task, today, staleTaskCutoff);
                           const taskHref = `/tasks?taskId=${encodeURIComponent(task.id)}`;
                           return (
-                            <div className="rounded-lg border bg-background/70 p-3" key={task.id}>
+                            <Link
+                              className="group block rounded-lg border bg-background/70 p-3 transition hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                              href={taskHref}
+                              key={task.id}
+                            >
                               <div className="flex flex-wrap items-start justify-between gap-2">
                                 <div className="min-w-0">
-                                  <Link className="text-sm font-medium underline-offset-4 hover:underline" href={taskHref}>
+                                  <span className="text-sm font-medium underline-offset-4 group-hover:underline">
                                     {task.title}
-                                  </Link>
+                                  </span>
                                   <p className="mt-1 text-xs text-muted-foreground">
                                     {formatExecutionLabel(task.status)} / {formatExecutionLabel(task.whenBucket)}
                                     {task.estimatedDuration ? ` / ${formatExecutionDurationBucket(task.estimatedDuration)}` : ""}
@@ -308,10 +312,10 @@ export default async function WeeklyReviewPage() {
                                 <span>Waiting: {task.waitingOn || "None"}</span>
                                 <span>Updated: {formatShortDate(task.updatedAt)}</span>
                               </div>
-                              <Link className="mt-2 inline-flex text-xs font-medium text-primary underline-offset-4 hover:underline" href={taskHref}>
+                              <span className="mt-2 inline-flex text-xs font-medium text-primary underline-offset-4">
                                 Open in Tasks
-                              </Link>
-                            </div>
+                              </span>
+                            </Link>
                           );
                         })}
                       </div>
