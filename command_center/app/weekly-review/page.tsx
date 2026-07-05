@@ -6,18 +6,72 @@ import {
   updateExecutionProjectAction
 } from "@/app/execution-actions";
 import { CreateProjectForm } from "@/components/execution/create-project-form";
+import { SubmitButton } from "@/components/execution/submit-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { executionSelectOptions, formatExecutionLabel } from "@/lib/execution-options";
+import {
+  executionSelectOptions,
+  formatExecutionDurationBucket,
+  formatExecutionLabel
+} from "@/lib/execution-options";
 import { requireUser } from "@/lib/session";
 import { getExecutionWorkspace, getWeeklyReviewData } from "@/server/execution-service";
 
+function startOfDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function daysAgo(value: Date, days: number) {
+  const copy = new Date(value);
+  copy.setDate(copy.getDate() - days);
+  return copy;
+}
+
+function formatShortDate(value: Date | null) {
+  if (!value) return "No date";
+  return value.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function taskSignals(
+  task: {
+    dueDate: Date | null;
+    followUpDate: Date | null;
+    isBlocked: boolean;
+    status: string;
+    updatedAt: Date;
+    waitingOn: string | null;
+  },
+  today: Date,
+  staleCutoff: Date
+) {
+  const signals: { label: string; tone: "warning" | "secondary" | "outline" }[] = [];
+  if (task.updatedAt < staleCutoff) signals.push({ label: "Stale", tone: "warning" });
+  if (task.isBlocked) signals.push({ label: "Blocked", tone: "warning" });
+  if (task.status === "WAITING" || task.waitingOn?.trim()) signals.push({ label: "Waiting", tone: "secondary" });
+  if (task.dueDate && task.dueDate < today) signals.push({ label: "Overdue", tone: "warning" });
+  if (task.followUpDate && task.followUpDate < today) signals.push({ label: "Follow up", tone: "warning" });
+  if (!task.dueDate && !task.followUpDate && !task.waitingOn?.trim()) signals.push({ label: "No date", tone: "outline" });
+  return signals;
+}
+
 export default async function WeeklyReviewPage() {
   const user = await requireUser();
+  const today = startOfDay(new Date());
+  const staleTaskCutoff = daysAgo(today, 7);
   const [{ projects, summary }, workspace] = await Promise.all([
     getWeeklyReviewData(user.id),
     getExecutionWorkspace(user.id)
   ]);
+  const staleTaskCount = projects.reduce(
+    (count, project) => count + project.tasks.filter((task) => task.updatedAt < staleTaskCutoff).length,
+    0
+  );
+  const blockedOrWaitingTaskCount = projects.reduce(
+    (count, project) =>
+      count +
+      project.tasks.filter((task) => task.isBlocked || task.status === "WAITING" || Boolean(task.waitingOn?.trim())).length,
+    0
+  );
 
   return (
     <main className="space-y-6">
@@ -70,11 +124,13 @@ export default async function WeeklyReviewPage() {
         </Card>
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Stale Projects</CardTitle>
+            <CardTitle className="text-base">Stale Work</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-semibold">{summary.staleProjects.length}</p>
-            <p className="mt-2 text-sm text-muted-foreground">Anything untouched for a week should be reviewed or parked.</p>
+            <p className="text-3xl font-semibold">
+              {summary.staleProjects.length} / {staleTaskCount}
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">Projects / tasks untouched for a week should be reviewed or parked.</p>
           </CardContent>
         </Card>
       </section>
@@ -90,7 +146,7 @@ export default async function WeeklyReviewPage() {
         </Card>
 
         <div className="space-y-4">
-          {(summary.missingNextAction.length > 0 || summary.staleProjects.length > 0) && (
+          {(summary.missingNextAction.length > 0 || summary.staleProjects.length > 0 || staleTaskCount > 0 || blockedOrWaitingTaskCount > 0) && (
             <Card className="border-amber-500/40">
               <CardHeader>
                 <CardTitle className="text-base">Review Prompts</CardTitle>
@@ -106,6 +162,18 @@ export default async function WeeklyReviewPage() {
                   <div>
                     <p className="font-medium text-foreground">Stale projects needing a review</p>
                     <p>{summary.staleProjects.map((project) => project.name).join(", ")}</p>
+                  </div>
+                )}
+                {staleTaskCount > 0 && (
+                  <div>
+                    <p className="font-medium text-foreground">Stale tasks visible in project cards</p>
+                    <p>{staleTaskCount} task{staleTaskCount === 1 ? "" : "s"} untouched for 7+ days. Decide: move, finish, park, or delete.</p>
+                  </div>
+                )}
+                {blockedOrWaitingTaskCount > 0 && (
+                  <div>
+                    <p className="font-medium text-foreground">Blocked / waiting tasks</p>
+                    <p>{blockedOrWaitingTaskCount} task{blockedOrWaitingTaskCount === 1 ? "" : "s"} depend on someone or something else.</p>
                   </div>
                 )}
               </CardContent>
@@ -177,41 +245,68 @@ export default async function WeeklyReviewPage() {
 
                   <div className="flex flex-wrap gap-2">
                     <form action={toggleTopThreeAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         {project.weeklyFocus === "TOP_3" ? "Remove from Top 3" : "Make Top 3"}
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={setActiveNowAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         Active Now
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={setActiveLaterAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         Active Later
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={setParkedAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         Park
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={markReviewedAction}>
-                      <button className="h-8 rounded-md border border-border px-3 text-xs font-medium" type="submit">
+                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
                         Mark Reviewed
-                      </button>
+                      </SubmitButton>
                     </form>
                   </div>
 
                   {project.tasks.length > 0 && (
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Open Tasks</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {project.tasks.map((task) => (
-                          <span key={task.id} className="rounded-full border px-3 py-1 text-xs">
-                            {task.title}
-                          </span>
-                        ))}
+                    <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Task Health</p>
+                        <p className="text-xs text-muted-foreground">{project.tasks.length} open shown, oldest first</p>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {project.tasks.map((task) => {
+                          const signals = taskSignals(task, today, staleTaskCutoff);
+                          return (
+                            <div className="rounded-lg border bg-background/70 p-3" key={task.id}>
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium">{task.title}</p>
+                                  <p className="mt-1 text-xs text-muted-foreground">
+                                    {formatExecutionLabel(task.status)} / {formatExecutionLabel(task.whenBucket)}
+                                    {task.estimatedDuration ? ` / ${formatExecutionDurationBucket(task.estimatedDuration)}` : ""}
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {signals.map((signal) => (
+                                    <Badge key={`${task.id}-${signal.label}`} variant={signal.tone}>
+                                      {signal.label}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-4">
+                                <span>Due: {formatShortDate(task.dueDate)}</span>
+                                <span>Follow up: {formatShortDate(task.followUpDate)}</span>
+                                <span>Waiting: {task.waitingOn || "None"}</span>
+                                <span>Updated: {formatShortDate(task.updatedAt)}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -266,16 +361,16 @@ export default async function WeeklyReviewPage() {
                         Blocked
                       </label>
                       <div className="flex gap-2">
-                        <button className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" type="submit">
+                        <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-70" pendingLabel="Saving..." type="submit">
                           Save
-                        </button>
+                        </SubmitButton>
                       </div>
                     </form>
                     <form action={deleteExecutionProjectAction} className="mt-3">
                       <input name="projectId" type="hidden" value={project.id} />
-                      <button className="h-9 rounded-md border border-destructive px-4 text-sm text-destructive" type="submit">
+                      <SubmitButton className="h-9 rounded-md border border-destructive px-4 text-sm text-destructive disabled:opacity-60" pendingLabel="Deleting..." type="submit">
                         Delete Project
-                      </button>
+                      </SubmitButton>
                     </form>
                   </details>
                 </CardContent>
