@@ -5,7 +5,6 @@ import {
   toggleExecutionProjectTopThreeAction,
   updateExecutionProjectAction
 } from "@/app/execution-actions";
-import Link from "next/link";
 import { CreateProjectForm } from "@/components/execution/create-project-form";
 import { SubmitButton } from "@/components/execution/submit-button";
 import { Badge } from "@/components/ui/badge";
@@ -283,8 +282,9 @@ export default async function WeeklyReviewPage() {
                           const signals = taskSignals(task, today, staleTaskCutoff);
                           const taskHref = `/tasks?taskId=${encodeURIComponent(task.id)}`;
                           return (
-                            <Link
-                              className="group block rounded-lg border bg-background/70 p-3 transition hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                            <a
+                              aria-label={`Open ${task.title} in Tasks`}
+                              className="group block cursor-pointer rounded-lg border bg-background/70 p-3 transition hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                               href={taskHref}
                               key={task.id}
                             >
@@ -315,7 +315,7 @@ export default async function WeeklyReviewPage() {
                               <span className="mt-2 inline-flex text-xs font-medium text-primary underline-offset-4">
                                 Open in Tasks
                               </span>
-                            </Link>
+                            </a>
                           );
                         })}
                       </div>
