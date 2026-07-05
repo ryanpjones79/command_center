@@ -404,6 +404,7 @@ export async function getWeeklyReviewData(userId: string) {
       domain: true,
       tasks: {
         where: { status: { notIn: ["DONE", "DROPPED"] } },
+        include: { domain: true, project: true },
         orderBy: [{ updatedAt: "asc" }],
         take: 12
       }

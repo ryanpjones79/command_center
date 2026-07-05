@@ -7,11 +7,11 @@ import {
 } from "@/app/execution-actions";
 import { CreateProjectForm } from "@/components/execution/create-project-form";
 import { SubmitButton } from "@/components/execution/submit-button";
+import { TaskLineItem } from "@/components/execution/task-line-item";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   executionSelectOptions,
-  formatExecutionDurationBucket,
   formatExecutionLabel
 } from "@/lib/execution-options";
 import { requireUser } from "@/lib/session";
@@ -25,11 +25,6 @@ function daysAgo(value: Date, days: number) {
   const copy = new Date(value);
   copy.setDate(copy.getDate() - days);
   return copy;
-}
-
-function formatShortDate(value: Date | null) {
-  if (!value) return "No date";
-  return value.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function taskSignals(
@@ -280,24 +275,10 @@ export default async function WeeklyReviewPage() {
                       <div className="mt-3 space-y-2">
                         {project.tasks.map((task) => {
                           const signals = taskSignals(task, today, staleTaskCutoff);
-                          const taskHref = `/tasks?taskId=${encodeURIComponent(task.id)}`;
                           return (
-                            <a
-                              aria-label={`Open ${task.title} in Tasks`}
-                              className="group block cursor-pointer rounded-lg border bg-background/70 p-3 transition hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                              href={taskHref}
-                              key={task.id}
-                            >
-                              <div className="flex flex-wrap items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <span className="text-sm font-medium underline-offset-4 group-hover:underline">
-                                    {task.title}
-                                  </span>
-                                  <p className="mt-1 text-xs text-muted-foreground">
-                                    {formatExecutionLabel(task.status)} / {formatExecutionLabel(task.whenBucket)}
-                                    {task.estimatedDuration ? ` / ${formatExecutionDurationBucket(task.estimatedDuration)}` : ""}
-                                  </p>
-                                </div>
+                            <div className="rounded-lg border bg-background/70 px-3 py-2" key={task.id}>
+                              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Review signals</p>
                                 <div className="flex flex-wrap gap-1.5">
                                   {signals.map((signal) => (
                                     <Badge key={`${task.id}-${signal.label}`} variant={signal.tone}>
@@ -306,16 +287,16 @@ export default async function WeeklyReviewPage() {
                                   ))}
                                 </div>
                               </div>
-                              <div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-4">
-                                <span>Due: {formatShortDate(task.dueDate)}</span>
-                                <span>Follow up: {formatShortDate(task.followUpDate)}</span>
-                                <span>Waiting: {task.waitingOn || "None"}</span>
-                                <span>Updated: {formatShortDate(task.updatedAt)}</span>
-                              </div>
-                              <span className="mt-2 inline-flex text-xs font-medium text-primary underline-offset-4">
-                                Open in Tasks
-                              </span>
-                            </a>
+                              <TaskLineItem
+                                domains={workspace.domains.map((domain) => ({ id: domain.id, name: domain.name }))}
+                                projects={workspace.projects.map((projectOption) => ({
+                                  id: projectOption.id,
+                                  name: projectOption.name,
+                                  domainId: projectOption.domainId
+                                }))}
+                                task={task}
+                              />
+                            </div>
                           );
                         })}
                       </div>
