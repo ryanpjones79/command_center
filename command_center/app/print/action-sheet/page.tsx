@@ -13,8 +13,7 @@ const compactLimits = {
   today: 6,
   thisWeek: 5,
   waiting: 5,
-  quickWins: 3,
-  parkingLot: 3
+  quickWins: 3
 } as const;
 
 function capSection<T>(items: T[], limit: number) {
@@ -34,8 +33,7 @@ export default async function PrintActionSheetPage({ searchParams }: PrintAction
     today: capSection(data.sections.today, compactLimits.today),
     thisWeek: capSection(data.sections.thisWeek, compactLimits.thisWeek),
     waiting: capSection(data.sections.waiting, compactLimits.waiting),
-    quickWins: capSection(data.sections.quickWins, compactLimits.quickWins),
-    parkingLot: capSection(data.sections.parkingLot, compactLimits.parkingLot)
+    quickWins: capSection(data.sections.quickWins, compactLimits.quickWins)
   };
 
   const blockedNames = data.blockedItems
@@ -153,13 +151,6 @@ export default async function PrintActionSheetPage({ searchParams }: PrintAction
                 tasks={compact.quickWins.visible}
                 title="Quick Wins"
               />
-              <PrintSheetSection
-                empty="Parking lot is empty."
-                mode="compact"
-                overflowCount={compact.parkingLot.overflowCount}
-                tasks={compact.parkingLot.visible}
-                title="Parking Lot"
-              />
 
               <section className="rounded-none border border-black/30 px-3 py-2">
                 <div className="mb-2 border-b border-black/20 pb-1.5">
@@ -223,7 +214,6 @@ export default async function PrintActionSheetPage({ searchParams }: PrintAction
 
             <div className="space-y-4">
               <PrintSheetSection empty="No quick wins queued." mode="extended" tasks={data.sections.quickWins} title="Quick Wins" />
-              <PrintSheetSection empty="Parking lot is empty." mode="extended" tasks={data.sections.parkingLot} title="Parking Lot" />
 
               <section className="rounded-none border border-black/30 px-3 py-2">
                 <div className="mb-2 border-b border-black/20 pb-1.5">

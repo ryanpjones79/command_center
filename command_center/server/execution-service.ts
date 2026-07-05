@@ -336,15 +336,16 @@ export async function getActionSheetData(userId: string) {
   ]);
 
   const tasks = addQuickWinCandidateFlag(sortTasks(rawTasks), today);
+  const executionTasks = tasks.filter((task) => !isParkingLotTask(task));
   const projects = sortProjects(rawProjects);
 
-  const todayTasks = tasks.filter(
+  const todayTasks = executionTasks.filter(
     (task) =>
       isTodayTask(task, today) &&
       !isWaitingTask(task) &&
       !belongsInQuickWinSection(task, today)
   );
-  const thisWeekTasks = tasks.filter(
+  const thisWeekTasks = executionTasks.filter(
     (task) =>
       task.whenBucket === "THIS_WEEK" &&
       !isTodayTask(task, today) &&
@@ -352,9 +353,9 @@ export async function getActionSheetData(userId: string) {
       !belongsInQuickWinSection(task, today)
   );
   const waitingTasks = sortWaitingTasks(
-    tasks.filter((task) => isWaitingTask(task))
+    executionTasks.filter((task) => isWaitingTask(task))
   );
-  const quickWinTasks = tasks.filter(
+  const quickWinTasks = executionTasks.filter(
     (task) => belongsInQuickWinSection(task, today) && !isWaitingTask(task)
   );
   const parkingLotTasks = tasks.filter(
@@ -372,9 +373,9 @@ export async function getActionSheetData(userId: string) {
   );
   const blockedItems = [
     ...projects.filter((project) => project.blocked),
-    ...tasks.filter((task) => task.isBlocked)
+    ...executionTasks.filter((task) => task.isBlocked)
   ];
-  const staleTasks = tasks.filter((task) => task.updatedAt < staleCutoff);
+  const staleTasks = executionTasks.filter((task) => task.updatedAt < staleCutoff);
 
   return {
     today,
@@ -570,7 +571,7 @@ export async function getTimeBlockPlannerData(
       isScheduledOnSelectedDay(task)
     ),
     unscheduledTasks: sortedTasks.filter(
-      (task) => !isScheduledOnSelectedDay(task)
+      (task) => !isScheduledOnSelectedDay(task) && !isParkingLotTask(task)
     )
   };
 }
