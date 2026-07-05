@@ -7,6 +7,7 @@ import {
   type ExecutionWhenBucket
 } from "@prisma/client";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
   detectPhi,
@@ -36,6 +37,26 @@ function revalidateProjectsOnly() {
   revalidatePath("/weekly-review");
   revalidatePath("/tasks");
   revalidatePath("/projects");
+}
+
+function safeTasksReturnTo(value: FormDataEntryValue | null) {
+  const raw = typeof value === "string" ? value : "";
+  return raw.startsWith("/tasks") ? raw : "/tasks";
+}
+
+function redirectWithBulkResult(returnTo: string, params: Record<string, string>) {
+  const [pathname, rawQuery = ""] = returnTo.split("?");
+  const query = new URLSearchParams(rawQuery);
+  query.delete("bulkUpdated");
+  query.delete("bulkAction");
+  query.delete("bulkError");
+
+  for (const [key, value] of Object.entries(params)) {
+    query.set(key, value);
+  }
+
+  const nextPath = query.toString() ? `${pathname}?${query.toString()}` : pathname;
+  redirect(nextPath);
 }
 
 function parseDate(value: string | null | undefined) {
@@ -573,9 +594,14 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
   const taskIds = formData.getAll("taskIds").map((value) => String(value));
   const bulkAction = String(formData.get("bulkAction") ?? "");
   const targetProjectId = String(formData.get("targetProjectId") ?? "");
+  const returnTo = safeTasksReturnTo(formData.get("returnTo"));
   const ownedTaskIds = await getOwnedTaskIds(user.id, taskIds);
 
-  if (ownedTaskIds.length === 0 || !bulkAction) return;
+  if (ownedTaskIds.length === 0 || !bulkAction) {
+    redirectWithBulkResult(returnTo, {
+      bulkError: "Select at least one task before applying bulk triage."
+    });
+  }
 
   if (bulkAction === "ASSIGN_PROJECT") {
     if (targetProjectId) {
@@ -588,7 +614,10 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
       data: { projectId: targetProjectId || null }
     });
     revalidateTasksOnly();
-    return;
+    redirectWithBulkResult(returnTo, {
+      bulkAction,
+      bulkUpdated: String(ownedTaskIds.length)
+    });
   }
 
   if (bulkAction === "PIN_TODAY" || bulkAction === "UNPIN_TODAY") {
@@ -597,7 +626,10 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
       data: { pinToTodayUntilDone: bulkAction === "PIN_TODAY" }
     });
     revalidateTasksOnly();
-    return;
+    redirectWithBulkResult(returnTo, {
+      bulkAction,
+      bulkUpdated: String(ownedTaskIds.length)
+    });
   }
 
   if (bulkAction === "FOLLOW_UP_2" || bulkAction === "FOLLOW_UP_7") {
@@ -621,7 +653,10 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
     );
 
     revalidateTasksOnly();
-    return;
+    redirectWithBulkResult(returnTo, {
+      bulkAction,
+      bulkUpdated: String(ownedTaskIds.length)
+    });
   }
 
   const updates: {
@@ -658,7 +693,10 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
 
     await Promise.all(tasks.filter((task) => task.status !== "DONE").map((task) => completeExecutionTask(task)));
     revalidateTasksOnly();
-    return;
+    redirectWithBulkResult(returnTo, {
+      bulkAction,
+      bulkUpdated: String(ownedTaskIds.length)
+    });
   }
 
   if (Object.keys(updates).length === 0) return;
@@ -669,6 +707,10 @@ export async function bulkUpdateExecutionTasksAction(formData: FormData) {
   });
 
   revalidateTasksOnly();
+  redirectWithBulkResult(returnTo, {
+    bulkAction,
+    bulkUpdated: String(ownedTaskIds.length)
+  });
 }
 
 export async function quickCaptureExecutionTaskAction(_prevState: unknown, formData: FormData) {

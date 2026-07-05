@@ -72,6 +72,17 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const domainId = typeof params.domainId === "string" ? params.domainId : undefined;
   const projectId = typeof params.projectId === "string" ? params.projectId : undefined;
   const priority = typeof params.priority === "string" ? params.priority : undefined;
+  const bulkUpdated = typeof params.bulkUpdated === "string" ? Number.parseInt(params.bulkUpdated, 10) : 0;
+  const bulkAction = typeof params.bulkAction === "string" ? params.bulkAction : undefined;
+  const bulkError = typeof params.bulkError === "string" ? params.bulkError : undefined;
+  const currentFilters = new URLSearchParams();
+  if (q) currentFilters.set("q", q);
+  if (whenBucket) currentFilters.set("whenBucket", whenBucket);
+  if (status) currentFilters.set("status", status);
+  if (domainId) currentFilters.set("domainId", domainId);
+  if (projectId) currentFilters.set("projectId", projectId);
+  if (priority) currentFilters.set("priority", priority);
+  const returnTo = currentFilters.toString() ? `/tasks?${currentFilters.toString()}` : "/tasks";
 
   const { tasks, domains, projects } = await getTaskMaintenanceData(user.id, {
     q,
@@ -110,6 +121,29 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
         </Card>
 
         <div className="space-y-4">
+          {(bulkError || bulkUpdated > 0) && (
+            <Card className={bulkError ? "border-destructive/50" : "border-emerald-400/40"}>
+              <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
+                <div>
+                  <p className="text-sm font-medium">
+                    {bulkError ||
+                      `${bulkActionOptions.find((option) => option.value === bulkAction)?.label ?? "Bulk update"} applied to ${bulkUpdated} task${bulkUpdated === 1 ? "" : "s"}.`}
+                  </p>
+                  {bulkAction === "MOVE_PARKING_LOT" && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Parking Lot is a planning bucket. The tasks stay here and can be viewed with the Parking Lot filter.
+                    </p>
+                  )}
+                </div>
+                {bulkAction === "MOVE_PARKING_LOT" && (
+                  <a className="rounded-md border border-border px-3 py-1.5 text-xs font-medium" href="/tasks?whenBucket=PARKING_LOT">
+                    View Parking Lot
+                  </a>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Filters</CardTitle>
@@ -199,8 +233,9 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                 className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_minmax(180px,220px)_minmax(180px,220px)_auto]"
                 id="bulk-task-update-form"
               >
+                <input name="returnTo" type="hidden" value={returnTo} />
                 <p className="text-sm leading-6 text-muted-foreground md:col-span-2 xl:col-span-1">
-                  Select tasks below, then move, pin, assign, or push follow-up dates in one pass.
+                  Select tasks below, then move, pin, assign, or push follow-up dates in one pass. Parking Lot is a bucket, not a separate screen.
                 </p>
                 <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="MOVE_THIS_WEEK" name="bulkAction">
                   {bulkActionOptions.map((option) => (
