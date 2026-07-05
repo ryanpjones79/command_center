@@ -115,9 +115,9 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
               <CardTitle className="text-base">Filters</CardTitle>
             </CardHeader>
             <CardContent>
-              <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,2fr)_repeat(5,minmax(132px,1fr))_auto]" method="get">
+              <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" method="get">
                 <input
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm md:col-span-2 xl:col-span-3 2xl:col-span-1"
                   defaultValue={q}
                   name="q"
                   placeholder="Search task, note, source, waiting on"
@@ -182,7 +182,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                     </option>
                   ))}
                 </select>
-                <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" pendingLabel="Applying..." type="submit">
+                <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground md:w-fit" pendingLabel="Applying..." type="submit">
                   Apply
                 </SubmitButton>
               </form>
@@ -196,10 +196,10 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
             <CardContent>
               <form
                 action={bulkUpdateExecutionTasksAction}
-                className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px_auto]"
+                className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_minmax(180px,220px)_minmax(180px,220px)_auto]"
                 id="bulk-task-update-form"
               >
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm leading-6 text-muted-foreground md:col-span-2 xl:col-span-1">
                   Select tasks below, then move, pin, assign, or push follow-up dates in one pass.
                 </p>
                 <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="MOVE_THIS_WEEK" name="bulkAction">
@@ -217,7 +217,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                     </option>
                   ))}
                 </select>
-                <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" pendingLabel="Applying..." type="submit">
+                <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground md:w-fit xl:w-auto" pendingLabel="Applying..." type="submit">
                   Apply to Selected
                 </SubmitButton>
               </form>
