@@ -8,13 +8,18 @@ type MorningCardProps = {
   decisionRules: string[];
   hasEightyPercentItem: boolean;
   needleMove: string;
+  presenceIntention: string;
   rykasBacklog: string;
   setBuildRecipient: (value: string) => void;
   setDecisionRule: (value: string) => void;
   setHasEightyPercentItem: (value: boolean) => void;
   setNeedleMove: (value: string) => void;
+  setPresenceIntention: (value: string) => void;
   setRykasBacklog: (value: string) => void;
+  setWayOfBeing: (value: string) => void;
   shouldWarnRykasBacklog: boolean;
+  wayOfBeing: string;
+  wayOfBeingOptions: string[];
 };
 
 export function MorningCard({
@@ -25,13 +30,18 @@ export function MorningCard({
   decisionRules,
   hasEightyPercentItem,
   needleMove,
+  presenceIntention,
   rykasBacklog,
   setBuildRecipient,
   setDecisionRule,
   setHasEightyPercentItem,
   setNeedleMove,
+  setPresenceIntention,
   setRykasBacklog,
-  shouldWarnRykasBacklog
+  setWayOfBeing,
+  shouldWarnRykasBacklog,
+  wayOfBeing,
+  wayOfBeingOptions
 }: MorningCardProps) {
   return (
     <section className="relative overflow-hidden rounded-[1.75rem] border bg-slate-950 p-4 text-white shadow-sm sm:p-5">
@@ -54,6 +64,46 @@ export function MorningCard({
             placeholder="Example: CCHCS draft sent to Maria for review."
             value={needleMove}
           />
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-sm text-slate-300">
+              Who needs my presence today?
+              <input
+                className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white placeholder:text-slate-500"
+                onChange={(event) => setPresenceIntention(event.target.value)}
+                placeholder="Person, team, or relationship"
+                value={presenceIntention}
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-300">
+              How do I want to be today?
+              <input
+                className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white placeholder:text-slate-500"
+                onChange={(event) => setWayOfBeing(event.target.value)}
+                placeholder="Type your own word"
+                value={wayOfBeing}
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {wayOfBeingOptions.map((option) => {
+              const isSelected = wayOfBeing === option;
+
+              return (
+                <button
+                  className={`rounded-full border px-3 py-1 text-xs transition ${
+                    isSelected
+                      ? "border-emerald-300/50 bg-emerald-300/15 text-emerald-100"
+                      : "border-white/10 bg-white/[0.07] text-slate-300 hover:bg-white/10"
+                  }`}
+                  key={option}
+                  onClick={() => setWayOfBeing(option)}
+                  type="button"
+                >
+                  {option}
+                </button>
+              );
+            })}
+          </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_260px]">
             <select
               className="h-10 rounded-xl border border-white/10 bg-slate-900 px-3 text-sm text-white"

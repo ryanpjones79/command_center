@@ -16,7 +16,9 @@ import {
   formatRecurrenceFrequency,
   formatRecurrenceWeekdays
 } from "@/lib/execution-options";
+import { HowRyanOSWorksCard } from "./how-ryanos-works-card";
 import { MorningCard } from "./morning-card";
+import { MorningLaunchCard } from "./morning-launch-card";
 import { RyanOsBlockPalette } from "./ryanos-block-palette";
 import { ShutdownPanel } from "./shutdown-panel";
 import { TimeBlockGrid } from "./time-block-grid";
@@ -119,6 +121,16 @@ const blockTypes = [
   "Admin",
   "Personal",
   "Parking"
+];
+
+const wayOfBeingOptions = [
+  "Present",
+  "Patient",
+  "Disciplined",
+  "Detached",
+  "Kind",
+  "Focused",
+  "Brave"
 ];
 
 const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
@@ -380,6 +392,10 @@ export function TimeBlockBoard({
   );
   const [buildRecipient, setBuildRecipient] = useState("");
   const [hasEightyPercentItem, setHasEightyPercentItem] = useState(false);
+  const [isMorningLaunchComplete, setIsMorningLaunchComplete] =
+    useState(false);
+  const [presenceIntention, setPresenceIntention] = useState("");
+  const [wayOfBeing, setWayOfBeing] = useState("");
   const [rykasBacklog, setRykasBacklog] = useState(
     String(rykasDay.backlogAfter)
   );
@@ -974,6 +990,21 @@ export function TimeBlockBoard({
     <div className="space-y-4">
       {taskDetailPanel}
 
+      <MorningLaunchCard
+        isComplete={isMorningLaunchComplete}
+        onComplete={() => setIsMorningLaunchComplete(true)}
+        onExpand={() => setIsMorningLaunchComplete(false)}
+      />
+
+      <HowRyanOSWorksCard />
+
+      <div
+        className={`space-y-4 transition duration-300 ease-out ${
+          isMorningLaunchComplete
+            ? "opacity-100"
+            : "pointer-events-none opacity-45 blur-[1px]"
+        }`}
+      >
       <MorningCard
         blockTypes={blockTypes}
         buildNeedsRecipient={buildNeedsRecipient}
@@ -982,13 +1013,18 @@ export function TimeBlockBoard({
         decisionRules={decisionRules}
         hasEightyPercentItem={hasEightyPercentItem}
         needleMove={needleMove}
+        presenceIntention={presenceIntention}
         rykasBacklog={rykasBacklog}
         setBuildRecipient={setBuildRecipient}
         setDecisionRule={setDecisionRule}
         setHasEightyPercentItem={setHasEightyPercentItem}
         setNeedleMove={setNeedleMove}
+        setPresenceIntention={setPresenceIntention}
         setRykasBacklog={setRykasBacklog}
+        setWayOfBeing={setWayOfBeing}
         shouldWarnRykasBacklog={shouldWarnRykasBacklog}
+        wayOfBeing={wayOfBeing}
+        wayOfBeingOptions={wayOfBeingOptions}
       />
 
       <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(2,6,23,0.32)] lg:hidden">
@@ -1309,6 +1345,7 @@ export function TimeBlockBoard({
         shutdownShipped={shutdownShipped}
         shutdownTomorrow={shutdownTomorrow}
       />
+      </div>
     </div>
   );
 }
