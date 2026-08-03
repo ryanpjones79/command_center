@@ -9,10 +9,10 @@ function readComponent(fileName: string) {
 }
 
 describe("Phase 2A morning launch UI", () => {
-  it("renders the paper-first Morning Launch copy without persistence", () => {
+  it("renders the paper-first Morning Compass copy without persistence", () => {
     const source = readComponent("morning-launch-card.tsx");
 
-    expect(source).toContain("Morning Launch");
+    expect(source).toContain("Morning Compass");
     expect(source).toContain("The notebook is your first workspace.");
     expect(source).toContain("Bhagavad Gita");
     expect(source).toContain("Chapter 2");
@@ -37,13 +37,13 @@ describe("Phase 2A morning launch UI", () => {
     const boardSource = readComponent("time-block-board.tsx");
     const morningSource = readComponent("morning-card.tsx");
 
-    expect(boardSource).toContain("useState(\"\")");
+    expect(boardSource).toContain('useState("")');
     expect(boardSource).toContain("presenceIntention");
     expect(boardSource).toContain("wayOfBeing");
     expect(boardSource).toContain("isMorningLaunchComplete");
     expect(boardSource).not.toContain("relationshipIntention");
     expect(boardSource).not.toContain("wayOfBeing:");
     expect(morningSource).toContain("Who needs my presence today?");
-    expect(morningSource).toContain("How do I want to be today?");
+    expect(morningSource).toContain("Way of being");
   });
 });

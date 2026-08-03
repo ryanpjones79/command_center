@@ -126,10 +126,11 @@ const blockTypes = [
 const wayOfBeingOptions = [
   "Present",
   "Patient",
+  "Focused",
   "Disciplined",
   "Detached",
+  "Curious",
   "Kind",
-  "Focused",
   "Brave"
 ];
 
@@ -137,7 +138,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
   {
     blockType: "CCHCS",
     helper: [
-      "Protect state/leadership-visible work.",
+      "Protect state and leadership-visible work.",
       "Use a real work block, not residue."
     ],
     id: "cchcs",
@@ -147,6 +148,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
   {
     blockType: "Pipeline",
     helper: [
+      "Build tomorrow's opportunities.",
       "LinkedIn comments",
       "Warm DMs",
       "Follow-ups",
@@ -160,6 +162,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
   {
     blockType: "Rykas",
     helper: [
+      "Keep Rykas moving without sourcing sprawl.",
       "Ship sold items",
       "Offers/relist",
       "List from backlog",
@@ -392,8 +395,7 @@ export function TimeBlockBoard({
   );
   const [buildRecipient, setBuildRecipient] = useState("");
   const [hasEightyPercentItem, setHasEightyPercentItem] = useState(false);
-  const [isMorningLaunchComplete, setIsMorningLaunchComplete] =
-    useState(false);
+  const [isMorningLaunchComplete, setIsMorningLaunchComplete] = useState(false);
   const [presenceIntention, setPresenceIntention] = useState("");
   const [wayOfBeing, setWayOfBeing] = useState("");
   const [rykasBacklog, setRykasBacklog] = useState(
@@ -666,7 +668,7 @@ export function TimeBlockBoard({
       );
       setPendingTaskId(null);
       if (result.ok) {
-        setMessage(`${template.title} block saved.`);
+        setMessage(`${template.blockType} block saved.`);
         router.refresh();
       } else {
         setMessage(result.error);
@@ -886,9 +888,9 @@ export function TimeBlockBoard({
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-200/80">
-            Task Queue
+            Available Work
           </p>
-          <h3 className="mt-1 text-lg font-semibold">Tap to place</h3>
+          <h3 className="mt-1 text-lg font-semibold">Choose only what fits</h3>
         </div>
         <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs text-slate-200">
           {localUnscheduledTasks.length} open
@@ -896,11 +898,10 @@ export function TimeBlockBoard({
       </div>
       <div className="mt-3 max-h-[58vh] space-y-2 overflow-y-auto pr-1">
         {localUnscheduledTasks.length === 0 && (
-          <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-3 text-sm text-slate-300">
-            <p>No unscheduled active tasks for this day.</p>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4 text-sm text-slate-300">
+            <p>No available work is waiting.</p>
             <p className="mt-1 text-xs text-slate-400">
-              If everything is already placed, it will show in the timeline
-              below.
+              Stay with the commitments already placed.
             </p>
           </div>
         )}
@@ -908,9 +909,16 @@ export function TimeBlockBoard({
           const openSlots = findOpenSlots(task, 3);
           return (
             <div
-              className={`rounded-2xl border p-3 ${priorityTone(task.priority)}`}
+              aria-label={`Open task details for ${task.title}`}
+              className={`rounded-[1.35rem] border p-3.5 outline-none transition focus:ring-2 focus:ring-emerald-300/30 ${priorityTone(task.priority)}`}
               key={task.id}
               onClick={() => setSelectedTaskId(task.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedTaskId(task.id);
+                }
+              }}
               role="button"
               tabIndex={0}
             >
@@ -919,12 +927,12 @@ export function TimeBlockBoard({
                   <p className="line-clamp-2 text-sm font-semibold text-white">
                     {task.title}
                   </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-300">
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-300">
                     <span>{task.domain.name}</span>
                     {task.project && <span>{task.project.name}</span>}
                     <span>{formatExecutionLabel(task.priority)}</span>
                     {task.estimatedDuration && (
-                      <span>
+                      <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-slate-100">
                         {formatExecutionDurationBucket(task.estimatedDuration)}
                       </span>
                     )}
@@ -934,7 +942,7 @@ export function TimeBlockBoard({
               <div className="mt-3 flex flex-wrap gap-2">
                 {openSlots.length === 0 && (
                   <span className="text-xs text-slate-300">
-                    No clean slot found today.
+                    No clean opening found today.
                   </span>
                 )}
                 {openSlots.map((slot, index) => (
@@ -996,355 +1004,372 @@ export function TimeBlockBoard({
         onExpand={() => setIsMorningLaunchComplete(false)}
       />
 
-      <HowRyanOSWorksCard />
-
       <div
         className={`space-y-4 transition duration-300 ease-out ${
           isMorningLaunchComplete
             ? "opacity-100"
-            : "pointer-events-none opacity-45 blur-[1px]"
+            : "pointer-events-none opacity-55"
         }`}
       >
-      <MorningCard
-        blockTypes={blockTypes}
-        buildNeedsRecipient={buildNeedsRecipient}
-        buildRecipient={buildRecipient}
-        decisionRule={decisionRule}
-        decisionRules={decisionRules}
-        hasEightyPercentItem={hasEightyPercentItem}
-        needleMove={needleMove}
-        presenceIntention={presenceIntention}
-        rykasBacklog={rykasBacklog}
-        setBuildRecipient={setBuildRecipient}
-        setDecisionRule={setDecisionRule}
-        setHasEightyPercentItem={setHasEightyPercentItem}
-        setNeedleMove={setNeedleMove}
-        setPresenceIntention={setPresenceIntention}
-        setRykasBacklog={setRykasBacklog}
-        setWayOfBeing={setWayOfBeing}
-        shouldWarnRykasBacklog={shouldWarnRykasBacklog}
-        wayOfBeing={wayOfBeing}
-        wayOfBeingOptions={wayOfBeingOptions}
-      />
+        <MorningCard
+          blockTypes={blockTypes}
+          buildNeedsRecipient={buildNeedsRecipient}
+          buildRecipient={buildRecipient}
+          decisionRule={decisionRule}
+          decisionRules={decisionRules}
+          hasEightyPercentItem={hasEightyPercentItem}
+          needleMove={needleMove}
+          presenceIntention={presenceIntention}
+          rykasBacklog={rykasBacklog}
+          setBuildRecipient={setBuildRecipient}
+          setDecisionRule={setDecisionRule}
+          setHasEightyPercentItem={setHasEightyPercentItem}
+          setNeedleMove={setNeedleMove}
+          setPresenceIntention={setPresenceIntention}
+          setRykasBacklog={setRykasBacklog}
+          setWayOfBeing={setWayOfBeing}
+          shouldWarnRykasBacklog={shouldWarnRykasBacklog}
+          wayOfBeing={wayOfBeing}
+          wayOfBeingOptions={wayOfBeingOptions}
+        />
 
-      <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(2,6,23,0.32)] lg:hidden">
-        <div className="relative p-4">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(16,185,129,0.28),transparent_32%),radial-gradient(circle_at_90%_0%,rgba(245,158,11,0.20),transparent_28%)]" />
-          <div className="relative">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-200/80">
-              Mobile Mission Control
-            </p>
-            <div className="mt-2 flex items-end justify-between gap-3">
-              <div>
-                <h3 className="text-2xl font-semibold leading-tight">
-                  {date.toLocaleDateString("en-US", {
-                    timeZone,
-                    weekday: "long",
-                    month: "short",
-                    day: "numeric"
-                  })}
-                </h3>
-                <p className="mt-1 text-sm text-slate-300">
-                  Tap a task into the next clean opening. No drag-and-drop
-                  gymnastics.
-                </p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-right backdrop-blur">
-                <p className="text-2xl font-semibold">
-                  {localScheduledTasks.length}
-                </p>
-                <p className="text-[10px] uppercase tracking-[0.18em] text-slate-300">
-                  Placed
-                </p>
-              </div>
-            </div>
+        <HowRyanOSWorksCard />
 
-            <div className="mt-4 grid grid-cols-3 gap-2">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.08] p-3">
-                <p className="text-xl font-semibold">{timedEvents.length}</p>
-                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300">
-                  Calendar
-                </p>
+        <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(2,6,23,0.32)] lg:hidden">
+          <div className="relative p-4">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(16,185,129,0.28),transparent_32%),radial-gradient(circle_at_90%_0%,rgba(245,158,11,0.20),transparent_28%)]" />
+            <div className="relative">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-200/80">
+                Today Map
+              </p>
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <div>
+                  <h3 className="text-2xl font-semibold leading-tight">
+                    {date.toLocaleDateString("en-US", {
+                      timeZone,
+                      weekday: "long",
+                      month: "short",
+                      day: "numeric"
+                    })}
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Tap a task into the next clean opening. No drag-and-drop
+                    gymnastics.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-right backdrop-blur">
+                  <p className="text-2xl font-semibold">
+                    {localScheduledTasks.length}
+                  </p>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-slate-300">
+                    Placed
+                  </p>
+                </div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.08] p-3">
-                <p className="text-xl font-semibold">
-                  {localUnscheduledTasks.length}
-                </p>
-                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300">
-                  Queue
-                </p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.08] p-3">
-                <p className="text-xl font-semibold">{contextEvents.length}</p>
-                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300">
-                  FYI
-                </p>
+
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.08] p-3">
+                  <p className="text-xl font-semibold">{timedEvents.length}</p>
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300">
+                    Calendar
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.08] p-3">
+                  <p className="text-xl font-semibold">
+                    {localUnscheduledTasks.length}
+                  </p>
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300">
+                    Open
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.08] p-3">
+                  <p className="text-xl font-semibold">
+                    {contextEvents.length}
+                  </p>
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300">
+                    FYI
+                  </p>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {message && (
-          <div className="mx-4 mb-4 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
-            {message}
-          </div>
-        )}
-      </section>
+          {message && (
+            <div className="mx-4 mb-4 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
+              {message}
+            </div>
+          )}
+        </section>
 
-      <div className="grid gap-4 lg:hidden">
-        {ryanOsBlocksPanel}
-        {mobileTaskQueue}
+        <div className="grid gap-4 lg:hidden">
+          {ryanOsBlocksPanel}
 
-        {contextEvents.length > 0 && (
+          {contextEvents.length > 0 && (
+            <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    All-day / FYI
+                  </p>
+                  <h3 className="mt-1 text-base font-semibold">
+                    Visible, but not blocking time
+                  </h3>
+                </div>
+                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                  {contextEvents.length}
+                </span>
+              </div>
+              <div className="mt-3 flex snap-x gap-2 overflow-x-auto pb-1">
+                {contextEvents.map((event) => (
+                  <div
+                    className="min-w-[180px] snap-start rounded-2xl border bg-background/80 p-3"
+                    key={event.id}
+                  >
+                    <p className="line-clamp-2 text-sm font-medium">
+                      {event.summary}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {event.isAllDay
+                        ? "All-day item"
+                        : formatClock(event.start, timeZone)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  All-day / FYI
+                  Today Timeline
                 </p>
-                <h3 className="mt-1 text-base font-semibold">
-                  Visible, but not blocking time
+                <h3 className="mt-1 text-lg font-semibold">
+                  Agenda + placed tasks
                 </h3>
               </div>
-              <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-                {contextEvents.length}
+              <span className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
+                {agendaItems.length} items
               </span>
             </div>
-            <div className="mt-3 flex snap-x gap-2 overflow-x-auto pb-1">
-              {contextEvents.map((event) => (
-                <div
-                  className="min-w-[180px] snap-start rounded-2xl border bg-background/80 p-3"
-                  key={event.id}
-                >
-                  <p className="line-clamp-2 text-sm font-medium">
-                    {event.summary}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {event.isAllDay
-                      ? "All-day item"
-                      : formatClock(event.start, timeZone)}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
 
-        <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Today Timeline
-              </p>
-              <h3 className="mt-1 text-lg font-semibold">
-                Agenda + placed tasks
-              </h3>
-            </div>
-            <span className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
-              {agendaItems.length} items
-            </span>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {agendaItems.length === 0 && (
-              <div className="rounded-2xl border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
-                No timed calendar items or scheduled tasks yet. Start from the
-                queue below.
-              </div>
-            )}
-            {agendaItems.map((item) => (
-              <div
-                className="grid grid-cols-[64px_minmax(0,1fr)] gap-3"
-                key={`${item.kind}-${item.id}`}
-              >
-                <div className="pt-3 text-right">
-                  <p className="text-sm font-semibold">
-                    {formatClock(item.start, timeZone)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {formatClock(item.end, timeZone)}
-                  </p>
+            <div className="mt-4 space-y-3">
+              {agendaItems.length === 0 && (
+                <div className="rounded-2xl border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+                  No timed calendar items or placed work yet. Start with one
+                  commitment or choose a task below.
                 </div>
+              )}
+              {agendaItems.map((item) => (
                 <div
-                  className={
-                    item.kind === "calendar"
-                      ? "rounded-2xl border border-amber-300/45 bg-amber-300/15 p-3"
-                      : "rounded-2xl border border-emerald-300/45 bg-emerald-400/10 p-3"
-                  }
+                  className="grid grid-cols-[64px_minmax(0,1fr)] gap-3"
+                  key={`${item.kind}-${item.id}`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="line-clamp-2 text-sm font-semibold">
-                        {item.title}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {item.kind === "calendar"
-                          ? item.location || "Google Calendar"
-                          : "Action OS task"}
-                      </p>
-                    </div>
-                    {item.kind === "task" && (
-                      <button
-                        className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground"
-                        disabled={isPending || pendingTaskId === item.task.id}
-                        onClick={() => clearTask(item.task.id)}
-                        type="button"
-                      >
-                        Clear
-                      </button>
-                    )}
+                  <div className="pt-3 text-right">
+                    <p className="text-sm font-semibold">
+                      {formatClock(item.start, timeZone)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {formatClock(item.end, timeZone)}
+                    </p>
                   </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-
-      <div className="hidden items-start gap-4 lg:grid xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="flex min-h-0 flex-col rounded-2xl border bg-card p-3 shadow-sm sm:p-4 xl:max-h-[calc(100vh-9rem)]">
-          <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                Google Calendar + Task Blocks
-              </p>
-              <h3 className="text-xl font-semibold">
-                {date.toLocaleDateString("en-US", {
-                  timeZone,
-                  weekday: "long",
-                  month: "long",
-                  day: "numeric"
-                })}
-              </h3>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Drag a task onto a 30-minute slot. Google events are read-only.
-            </p>
-          </div>
-
-          {message && (
-            <p className="mb-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-              {message}
-            </p>
-          )}
-
-          {contextEvents.length > 0 && (
-            <div className="mb-3 rounded-xl border border-border bg-muted/30 p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                All-day / FYI
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {contextEvents.map((event) => (
-                  <span
-                    className="rounded-full border border-border bg-background/70 px-2.5 py-1 text-xs text-muted-foreground"
-                    key={event.id}
-                    title={
-                      event.isAllDay
-                        ? "All-day Google Calendar item"
-                        : "Google Calendar item with no timed duration"
+                  <div
+                    className={
+                      item.kind === "calendar"
+                        ? "rounded-2xl border border-amber-300/45 bg-amber-300/15 p-3"
+                        : "rounded-2xl border border-emerald-300/45 bg-emerald-400/10 p-3"
                     }
                   >
-                    {event.summary}
-                    {!event.isAllDay
-                      ? ` (${formatClock(event.start, timeZone)})`
-                      : ""}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <TimeBlockGrid
-            clearTask={clearTask}
-            date={date}
-            dayHeight={dayHeight}
-            draggedTaskId={draggedTaskId}
-            durationMinutes={durationMinutes}
-            endHour={endHour}
-            formatClock={formatClock}
-            isPending={isPending}
-            localScheduledTasks={localScheduledTasks}
-            minutesFromStart={minutesFromStart}
-            pendingTaskId={pendingTaskId}
-            pixelsPerMinute={pixelsPerMinute}
-            scheduleDroppedItem={scheduleDroppedItem}
-            setDraggedTaskId={setDraggedTaskId}
-            setSelectedTaskId={setSelectedTaskId}
-            slotMinutes={slotMinutes}
-            slotStart={slotStart}
-            slots={slots}
-            startHour={startHour}
-            timedEvents={timedEvents}
-            timeZone={timeZone}
-          />
-        </section>
-
-        <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
-          {ryanOsBlocksPanel}
-          <section
-            className="rounded-2xl border bg-card p-4 shadow-sm"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              const taskId =
-                event.dataTransfer.getData("text/plain") || draggedTaskId;
-              if (taskId && !taskId.startsWith("template:")) {
-                clearTask(taskId);
-              }
-            }}
-          >
-            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-              Task Queue
-            </p>
-            <h3 className="mt-1 text-lg font-semibold">Drag to Timeblock</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Drop a scheduled task here to move it back to the queue.
-            </p>
-            <div className="mt-3 space-y-2">
-              {localUnscheduledTasks.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  No unscheduled active tasks.
-                </p>
-              )}
-              {localUnscheduledTasks.map((task) => (
-                <div
-                  className="cursor-grab rounded-xl border bg-background/70 p-3 shadow-sm active:cursor-grabbing"
-                  draggable
-                  key={task.id}
-                  onClick={() => setSelectedTaskId(task.id)}
-                  onDragStart={(event) => {
-                    setDraggedTaskId(task.id);
-                    event.dataTransfer.setData("text/plain", task.id);
-                  }}
-                >
-                  <p className="text-sm font-semibold leading-snug">
-                    {task.title}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                    <span>{task.domain.name}</span>
-                    {task.project && <span>{task.project.name}</span>}
-                    <span>{formatExecutionLabel(task.priority)}</span>
-                    {task.estimatedDuration && (
-                      <span>
-                        {formatExecutionDurationBucket(task.estimatedDuration)}
-                      </span>
-                    )}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="line-clamp-2 text-sm font-semibold">
+                          {item.title}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {item.kind === "calendar"
+                            ? item.location || "Google Calendar"
+                            : "Action OS task"}
+                        </p>
+                      </div>
+                      {item.kind === "task" && (
+                        <button
+                          className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground"
+                          disabled={isPending || pendingTaskId === item.task.id}
+                          onClick={() => clearTask(item.task.id)}
+                          type="button"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           </section>
-        </aside>
-      </div>
 
-      <ShutdownPanel
-        setShutdownOpen={setShutdownOpen}
-        setShutdownShipped={setShutdownShipped}
-        setShutdownTomorrow={setShutdownTomorrow}
-        shutdownOpen={shutdownOpen}
-        shutdownShipped={shutdownShipped}
-        shutdownTomorrow={shutdownTomorrow}
-      />
+          {mobileTaskQueue}
+        </div>
+
+        <div className="hidden items-start gap-4 lg:grid xl:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="flex min-h-0 flex-col rounded-2xl border bg-card p-3 shadow-sm sm:p-4 xl:max-h-[calc(100vh-9rem)]">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                  Calendar + placed work
+                </p>
+                <h3 className="text-xl font-semibold">
+                  {date.toLocaleDateString("en-US", {
+                    timeZone,
+                    weekday: "long",
+                    month: "long",
+                    day: "numeric"
+                  })}
+                </h3>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Drag work onto a 30-minute slot. Google events stay read-only.
+              </p>
+            </div>
+
+            {message && (
+              <p className="mb-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                {message}
+              </p>
+            )}
+
+            {contextEvents.length > 0 && (
+              <div className="mb-3 rounded-xl border border-border bg-muted/30 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  All-day / FYI
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {contextEvents.map((event) => (
+                    <span
+                      className="rounded-full border border-border bg-background/70 px-2.5 py-1 text-xs text-muted-foreground"
+                      key={event.id}
+                      title={
+                        event.isAllDay
+                          ? "All-day Google Calendar item"
+                          : "Google Calendar item with no timed duration"
+                      }
+                    >
+                      {event.summary}
+                      {!event.isAllDay
+                        ? ` (${formatClock(event.start, timeZone)})`
+                        : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <TimeBlockGrid
+              clearTask={clearTask}
+              date={date}
+              dayHeight={dayHeight}
+              draggedTaskId={draggedTaskId}
+              durationMinutes={durationMinutes}
+              endHour={endHour}
+              formatClock={formatClock}
+              isPending={isPending}
+              localScheduledTasks={localScheduledTasks}
+              minutesFromStart={minutesFromStart}
+              pendingTaskId={pendingTaskId}
+              pixelsPerMinute={pixelsPerMinute}
+              scheduleDroppedItem={scheduleDroppedItem}
+              setDraggedTaskId={setDraggedTaskId}
+              setSelectedTaskId={setSelectedTaskId}
+              slotMinutes={slotMinutes}
+              slotStart={slotStart}
+              slots={slots}
+              startHour={startHour}
+              timedEvents={timedEvents}
+              timeZone={timeZone}
+            />
+          </section>
+
+          <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
+            {ryanOsBlocksPanel}
+            <section
+              className="rounded-2xl border bg-card p-4 shadow-sm"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                const taskId =
+                  event.dataTransfer.getData("text/plain") || draggedTaskId;
+                if (taskId && !taskId.startsWith("template:")) {
+                  clearTask(taskId);
+                }
+              }}
+            >
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                Available Work
+              </p>
+              <h3 className="mt-1 text-lg font-semibold">
+                Drag only what fits
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Drop a scheduled task here to move it back to the queue.
+              </p>
+              <div className="mt-4 space-y-2.5">
+                {localUnscheduledTasks.length === 0 && (
+                  <div className="rounded-2xl border border-dashed bg-muted/25 p-4 text-sm leading-6 text-muted-foreground">
+                    No available work is waiting. Stay with the commitments
+                    already placed.
+                  </div>
+                )}
+                {localUnscheduledTasks.map((task) => (
+                  <div
+                    aria-label={`Open task details for ${task.title}`}
+                    className="cursor-grab rounded-[1.25rem] border bg-background/65 p-3.5 shadow-sm outline-none transition hover:border-primary/40 hover:bg-background focus:ring-2 focus:ring-primary/25 active:cursor-grabbing"
+                    draggable
+                    key={task.id}
+                    onClick={() => setSelectedTaskId(task.id)}
+                    onDragStart={(event) => {
+                      setDraggedTaskId(task.id);
+                      event.dataTransfer.setData("text/plain", task.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedTaskId(task.id);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <p className="text-sm font-semibold leading-snug">
+                      {task.title}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span>{task.domain.name}</span>
+                      {task.project && <span>{task.project.name}</span>}
+                      <span>{formatExecutionLabel(task.priority)}</span>
+                      {task.estimatedDuration && (
+                        <span className="rounded-full border bg-muted/40 px-2 py-0.5 text-foreground">
+                          {formatExecutionDurationBucket(
+                            task.estimatedDuration
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <ShutdownPanel
+          setShutdownOpen={setShutdownOpen}
+          setShutdownShipped={setShutdownShipped}
+          setShutdownTomorrow={setShutdownTomorrow}
+          shutdownOpen={shutdownOpen}
+          shutdownShipped={shutdownShipped}
+          shutdownTomorrow={shutdownTomorrow}
+        />
       </div>
     </div>
   );

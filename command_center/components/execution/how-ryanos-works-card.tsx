@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 const storageKey = "ryanos-how-it-works-collapsed";
 
 export function HowRyanOSWorksCard() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true);
 
   useEffect(() => {
-    setIsCollapsed(window.localStorage.getItem(storageKey) === "true");
+    const storedValue = window.localStorage.getItem(storageKey);
+    setIsCollapsed(storedValue === null ? true : storedValue === "true");
   }, []);
 
   const toggleCollapsed = () => {
@@ -20,7 +21,7 @@ export function HowRyanOSWorksCard() {
   };
 
   return (
-    <section className="rounded-2xl border bg-card/80 p-4 shadow-sm">
+    <section className="rounded-[1.5rem] border bg-card/80 p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
@@ -33,7 +34,8 @@ export function HowRyanOSWorksCard() {
           )}
         </div>
         <button
-          className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-secondary"
+          aria-expanded={!isCollapsed}
+          className="min-h-10 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary/25"
           onClick={toggleCollapsed}
           type="button"
         >
@@ -42,13 +44,17 @@ export function HowRyanOSWorksCard() {
       </div>
       <div
         className={`grid transition-all duration-300 ease-out ${
-          isCollapsed ? "grid-rows-[0fr] opacity-0" : "mt-4 grid-rows-[1fr] opacity-100"
+          isCollapsed
+            ? "grid-rows-[0fr] opacity-0"
+            : "mt-4 grid-rows-[1fr] opacity-100"
         }`}
       >
         <div className="overflow-hidden">
           <div className="grid gap-3 text-sm leading-6 text-muted-foreground sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <div className="rounded-xl border bg-background/60 p-3">
-              <p className="font-medium text-foreground">Paper is where you think.</p>
+              <p className="font-medium text-foreground">
+                Paper is where you think.
+              </p>
               <p className="mt-1">RyanOS is where you commit.</p>
             </div>
             <div className="rounded-xl border bg-background/60 p-3">

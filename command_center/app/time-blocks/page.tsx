@@ -38,7 +38,7 @@ export default async function TimeBlocksPage({
 
   return (
     <main className="space-y-5 sm:space-y-6">
-      <section className="relative overflow-hidden rounded-[1.75rem] border bg-card/90 p-4 shadow-sm sm:p-6">
+      <section className="relative hidden overflow-hidden rounded-[1.75rem] border bg-card/90 p-4 shadow-sm sm:block sm:p-6">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(16,185,129,0.16),transparent_30%),radial-gradient(circle_at_90%_10%,rgba(245,158,11,0.13),transparent_26%)]" />
         <div className="relative flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
