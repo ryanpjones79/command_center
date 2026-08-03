@@ -222,7 +222,7 @@ export default async function DailyBriefPage({
           </div>
           <div className="grid gap-2 sm:flex sm:flex-wrap">
             <Button asChild className="w-full sm:w-auto" variant="outline">
-              <Link href="/">Open Action Sheet</Link>
+              <Link href="/dashboard">Open Action Sheet</Link>
             </Button>
             <PrintBrowserButton />
             <form action={sendDailyBriefEmailAction}>

@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 const links = [
   { href: "/time-blocks", label: "RyanOS" },
   { href: "/daily-brief", label: "Daily Brief" },
-  { href: "/", label: "Action Sheet" },
   { href: "/weekly-review", label: "Weekly Review" },
   { href: "/tasks", label: "Tasks" },
   { href: "/projects", label: "Projects" },
@@ -15,8 +14,8 @@ const links = [
 const mobileLinks = [
   { href: "/time-blocks", label: "Today", mark: "RY" },
   { href: "/daily-brief", label: "Brief", mark: "DB" },
-  { href: "/", label: "Sheet", mark: "AS" },
-  { href: "/tasks", label: "Tasks", mark: "TK" }
+  { href: "/tasks", label: "Tasks", mark: "TK" },
+  { href: "/weekly-review", label: "Review", mark: "WR" }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
