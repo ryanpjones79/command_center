@@ -1,26 +1,22 @@
+"use client";
+
 import Link from "next/link";
+import { Settings } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { logoutAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
-
-const links = [
-  { href: "/time-blocks", label: "RyanOS" },
-  { href: "/daily-brief", label: "Daily Brief" },
-  { href: "/weekly-review", label: "Weekly Review" },
-  { href: "/tasks", label: "Tasks" },
-  { href: "/projects", label: "Projects" },
-  { href: "/settings", label: "Settings" }
-];
-
-const mobileLinks = [
-  { href: "/time-blocks", label: "Today", mark: "RY" },
-  { href: "/daily-brief", label: "Brief", mark: "DB" },
-  { href: "/tasks", label: "Tasks", mark: "TK" },
-  { href: "/weekly-review", label: "Review", mark: "WR" }
-];
+import { cn } from "@/lib/utils";
+import {
+  getActiveRyanOsNavKey,
+  primaryRyanOsNavItems
+} from "@/lib/route-decisions";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const activeKey = getActiveRyanOsNavKey(pathname);
+
   return (
-    <div className="app-shell-container mx-auto min-h-screen max-w-7xl px-3 pb-24 pt-3 sm:px-6 sm:py-6 lg:px-8">
+    <div className="app-shell-container mx-auto min-h-screen max-w-7xl px-3 pb-28 pt-3 sm:px-6 sm:py-6 lg:px-8">
       <header className="app-shell-header sticky top-0 z-40 mb-4 overflow-hidden rounded-2xl border bg-card/90 p-3 shadow-sm backdrop-blur sm:static sm:mb-6 sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:p-4">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
         <div className="min-w-0">
@@ -33,42 +29,83 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             happens
           </p>
         </div>
-        <nav className="app-shell-nav -mx-1 mt-3 flex w-[calc(100%+0.5rem)] items-center gap-1 overflow-x-auto px-1 pb-1 sm:mx-0 sm:mt-0 sm:w-auto sm:flex-wrap sm:justify-end sm:gap-2 sm:overflow-visible sm:pb-0">
-          {links.map((link) => (
-            <Button
-              className="h-9 shrink-0 px-3 text-xs sm:text-sm"
-              variant="ghost"
-              asChild
-              key={link.href}
-            >
-              <Link href={link.href}>{link.label}</Link>
-            </Button>
-          ))}
-          <form action={logoutAction} className="shrink-0">
-            <Button
-              className="h-9 px-3 text-xs sm:text-sm"
-              variant="outline"
-              type="submit"
-            >
+        <div className="mt-3 flex items-center justify-end gap-2 sm:mt-0">
+          <nav
+            aria-label="Primary"
+            className="app-shell-nav hidden items-center gap-1 sm:flex sm:flex-wrap sm:justify-end sm:gap-2"
+          >
+            {primaryRyanOsNavItems.map((link) => {
+              const isActive = activeKey === link.key;
+
+              return (
+                <Button
+                  aria-current={isActive ? "page" : undefined}
+                  className={cn(
+                    "h-9 shrink-0 px-3 text-xs sm:text-sm",
+                    isActive && "bg-primary/12 text-primary ring-1 ring-primary/30"
+                  )}
+                  variant="ghost"
+                  asChild
+                  key={link.href}
+                >
+                  <Link href={link.href}>{link.label}</Link>
+                </Button>
+              );
+            })}
+          </nav>
+          <Button
+            aria-label="Settings"
+            className="h-9 w-9 shrink-0 px-0"
+            variant="outline"
+            asChild
+          >
+            <Link href="/settings" title="Settings">
+              <Settings aria-hidden="true" className="h-4 w-4" />
+              <span className="sr-only">Settings</span>
+            </Link>
+          </Button>
+          <form action={logoutAction} className="hidden shrink-0 sm:block">
+            <Button className="h-9 px-3 text-xs sm:text-sm" variant="outline" type="submit">
               Sign Out
             </Button>
           </form>
-        </nav>
+          <form action={logoutAction} className="shrink-0 sm:hidden">
+            <Button className="h-9 px-3 text-xs" variant="outline" type="submit">
+              Sign Out
+            </Button>
+          </form>
+        </div>
       </header>
       {children}
-      <nav className="bg-slate-950/92 fixed inset-x-3 bottom-3 z-50 grid grid-cols-4 gap-1 rounded-[1.35rem] border border-white/10 p-1.5 text-white shadow-[0_18px_70px_rgba(2,6,23,0.5)] backdrop-blur sm:hidden">
-        {mobileLinks.map((link) => (
-          <Link
-            className="flex min-h-14 flex-col items-center justify-center rounded-2xl px-2 py-1 text-center text-[11px] font-medium text-slate-300 transition hover:bg-white/10 hover:text-white"
-            href={link.href}
-            key={link.href}
-          >
-            <span className="mb-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold text-emerald-200">
-              {link.mark}
-            </span>
-            {link.label}
-          </Link>
-        ))}
+      <nav
+        aria-label="Mobile primary"
+        className="bg-slate-950/92 fixed inset-x-3 bottom-3 z-50 grid grid-cols-4 gap-1 rounded-[1.35rem] border border-white/10 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] text-white shadow-[0_18px_70px_rgba(2,6,23,0.5)] backdrop-blur sm:hidden"
+      >
+        {primaryRyanOsNavItems.map((link) => {
+          const isActive = activeKey === link.key;
+
+          return (
+            <Link
+              aria-current={isActive ? "page" : undefined}
+              className={cn(
+                "flex min-h-14 flex-col items-center justify-center rounded-2xl px-2 py-1 text-center text-[11px] font-medium text-slate-300 transition hover:bg-white/10 hover:text-white",
+                isActive && "bg-white/10 text-white"
+              )}
+              href={link.href}
+              key={link.href}
+            >
+              <span
+                className={cn(
+                  "mb-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold text-emerald-200",
+                  isActive && "bg-primary text-primary-foreground"
+                )}
+              >
+                {link.mark}
+              </span>
+              {link.label}
+            </Link>
+          );
+        })}
       </nav>
     </div>
   );
