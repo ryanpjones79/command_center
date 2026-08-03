@@ -1,6 +1,7 @@
 "use server";
 
 import { signIn, signOut } from "@/auth";
+import { AuthError } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { settingsSchema } from "@/lib/validation";
@@ -9,16 +10,29 @@ import { refreshSymbol } from "@/server/market-data-service";
 import { deleteSignalFilter, saveSignalFilter } from "@/server/setup-filters-service";
 import { toSymbol } from "@/lib/utils";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 export async function loginAction(formData: FormData) {
   const email = String(formData.get("email") || "");
   const password = String(formData.get("password") || "");
 
-  await signIn("credentials", {
-    email,
-    password,
-    redirectTo: "/"
-  });
+  try {
+    await signIn("credentials", {
+      email,
+      password,
+      redirectTo: "/time-blocks"
+    });
+  } catch (error) {
+    if (error instanceof AuthError) {
+      redirect(
+        error.type === "CredentialsSignin"
+          ? "/login?error=invalid-credentials"
+          : "/login?error=auth"
+      );
+    }
+
+    throw error;
+  }
 }
 
 export async function logoutAction() {
