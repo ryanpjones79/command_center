@@ -16,6 +16,7 @@ import {
   formatRecurrenceFrequency,
   formatRecurrenceWeekdays
 } from "@/lib/execution-options";
+import { getDailyReadingForDate } from "@/lib/daily-readings";
 import { CurrentSeasonCard } from "./current-season-card";
 import { HowRyanOSWorksCard } from "./how-ryanos-works-card";
 import { MorningCard } from "./morning-card";
@@ -421,6 +422,7 @@ export function TimeBlockBoard({
   const [localUnscheduledTasks, setLocalUnscheduledTasks] =
     useState(unscheduledTasks);
   const [isPending, startTransition] = useTransition();
+  const dailyReading = getDailyReadingForDate(date);
 
   useEffect(() => {
     setLocalScheduledTasks(scheduledTasks);
@@ -1010,6 +1012,7 @@ export function TimeBlockBoard({
       <CurrentSeasonCard season={currentSeason} />
 
       <MorningLaunchCard
+        dailyReading={dailyReading}
         isComplete={isMorningLaunchComplete}
         onComplete={() => setIsMorningLaunchComplete(true)}
         onExpand={() => setIsMorningLaunchComplete(false)}

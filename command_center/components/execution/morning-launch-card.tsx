@@ -1,6 +1,9 @@
 "use client";
 
+import type { DailyReading } from "@/lib/daily-readings";
+
 type MorningLaunchCardProps = {
+  dailyReading: DailyReading;
   isComplete: boolean;
   onComplete: () => void;
   onExpand: () => void;
@@ -9,6 +12,7 @@ type MorningLaunchCardProps = {
 const steps = ["Read", "Write", "Decide"];
 
 export function MorningLaunchCard({
+  dailyReading,
   isComplete,
   onComplete,
   onExpand
@@ -67,15 +71,26 @@ export function MorningLaunchCard({
                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">
                   Read
                 </p>
-                <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
-                  Current Reading
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-emerald-200/20 bg-emerald-300/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-100">
+                    {dailyReading.tradition}
+                  </span>
+                  <span className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    Day {dailyReading.day}
+                  </span>
+                </div>
+                <p className="mt-3 text-lg font-semibold">
+                  {dailyReading.title}
                 </p>
-                <p className="mt-2 text-lg font-semibold">Bhagavad Gita</p>
-                <p className="text-sm text-slate-300">Chapter 2</p>
-                <p className="mt-4 text-sm leading-6 text-slate-300">
-                  Open the physical book.
-                  <br />
-                  Read slowly.
+                <p className="text-sm text-slate-300">{dailyReading.source}</p>
+                <blockquote className="mt-4 border-l border-emerald-200/30 pl-3 text-sm leading-6 text-slate-200">
+                  {dailyReading.passage}
+                </blockquote>
+                <p className="mt-3 text-xs leading-5 text-slate-400">
+                  {dailyReading.attribution}
+                </p>
+                <p className="mt-4 text-sm leading-6 text-emerald-100/90">
+                  {dailyReading.prompt}
                 </p>
               </div>
 

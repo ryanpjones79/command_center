@@ -14,8 +14,9 @@ describe("Phase 2A morning launch UI", () => {
 
     expect(source).toContain("Morning Compass");
     expect(source).toContain("The notebook is your first workspace.");
-    expect(source).toContain("Bhagavad Gita");
-    expect(source).toContain("Chapter 2");
+    expect(source).toContain("dailyReading.tradition");
+    expect(source).toContain("dailyReading.passage");
+    expect(source).toContain("dailyReading.prompt");
     expect(source).toContain("Continue to Today");
     expect(source).toContain("Close RyanOS");
     expect(source).not.toContain("save");
