@@ -17,6 +17,7 @@ import {
 } from "@/lib/execution-validation";
 import { requireUser } from "@/lib/session";
 import { ensureExecutionSetup } from "@/server/execution-service";
+import { getOwnedSeason } from "@/server/season-service";
 
 function revalidateExecution() {
   revalidatePath("/");
@@ -37,6 +38,7 @@ function revalidateProjectsOnly() {
   revalidatePath("/weekly-review");
   revalidatePath("/tasks");
   revalidatePath("/projects");
+  revalidatePath("/library/seasons");
 }
 
 function safeTasksReturnTo(value: FormDataEntryValue | null) {
@@ -256,6 +258,7 @@ export async function createExecutionProjectAction(_prevState: unknown, formData
   const user = await requireUser();
   const parsed = executionProjectSchema.safeParse({
     domainId: formData.get("domainId"),
+    seasonId: formData.get("seasonId") || undefined,
     name: formData.get("name"),
     status: formData.get("status"),
     activeStatus: formData.get("activeStatus"),
@@ -278,10 +281,15 @@ export async function createExecutionProjectAction(_prevState: unknown, formData
     return { ok: false, error: `NO PHI guardrail triggered: ${phiWarnings.join("; ")}` };
   }
 
+  const seasonId = parsed.data.seasonId
+    ? (await getOwnedSeason(user.id, parsed.data.seasonId))?.id ?? null
+    : null;
+
   await prisma.executionProject.create({
     data: {
       userId: user.id,
       domainId: parsed.data.domainId,
+      seasonId,
       name: parsed.data.name,
       status: parsed.data.status,
       activeStatus: parsed.data.activeStatus,
@@ -307,6 +315,7 @@ export async function updateExecutionProjectAction(formData: FormData) {
 
   const parsed = executionProjectSchema.safeParse({
     domainId: formData.get("domainId"),
+    seasonId: formData.get("seasonId") || undefined,
     name: formData.get("name"),
     status: formData.get("status"),
     activeStatus: formData.get("activeStatus"),
@@ -320,10 +329,15 @@ export async function updateExecutionProjectAction(formData: FormData) {
 
   if (!parsed.success) return;
 
+  const seasonId = parsed.data.seasonId
+    ? (await getOwnedSeason(user.id, parsed.data.seasonId))?.id ?? null
+    : null;
+
   await prisma.executionProject.update({
     where: { id: project.id },
     data: {
       domainId: parsed.data.domainId,
+      seasonId,
       name: parsed.data.name,
       status: parsed.data.status,
       activeStatus: parsed.data.activeStatus,

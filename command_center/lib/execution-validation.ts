@@ -22,6 +22,7 @@ export const executionDomainSchema = z.object({
 
 export const executionProjectSchema = z.object({
   domainId: z.string().cuid(),
+  seasonId: z.string().cuid().optional(),
   name: z.string().min(2).max(140),
   status: z.enum(["ON_TRACK", "NEEDS_ATTENTION", "BLOCKED", "COMPLETED"]),
   activeStatus: z.enum(["ACTIVE_NOW", "ACTIVE_LATER", "PARKED", "COMPLETED"]),

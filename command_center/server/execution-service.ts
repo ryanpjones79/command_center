@@ -4,6 +4,7 @@ import {
   getCalendarDayRange,
   getCalendarEventsForDate
 } from "@/server/google-calendar-service";
+import { getCurrentSeason } from "@/server/season-service";
 
 function startOfDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
@@ -297,18 +298,22 @@ export async function ensureExecutionSetup(userId: string) {
 }
 
 export async function getExecutionWorkspace(userId: string) {
-  const [domains, rawProjects] = await Promise.all([
+  const [domains, rawProjects, seasons] = await Promise.all([
     prisma.executionDomain.findMany({
       where: { userId },
       orderBy: { name: "asc" }
     }),
     prisma.executionProject.findMany({
       where: { userId },
-      include: { domain: true }
+      include: { domain: true, season: true }
+    }),
+    prisma.season.findMany({
+      where: { userId, status: { notIn: ["COMPLETED", "ARCHIVED"] } },
+      orderBy: [{ isCurrent: "desc" }, { title: "asc" }]
     })
   ]);
 
-  return { domains, projects: sortProjects(rawProjects) };
+  return { domains, projects: sortProjects(rawProjects), seasons };
 }
 
 export async function getActionSheetData(userId: string) {
@@ -403,6 +408,7 @@ export async function getWeeklyReviewData(userId: string) {
     where: { userId },
     include: {
       domain: true,
+      season: true,
       tasks: {
         where: { status: { notIn: ["DONE", "DROPPED"] } },
         include: { domain: true, project: true },
@@ -520,7 +526,15 @@ export async function getTimeBlockPlannerData(
       task.scheduledStart < dayRange.end
     );
 
-  const [calendarEvents, tasks, domains, projects, dailyPlan, rykasDay] =
+  const [
+    calendarEvents,
+    tasks,
+    domains,
+    projects,
+    dailyPlan,
+    rykasDay,
+    currentSeason
+  ] =
     await Promise.all([
     getCalendarEventsForDate(referenceDate),
     prisma.executionTask.findMany({
@@ -536,7 +550,7 @@ export async function getTimeBlockPlannerData(
     }),
     prisma.executionProject.findMany({
       where: { userId },
-      include: { domain: true },
+      include: { domain: true, season: true },
       orderBy: { name: "asc" }
     }),
     prisma.dailyPlan.upsert({
@@ -548,7 +562,8 @@ export async function getTimeBlockPlannerData(
       where: { userId_date: { userId, date: dayRange.start } },
       update: {},
       create: { userId, date: dayRange.start }
-    })
+    }),
+    getCurrentSeason(userId)
   ]);
 
   const sortedTasks = sortTasks(tasks);
@@ -564,6 +579,7 @@ export async function getTimeBlockPlannerData(
     },
     domains,
     projects,
+    currentSeason,
     rykasDay: {
       backlogAfter: rykasDay.backlogAfter
     },
@@ -579,13 +595,19 @@ export async function getTimeBlockPlannerData(
 export async function getProjectMaintenanceData(userId: string) {
   await ensureExecutionSetup(userId);
 
-  const [rawProjects, domains] = await Promise.all([
+  const [rawProjects, domains, seasons] = await Promise.all([
     prisma.executionProject.findMany({
       where: { userId },
       include: {
         domain: true,
+        season: true,
         tasks: {
           where: { status: { notIn: ["DONE", "DROPPED"] } },
+          take: 8
+        },
+        notebookEntries: {
+          include: { notebook: true, domain: true },
+          orderBy: [{ date: "desc" }, { updatedAt: "desc" }],
           take: 8
         }
       }
@@ -593,6 +615,10 @@ export async function getProjectMaintenanceData(userId: string) {
     prisma.executionDomain.findMany({
       where: { userId },
       orderBy: { name: "asc" }
+    }),
+    prisma.season.findMany({
+      where: { userId, status: { notIn: ["COMPLETED", "ARCHIVED"] } },
+      orderBy: [{ isCurrent: "desc" }, { title: "asc" }]
     })
   ]);
 
@@ -601,6 +627,7 @@ export async function getProjectMaintenanceData(userId: string) {
       ...project,
       tasks: sortTasks(project.tasks)
     })),
-    domains
+    domains,
+    seasons
   };
 }

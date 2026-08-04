@@ -89,6 +89,7 @@ export default async function TimeBlocksPage({
 
       <TimeBlockBoard
         calendarEvents={planner.calendarEvents}
+        currentSeason={planner.currentSeason}
         dailyPlan={planner.dailyPlan}
         date={planner.date}
         rykasDay={planner.rykasDay}

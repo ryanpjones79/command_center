@@ -12,7 +12,19 @@ type DomainOption = {
   name: string;
 };
 
-export function CreateProjectForm({ domains }: { domains: DomainOption[] }) {
+type SeasonOption = {
+  id: string;
+  isCurrent: boolean;
+  title: string;
+};
+
+export function CreateProjectForm({
+  domains,
+  seasons = []
+}: {
+  domains: DomainOption[];
+  seasons?: SeasonOption[];
+}) {
   const [state, formAction, pending] = useActionState(createExecutionProjectAction, {
     ok: true,
     error: ""
@@ -26,6 +38,19 @@ export function CreateProjectForm({ domains }: { domains: DomainOption[] }) {
         {domains.map((domain) => (
           <option key={domain.id} value={domain.id}>
             {domain.name}
+          </option>
+        ))}
+      </select>
+      <select
+        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+        defaultValue=""
+        name="seasonId"
+      >
+        <option value="">No season</option>
+        {seasons.map((season) => (
+          <option key={season.id} value={season.id}>
+            {season.isCurrent ? "Current - " : ""}
+            {season.title}
           </option>
         ))}
       </select>

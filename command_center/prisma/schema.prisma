@@ -80,13 +80,20 @@ enum ExecutionRecurrenceFrequency {
   MONTHLY
 }
 
+enum SeasonStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
 model User {
-  id                String              @id @default(cuid())
-  email             String              @unique
+  id                String               @id @default(cuid())
+  email             String               @unique
   passwordHash      String
   name              String?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
   settings          UserSettings?
   watchlist         WatchlistTicker[]
   savedFilters      SavedSignalFilter[]
@@ -99,6 +106,9 @@ model User {
   rykasDays         RykasDay[]
   parkedIdeas       ParkedIdea[]
   weeklyResets      WeeklyReset[]
+  notebooks         Notebook[]
+  notebookEntries   NotebookEntryIndex[]
+  seasons           Season[]
 }
 
 model UserSettings {
@@ -174,44 +184,70 @@ model SavedSignalFilter {
 }
 
 model ExecutionDomain {
-  id          String             @id @default(cuid())
-  userId      String
-  name        String
-  slug        String
-  description String?
-  isDefault   Boolean            @default(false)
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  projects    ExecutionProject[]
-  tasks       ExecutionTask[]
+  id              String               @id @default(cuid())
+  userId          String
+  name            String
+  slug            String
+  description     String?
+  isDefault       Boolean              @default(false)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects        ExecutionProject[]
+  tasks           ExecutionTask[]
+  notebookEntries NotebookEntryIndex[]
 
   @@unique([userId, slug])
   @@index([userId, name])
 }
 
+model Season {
+  id          String             @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  status      SeasonStatus       @default(ACTIVE)
+  themeColor  String?
+  icon        String?
+  isCurrent   Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects    ExecutionProject[]
+
+  @@unique([userId, title])
+  @@index([userId, isCurrent])
+  @@index([userId, status, startedAt])
+}
+
 model ExecutionProject {
-  id             String                 @id @default(cuid())
-  userId         String
-  domainId       String
-  name           String
-  status         ExecutionProjectStatus @default(ON_TRACK)
-  activeStatus   ExecutionActiveStatus  @default(ACTIVE_NOW)
-  weeklyFocus    ExecutionWeeklyFocus   @default(NONE)
-  priority       ExecutionPriority      @default(MEDIUM)
-  nextAction     String?
-  waitingOn      String?
-  blocked        Boolean                @default(false)
-  note           String?
-  lastReviewedAt DateTime?
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
-  user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  domain         ExecutionDomain        @relation(fields: [domainId], references: [id], onDelete: Cascade)
-  tasks          ExecutionTask[]
+  id              String                 @id @default(cuid())
+  userId          String
+  domainId        String
+  seasonId        String?
+  name            String
+  status          ExecutionProjectStatus @default(ON_TRACK)
+  activeStatus    ExecutionActiveStatus  @default(ACTIVE_NOW)
+  weeklyFocus     ExecutionWeeklyFocus   @default(NONE)
+  priority        ExecutionPriority      @default(MEDIUM)
+  nextAction      String?
+  waitingOn       String?
+  blocked         Boolean                @default(false)
+  note            String?
+  lastReviewedAt  DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain          ExecutionDomain        @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  season          Season?                @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+  tasks           ExecutionTask[]
+  notebookEntries NotebookEntryIndex[]
 
   @@unique([userId, name])
   @@index([userId, activeStatus, weeklyFocus, priority])
+  @@index([userId, seasonId])
 }
 
 model ExecutionTask {
@@ -343,23 +379,72 @@ model ParkedIdea {
 }
 
 model WeeklyReset {
-  id             String    @id @default(cuid())
-  userId         String
-  weekOf         DateTime
-  loopsShipped   Int       @default(0)
-  loopsKilled    Int       @default(0)
-  loopsParked    Int       @default(0)
-  conversations  Int       @default(0)
-  ships          Int       @default(0)
-  rykasBacklog   Int       @default(0)
-  overridesCount Int       @default(0)
-  outcomes       String
-  promotedIdeaId String?
-  completedAt    DateTime?
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                         String    @id @default(cuid())
+  userId                     String
+  weekOf                     DateTime
+  loopsShipped               Int       @default(0)
+  loopsKilled                Int       @default(0)
+  loopsParked                Int       @default(0)
+  conversations              Int       @default(0)
+  ships                      Int       @default(0)
+  rykasBacklog               Int       @default(0)
+  overridesCount             Int       @default(0)
+  outcomes                   String
+  promotedIdeaId             String?
+  paperReflectionStartedAt   DateTime?
+  paperReflectionCompletedAt DateTime?
+  notebookProcessedAt        DateTime?
+  weekTheme                  String?
+  guideGeneratedAt           DateTime?
+  completedAt                DateTime?
+  user                       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, weekOf])
   @@index([userId, completedAt])
+}
+
+model Notebook {
+  id          String               @id @default(cuid())
+  userId      String
+  title       String
+  number      Int?
+  startedAt   DateTime?
+  completedAt DateTime?
+  description String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries     NotebookEntryIndex[]
+
+  @@unique([userId, number])
+  @@index([userId, startedAt])
+  @@index([userId, completedAt])
+}
+
+model NotebookEntryIndex {
+  id         String            @id @default(cuid())
+  userId     String
+  notebookId String
+  date       DateTime?
+  pageNumber Int
+  title      String
+  summary    String?
+  domainId   String?
+  projectId  String?
+  entryType  String
+  photoUrl   String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notebook   Notebook          @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  domain     ExecutionDomain?  @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  project    ExecutionProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([userId, date])
+  @@index([userId, entryType])
+  @@index([notebookId, pageNumber])
+  @@index([domainId])
+  @@index([projectId])
 }
 
 model DailyBriefDispatch {

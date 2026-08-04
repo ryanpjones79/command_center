@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 const storageKey = "ryanos-how-it-works-collapsed";
@@ -33,14 +34,22 @@ export function HowRyanOSWorksCard() {
             </p>
           )}
         </div>
-        <button
-          aria-expanded={!isCollapsed}
-          className="min-h-10 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary/25"
-          onClick={toggleCollapsed}
-          type="button"
-        >
-          {isCollapsed ? "Expand" : "Collapse"}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            className="min-h-10 rounded-full border border-border bg-background px-3 py-2 text-xs font-semibold text-foreground transition hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary/25"
+            href="/library/method"
+          >
+            Learn More
+          </Link>
+          <button
+            aria-expanded={!isCollapsed}
+            className="min-h-10 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary/25"
+            onClick={toggleCollapsed}
+            type="button"
+          >
+            {isCollapsed ? "Expand" : "Collapse"}
+          </button>
+        </div>
       </div>
       <div
         className={`grid transition-all duration-300 ease-out ${

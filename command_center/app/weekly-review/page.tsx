@@ -1,21 +1,63 @@
+import Link from "next/link";
 import {
-  deleteExecutionProjectAction,
-  markExecutionProjectReviewedAction,
-  setExecutionProjectActiveStatusAction,
-  toggleExecutionProjectTopThreeAction,
-  updateExecutionProjectAction
-} from "@/app/execution-actions";
-import { CreateProjectForm } from "@/components/execution/create-project-form";
+  beginPaperReflectionAction,
+  beginWeeklyResetAction,
+  completePaperReflectionAction,
+  completeWeeklyResetAction,
+  markNotebookProcessedAction,
+  markWeeklyGuideGeneratedAction,
+  saveNextWeekAction,
+  savePeopleIntentionsAction,
+  skipPaperReflectionAction
+} from "@/app/review/weekly-reset/actions";
+import { PrintBrowserButton } from "@/components/execution/print-browser-button";
+import { ProjectControl, DecisionButtons } from "@/components/review/project-control";
 import { SubmitButton } from "@/components/execution/submit-button";
-import { TaskLineItem } from "@/components/execution/task-line-item";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  executionSelectOptions,
-  formatExecutionLabel
-} from "@/lib/execution-options";
+import { formatNotebookTitle } from "@/lib/notebook-format";
 import { requireUser } from "@/lib/session";
-import { getExecutionWorkspace, getWeeklyReviewData } from "@/server/execution-service";
+import {
+  getGuidedWeeklyResetData,
+  getWeeklyResetStepStatus,
+  weeklyThemeExamples
+} from "@/server/review-service";
+
+type WeeklyReviewPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+const steps = [
+  { key: "welcome", label: "Welcome" },
+  { key: "paper", label: "Paper Reflection" },
+  { key: "notebook", label: "Notebook Processing" },
+  { key: "project-control", label: "Project Control" },
+  { key: "decisions", label: "Decisions" },
+  { key: "next-week", label: "Next Week" },
+  { key: "people", label: "People" },
+  { key: "printable", label: "Printable Week" },
+  { key: "complete", label: "Complete" }
+] as const;
+
+type StepKey = (typeof steps)[number]["key"];
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveStep(value: string | undefined): StepKey {
+  return steps.some((step) => step.key === value) ? (value as StepKey) : "welcome";
+}
+
+function formatDate(value: Date | null | undefined) {
+  if (!value) return "Not recorded";
+  return value.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatWeek(value: Date) {
+  return value.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
 
 function startOfDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
@@ -27,350 +69,519 @@ function daysAgo(value: Date, days: number) {
   return copy;
 }
 
-function taskSignals(
-  task: {
-    dueDate: Date | null;
-    followUpDate: Date | null;
-    isBlocked: boolean;
-    status: string;
-    updatedAt: Date;
-    waitingOn: string | null;
-  },
-  today: Date,
-  staleCutoff: Date
-) {
-  const signals: { label: string; tone: "warning" | "secondary" | "outline" }[] = [];
-  if (task.updatedAt < staleCutoff) signals.push({ label: "Stale", tone: "warning" });
-  if (task.isBlocked) signals.push({ label: "Blocked", tone: "warning" });
-  if (task.status === "WAITING" || task.waitingOn?.trim()) signals.push({ label: "Waiting", tone: "secondary" });
-  if (task.dueDate && task.dueDate < today) signals.push({ label: "Overdue", tone: "warning" });
-  if (task.followUpDate && task.followUpDate < today) signals.push({ label: "Follow up", tone: "warning" });
-  if (!task.dueDate && !task.followUpDate && !task.waitingOn?.trim()) signals.push({ label: "No date", tone: "outline" });
-  return signals;
+function StepShell({
+  eyebrow,
+  title,
+  copy,
+  children
+}: {
+  eyebrow: string;
+  title: string;
+  copy: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-[1.75rem] border bg-card/90 p-5 shadow-sm sm:p-7">
+      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">{eyebrow}</p>
+      <h3 className="mt-3 text-3xl font-semibold tracking-tight">{title}</h3>
+      <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">{copy}</p>
+      <div className="mt-7">{children}</div>
+    </section>
+  );
 }
 
-export default async function WeeklyReviewPage() {
+function StepNav({ activeStep }: { activeStep: StepKey }) {
+  return (
+    <nav aria-label="Weekly reset steps" className="app-no-print flex gap-2 overflow-x-auto pb-1">
+      {steps.map((step, index) => (
+        <Link
+          className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium ${
+            activeStep === step.key ? "border-primary bg-primary/15 text-primary" : "border-border bg-card/70 text-muted-foreground"
+          }`}
+          href={`/weekly-review?step=${step.key}`}
+          key={step.key}
+        >
+          {index + 1}. {step.label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+function StaleDecisionStep({
+  projects,
+  outcomes
+}: {
+  projects: Awaited<ReturnType<typeof getGuidedWeeklyResetData>>["review"]["projects"];
+  outcomes: Awaited<ReturnType<typeof getGuidedWeeklyResetData>>["outcomes"];
+}) {
+  const staleCutoff = daysAgo(startOfDay(new Date()), 7);
+  const staleProjects = projects.filter(
+    (project) =>
+      project.activeStatus !== "COMPLETED" &&
+      (project.lastReviewedAt ?? project.updatedAt) < staleCutoff
+  );
+  const staleTasks = projects.flatMap((project) =>
+    project.tasks
+      .filter((task) => task.updatedAt < staleCutoff)
+      .map((task) => ({ ...task, parentProjectName: project.name }))
+  );
+
+  if (staleProjects.length === 0 && staleTasks.length === 0) {
+    return (
+      <Card className="border-dashed bg-card/70">
+        <CardContent className="pt-6">
+          <p className="text-sm text-muted-foreground">
+            No stale project or task decisions are waiting. Continue to choosing the next week.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {staleProjects.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Projects Needing A Decision</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {staleProjects.map((project) => (
+              <div className="rounded-xl border bg-background/45 p-3" key={project.id}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium">{project.name}</p>
+                    <p className="text-xs text-muted-foreground">{project.domain.name}</p>
+                  </div>
+                  <DecisionButtons id={project.id} kind="project" selected={outcomes.staleDecisions?.[`project:${project.id}`]} />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {staleTasks.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Tasks Needing A Decision</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {staleTasks.map((task) => (
+              <div className="rounded-xl border bg-background/45 p-3" key={task.id}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium">{task.title}</p>
+                    <p className="text-xs text-muted-foreground">{task.parentProjectName}</p>
+                  </div>
+                  <DecisionButtons id={task.id} kind="task" selected={outcomes.staleDecisions?.[`task:${task.id}`]} />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPageProps) {
   const user = await requireUser();
-  const today = startOfDay(new Date());
-  const staleTaskCutoff = daysAgo(today, 7);
-  const [{ projects, summary }, workspace] = await Promise.all([
-    getWeeklyReviewData(user.id),
-    getExecutionWorkspace(user.id)
-  ]);
-  const staleTaskCount = projects.reduce(
-    (count, project) => count + project.tasks.filter((task) => task.updatedAt < staleTaskCutoff).length,
-    0
-  );
-  const blockedOrWaitingTaskCount = projects.reduce(
-    (count, project) =>
-      count +
-      project.tasks.filter((task) => task.isBlocked || task.status === "WAITING" || Boolean(task.waitingOn?.trim())).length,
-    0
-  );
+  const params = await searchParams;
+  const activeStep = resolveStep(firstParam(params.step));
+  const data = await getGuidedWeeklyResetData(user.id);
+  const status = getWeeklyResetStepStatus(data.reset);
+  const topThreeIds =
+    data.outcomes.topThreeProjectIds ??
+    data.review.projects.filter((project) => project.weeklyFocus === "TOP_3").map((project) => project.id);
+  const peopleValue = data.outcomes.peopleIntentions?.join("\n") ?? "";
+  const currentSeason = data.workspace.seasons.find((season) => season.isCurrent) ?? null;
 
   return (
     <main className="space-y-6">
-      <section>
-        <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Weekly Review</p>
-        <h2 className="text-4xl font-semibold tracking-tight">Project Control</h2>
-        <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          Weekly review is where you keep the system honest: choose your Top 3, park non-active work, and make sure every active project has one clear next action.
-        </p>
+      <section className="app-no-print rounded-[1.75rem] border bg-card/85 p-5 shadow-sm sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">Review</p>
+            <h2 className="mt-2 text-4xl font-semibold tracking-tight">Weekly Reset</h2>
+            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+              Reflect on paper first. Reconcile digitally second.
+            </p>
+          </div>
+          <Badge variant={status.complete ? "default" : "outline"}>
+            Week of {formatWeek(data.reset.weekOf)}
+          </Badge>
+        </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-5">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Top 3 Projects</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{summary.topThreeCount}</p>
-            <p className="mt-2 text-sm text-muted-foreground">Target is 3. Promote or demote projects with one click below.</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Active Now</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{summary.activeNowCount}</p>
-            <p className="mt-2 text-sm text-muted-foreground">Keep this list tight so Today stays execution-oriented.</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Missing Next Action</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{summary.missingNextAction.length}</p>
-            <p className="mt-2 text-sm text-muted-foreground">Active projects without a next action create drag immediately.</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Blocked / Waiting</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">
-              {summary.blockedProjects.length} / {summary.waitingProjects.length}
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">Review what is blocked and who still owes you something.</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Stale Work</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">
-              {summary.staleProjects.length} / {staleTaskCount}
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">Projects / tasks untouched for a week should be reviewed or parked.</p>
-          </CardContent>
-        </Card>
-      </section>
+      <StepNav activeStep={activeStep} />
 
-      <section className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle className="text-base">Add Project</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CreateProjectForm domains={workspace.domains.map((domain) => ({ id: domain.id, name: domain.name }))} />
-          </CardContent>
-        </Card>
+      <div className="app-no-print">
+        {activeStep === "welcome" && (
+          <StepShell
+            copy="Close last week. Choose the next one."
+            eyebrow="10-20 minutes"
+            title="Weekly Reset"
+          >
+            <div className="flex flex-wrap gap-3">
+              <form action={beginWeeklyResetAction}>
+                <SubmitButton className="h-12 rounded-full bg-primary px-7 text-sm font-semibold text-primary-foreground" pendingLabel="Starting..." type="submit">
+                  Begin Weekly Reset
+                </SubmitButton>
+              </form>
+              <Button asChild className="h-12 rounded-full px-7" variant="outline">
+                <Link href="/weekly-review?step=project-control">Open Project Control</Link>
+              </Button>
+            </div>
+          </StepShell>
+        )}
 
-        <div className="space-y-4">
-          {(summary.missingNextAction.length > 0 || summary.staleProjects.length > 0 || staleTaskCount > 0 || blockedOrWaitingTaskCount > 0) && (
-            <Card className="border-amber-500/40">
-              <CardHeader>
-                <CardTitle className="text-base">Review Prompts</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm text-muted-foreground">
-                {summary.missingNextAction.length > 0 && (
-                  <div>
-                    <p className="font-medium text-foreground">Active projects missing next action</p>
-                    <p>{summary.missingNextAction.map((project) => project.name).join(", ")}</p>
-                  </div>
-                )}
-                {summary.staleProjects.length > 0 && (
-                  <div>
-                    <p className="font-medium text-foreground">Stale projects needing a review</p>
-                    <p>{summary.staleProjects.map((project) => project.name).join(", ")}</p>
-                  </div>
-                )}
-                {staleTaskCount > 0 && (
-                  <div>
-                    <p className="font-medium text-foreground">Stale tasks visible in project cards</p>
-                    <p>{staleTaskCount} task{staleTaskCount === 1 ? "" : "s"} untouched for 7+ days. Decide: move, finish, park, or delete.</p>
-                  </div>
-                )}
-                {blockedOrWaitingTaskCount > 0 && (
-                  <div>
-                    <p className="font-medium text-foreground">Blocked / waiting tasks</p>
-                    <p>{blockedOrWaitingTaskCount} task{blockedOrWaitingTaskCount === 1 ? "" : "s"} depend on someone or something else.</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {projects.length === 0 && (
-            <Card>
-              <CardContent className="pt-5">
-                <p className="text-sm text-muted-foreground">No projects yet. Add only the work you actually want to review weekly.</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {projects.map((project) => {
-            const toggleTopThreeAction = toggleExecutionProjectTopThreeAction.bind(null, project.id);
-            const setActiveNowAction = setExecutionProjectActiveStatusAction.bind(null, project.id, "ACTIVE_NOW");
-            const setActiveLaterAction = setExecutionProjectActiveStatusAction.bind(null, project.id, "ACTIVE_LATER");
-            const setParkedAction = setExecutionProjectActiveStatusAction.bind(null, project.id, "PARKED");
-            const markReviewedAction = markExecutionProjectReviewedAction.bind(null, project.id);
-
-            return (
-              <Card key={project.id}>
-                <CardHeader className="pb-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-lg">{project.name}</CardTitle>
-                      <p className="mt-1 text-sm text-muted-foreground">{project.domain.name}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Badge variant={project.weeklyFocus === "TOP_3" ? "default" : "secondary"}>
-                        {formatExecutionLabel(project.weeklyFocus)}
-                      </Badge>
-                      <Badge variant={project.blocked ? "warning" : "outline"}>
-                        {formatExecutionLabel(project.activeStatus)}
-                      </Badge>
-                      <Badge variant="outline">{formatExecutionLabel(project.priority)}</Badge>
-                      {!project.nextAction?.trim() && project.activeStatus === "ACTIVE_NOW" && (
-                        <Badge variant="warning">Needs Next Action</Badge>
-                      )}
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="grid gap-3 lg:grid-cols-5">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Next Action</p>
-                      <p className="mt-1 text-sm">{project.nextAction || "Missing next action"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Waiting On</p>
-                      <p className="mt-1 text-sm">{project.waitingOn || "None"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Status</p>
-                      <p className="mt-1 text-sm">{formatExecutionLabel(project.status)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Reviewed</p>
-                      <p className="mt-1 text-sm">
-                        {(project.lastReviewedAt ?? project.updatedAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Updated</p>
-                      <p className="mt-1 text-sm">{project.updatedAt.toLocaleDateString()}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <form action={toggleTopThreeAction}>
-                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
-                        {project.weeklyFocus === "TOP_3" ? "Remove from Top 3" : "Make Top 3"}
+        {activeStep === "paper" && (
+          <StepShell
+            copy="Spend a few quiet minutes reflecting before opening your projects."
+            eyebrow="Step 2"
+            title="Take your notebook."
+          >
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <Card className="bg-background/35">
+                <CardContent className="pt-6">
+                  <ul className="grid gap-3 text-base">
+                    <li>What gave me energy?</li>
+                    <li>What created noise?</li>
+                    <li>What did I avoid?</li>
+                    <li>What moved forward?</li>
+                    <li>What did I learn?</li>
+                    <li>Who needs more of me?</li>
+                    <li>What notebook pages deserve another look?</li>
+                  </ul>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="space-y-4 pt-6">
+                  <p className="text-sm text-muted-foreground">
+                    Reflection text stays in the notebook. RyanOS records only whether the paper step happened.
+                  </p>
+                  <div className="grid gap-2">
+                    <form action={beginPaperReflectionAction}>
+                      <SubmitButton className="w-full" pendingLabel="Recording..." type="submit">
+                        Begin Reflection
                       </SubmitButton>
                     </form>
-                    <form action={setActiveNowAction}>
-                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
-                        Active Now
+                    <form action={completePaperReflectionAction}>
+                      <SubmitButton className="w-full rounded-md border border-border bg-background px-4 py-2" pendingLabel="Continuing..." type="submit">
+                        Continue
                       </SubmitButton>
                     </form>
-                    <form action={setActiveLaterAction}>
-                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
-                        Active Later
-                      </SubmitButton>
-                    </form>
-                    <form action={setParkedAction}>
-                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
-                        Park
-                      </SubmitButton>
-                    </form>
-                    <form action={markReviewedAction}>
-                      <SubmitButton className="h-8 rounded-md border border-border px-3 text-xs font-medium disabled:opacity-60" pendingLabel="Saving..." type="submit">
-                        Mark Reviewed
+                    <form action={skipPaperReflectionAction}>
+                      <SubmitButton className="w-full rounded-md px-4 py-2 text-muted-foreground" pendingLabel="Skipping..." type="submit">
+                        Skip for now
                       </SubmitButton>
                     </form>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Started: {formatDate(data.reset.paperReflectionStartedAt)}
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+          </StepShell>
+        )}
 
-                  {project.tasks.length > 0 && (
-                    <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Task Health</p>
-                        <p className="text-xs text-muted-foreground">{project.tasks.length} open shown, oldest first</p>
+        {activeStep === "notebook" && (
+          <StepShell
+            copy="Turn only the useful paper artifacts into the right kind of RyanOS reference."
+            eyebrow="Step 3"
+            title="Process your notebook."
+          >
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <Card className="bg-background/35">
+                <CardContent className="space-y-4 pt-6">
+                  <p className="text-sm font-medium">Does anything deserve:</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {["A commitment?", "A project?", "A parked idea?", "A reference only?"].map((question) => (
+                      <div className="rounded-xl border bg-card/70 p-4 text-sm" key={question}>
+                        {question}
                       </div>
-                      <div className="mt-3 space-y-2">
-                        {project.tasks.map((task) => {
-                          const signals = taskSignals(task, today, staleTaskCutoff);
-                          return (
-                            <div className="rounded-lg border bg-background/70 px-3 py-2" key={task.id}>
-                              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Review signals</p>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {signals.map((signal) => (
-                                    <Badge key={`${task.id}-${signal.label}`} variant={signal.tone}>
-                                      {signal.label}
-                                    </Badge>
-                                  ))}
-                                </div>
-                              </div>
-                              <TaskLineItem
-                                domains={workspace.domains.map((domain) => ({ id: domain.id, name: domain.name }))}
-                                projects={workspace.projects.map((projectOption) => ({
-                                  id: projectOption.id,
-                                  name: projectOption.name,
-                                  domainId: projectOption.domainId
-                                }))}
-                                task={task}
-                              />
-                            </div>
-                          );
-                        })}
+                    ))}
+                  </div>
+                  {data.notebookEntries.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        Indexed this week
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {data.notebookEntries.map((entry) => (
+                          <div className="rounded-lg border bg-card/70 p-3 text-sm" key={entry.id}>
+                            <p className="font-medium">{entry.title}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatNotebookTitle(entry.notebook)} / Page {entry.pageNumber}
+                            </p>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
-
-                  <details className="rounded-lg border border-border/70 p-3">
-                    <summary className="cursor-pointer text-sm font-medium">Edit Project</summary>
-                    <form action={updateExecutionProjectAction} className="mt-3 grid gap-3">
-                      <input name="projectId" type="hidden" value={project.id} />
-                      <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.domainId} name="domainId">
-                        {workspace.domains.map((domain) => (
-                          <option key={domain.id} value={domain.id}>
-                            {domain.name}
-                          </option>
-                        ))}
-                      </select>
-                      <input className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.name} name="name" required />
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.status} name="status">
-                          {executionSelectOptions.projectStatuses.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.activeStatus} name="activeStatus">
-                          {executionSelectOptions.activeStatuses.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.weeklyFocus} name="weeklyFocus">
-                          {executionSelectOptions.weeklyFocuses.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
-                        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.priority} name="priority">
-                          {executionSelectOptions.priorities.map((value) => (
-                            <option key={value} value={value}>
-                              {formatExecutionLabel(value)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <input className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.nextAction ?? ""} name="nextAction" placeholder="Next action" />
-                      <input className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.waitingOn ?? ""} name="waitingOn" placeholder="Waiting on" />
-                      <textarea className="min-h-[96px] rounded-md border border-input bg-background px-3 py-2 text-sm" defaultValue={project.note ?? ""} name="note" />
-                      <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <input className="h-4 w-4" defaultChecked={project.blocked} name="blocked" type="checkbox" />
-                        Blocked
-                      </label>
-                      <div className="flex gap-2">
-                        <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-70" pendingLabel="Saving..." type="submit">
-                          Save
-                        </SubmitButton>
-                      </div>
-                    </form>
-                    <form action={deleteExecutionProjectAction} className="mt-3">
-                      <input name="projectId" type="hidden" value={project.id} />
-                      <SubmitButton className="h-9 rounded-md border border-destructive px-4 text-sm text-destructive disabled:opacity-60" pendingLabel="Deleting..." type="submit">
-                        Delete Project
-                      </SubmitButton>
-                    </form>
-                  </details>
                 </CardContent>
               </Card>
-            );
-          })}
-        </div>
+              <Card>
+                <CardContent className="space-y-3 pt-6">
+                  <Button asChild className="w-full" variant="outline">
+                    <Link href="/library/notebooks">Notebook Index</Link>
+                  </Button>
+                  <Button asChild className="w-full" variant="outline">
+                    <Link href="/tasks?whenBucket=PARKING_LOT">Parked Ideas</Link>
+                  </Button>
+                  <Button asChild className="w-full" variant="outline">
+                    <Link href="/projects">Projects</Link>
+                  </Button>
+                  <form action={markNotebookProcessedAction}>
+                    <SubmitButton className="mt-3 w-full" pendingLabel="Recording..." type="submit">
+                      Notebook Processed
+                    </SubmitButton>
+                  </form>
+                  <p className="text-xs text-muted-foreground">
+                    Processed: {formatDate(data.reset.notebookProcessedAt)}
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+          </StepShell>
+        )}
+
+        {activeStep === "project-control" && (
+          <StepShell
+            copy="Open the project control surface only after the notebook has had a first pass."
+            eyebrow="Step 4"
+            title="Project Control"
+          >
+            <details className="rounded-2xl border bg-background/30 p-4" open>
+              <summary className="cursor-pointer text-base font-semibold">Project Control Foundation</summary>
+              <div className="mt-5">
+                <ProjectControl review={data.review} workspace={data.workspace} outcomes={data.outcomes} />
+              </div>
+            </details>
+            <div className="mt-5 flex justify-end">
+              <Button asChild>
+                <Link href="/weekly-review?step=decisions">Continue to Decisions</Link>
+              </Button>
+            </div>
+          </StepShell>
+        )}
+
+        {activeStep === "decisions" && (
+          <StepShell
+            copy="For each item that has gone quiet, decide what relationship it has to the coming week."
+            eyebrow="Step 5"
+            title="Decisions"
+          >
+            <StaleDecisionStep projects={data.review.projects} outcomes={data.outcomes} />
+            <div className="mt-5 flex justify-end">
+              <Button asChild>
+                <Link href="/weekly-review?step=next-week">Continue to Next Week</Link>
+              </Button>
+            </div>
+          </StepShell>
+        )}
+
+        {activeStep === "next-week" && (
+          <StepShell
+            copy="Choose the next week's operating emphasis and the projects that deserve the most attention."
+            eyebrow="Step 6"
+            title="Next Week"
+          >
+            <form action={saveNextWeekAction} className="grid gap-5">
+              <Card className="bg-background/35">
+                <CardContent className="border-b pt-6">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Current Season
+                  </p>
+                  <p className="mt-1 text-lg font-semibold">
+                    {currentSeason?.title ?? "No current season selected"}
+                  </p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Does this week's work support your current season?
+                  </p>
+                </CardContent>
+                <CardHeader>
+                  <CardTitle className="text-base">Top 3 Projects</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-2 sm:grid-cols-2">
+                  {data.review.projects.map((project) => (
+                    <label className="flex min-h-12 items-center gap-3 rounded-xl border bg-card/70 p-3 text-sm" key={project.id}>
+                      <input
+                        className="h-4 w-4"
+                        defaultChecked={topThreeIds.includes(project.id)}
+                        name="topThreeProjectIds"
+                        type="checkbox"
+                        value={project.id}
+                      />
+                      <span>
+                        {project.name}
+                        <span className="block text-xs text-muted-foreground">{project.domain.name}</span>
+                      </span>
+                    </label>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-background/35">
+                <CardHeader>
+                  <CardTitle className="text-base">One Weekly Theme</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    {weeklyThemeExamples.map((theme) => (
+                      <label className="rounded-full border bg-card/70 px-4 py-2 text-sm" key={theme}>
+                        <input
+                          className="mr-2"
+                          defaultChecked={data.reset.weekTheme === theme}
+                          name="theme"
+                          type="radio"
+                          value={theme}
+                        />
+                        {theme}
+                      </label>
+                    ))}
+                  </div>
+                  <input
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    defaultValue={weeklyThemeExamples.includes(data.reset.weekTheme as never) ? "" : data.reset.weekTheme ?? ""}
+                    name="customTheme"
+                    placeholder="Custom theme"
+                  />
+                </CardContent>
+              </Card>
+
+              <SubmitButton className="w-fit" pendingLabel="Saving..." type="submit">
+                Save Next Week
+              </SubmitButton>
+            </form>
+          </StepShell>
+        )}
+
+        {activeStep === "people" && (
+          <StepShell
+            copy="Not tasks. Relationship intentions."
+            eyebrow="Step 7"
+            title="Who deserves intentional attention this week?"
+          >
+            <form action={savePeopleIntentionsAction} className="space-y-4">
+              <textarea
+                className="min-h-36 w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm"
+                defaultValue={peopleValue}
+                name="peopleIntentions"
+                placeholder={"Daughter\nCoworker\nCustomer\nFriend\nMyself"}
+              />
+              <SubmitButton pendingLabel="Saving..." type="submit">
+                Save People Intentions
+              </SubmitButton>
+            </form>
+          </StepShell>
+        )}
+
+        {activeStep === "printable" && (
+          <StepShell
+            copy="Review the weekly guide, print if useful, then close the reset."
+            eyebrow="Step 8"
+            title="Printable Week"
+          >
+            <div className="flex flex-wrap gap-3">
+              <PrintBrowserButton />
+              <form action={markWeeklyGuideGeneratedAction}>
+                <SubmitButton className="h-10 rounded-md border border-border px-4 text-sm font-medium" pendingLabel="Recording..." type="submit">
+                  Mark Guide Generated
+                </SubmitButton>
+              </form>
+            </div>
+            <div className="mt-6 rounded-2xl border bg-background/35 p-4">
+              <WeeklyGuide data={data} />
+            </div>
+          </StepShell>
+        )}
+
+        {activeStep === "complete" && (
+          <StepShell
+            copy="You have chosen what deserves your attention. Everything else can wait."
+            eyebrow="Step 9"
+            title="Weekly Reset Complete"
+          >
+            <form action={completeWeeklyResetAction}>
+              <SubmitButton className="h-11 rounded-full px-6" pendingLabel="Closing..." type="submit">
+                Complete Weekly Reset
+              </SubmitButton>
+            </form>
+          </StepShell>
+        )}
+      </div>
+
+      <section className="weekly-guide-print-root print-only">
+        <WeeklyGuide data={data} />
       </section>
     </main>
+  );
+}
+
+function WeeklyGuide({
+  data
+}: {
+  data: Awaited<ReturnType<typeof getGuidedWeeklyResetData>>;
+}) {
+  const currentSeason = data.workspace.seasons.find((season) => season.isCurrent) ?? null;
+  const topThreeProjects = data.review.projects.filter((project) =>
+    (data.outcomes.topThreeProjectIds ?? data.review.projects.filter((candidate) => candidate.weeklyFocus === "TOP_3").map((candidate) => candidate.id)).includes(project.id)
+  );
+  const people = data.outcomes.peopleIntentions ?? [];
+
+  return (
+    <div className="space-y-4 text-sm">
+      <div>
+        <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Weekly Guide</p>
+        <h3 className="mt-1 text-2xl font-semibold">Week of {formatWeek(data.reset.weekOf)}</h3>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Current Season</p>
+          <p className="mt-1 font-medium">{currentSeason?.title ?? "Choose a current season."}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Does this week's work support it?</p>
+        </div>
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Theme</p>
+          <p className="mt-1 font-medium">{data.reset.weekTheme || "Choose one theme before printing."}</p>
+        </div>
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Needle Move Reminder</p>
+          <p className="mt-1">Choose one completed result each morning before placing blocks.</p>
+        </div>
+      </div>
+      <div className="rounded-xl border p-3">
+        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Top 3 Projects</p>
+        <ul className="mt-2 space-y-1">
+          {topThreeProjects.length > 0 ? (
+            topThreeProjects.map((project) => <li key={project.id}>{project.name}</li>)
+          ) : (
+            <li>No Top 3 selected.</li>
+          )}
+        </ul>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Important Meetings</p>
+          <p className="mt-1">Review calendar before Monday planning.</p>
+        </div>
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Notebook Reminder</p>
+          <p className="mt-1">Index pages that became commitments, projects, parked ideas, or references.</p>
+        </div>
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Relationship Intention</p>
+          <p className="mt-1">{people.length > 0 ? people.join(", ") : "Choose who deserves attention this week."}</p>
+        </div>
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Reading Reference</p>
+          <p className="mt-1">Bhagavad Gita / Chapter 2</p>
+        </div>
+      </div>
+    </div>
   );
 }

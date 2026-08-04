@@ -5,6 +5,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 const workingNow = [
   {
+    title: "Season Archive",
+    description: "See the current season and completed seasons by year.",
+    href: "/library/seasons"
+  },
+  {
+    title: "Notebook Index",
+    description: "Find the physical page without turning the notebook into an app.",
+    href: "/library/notebooks"
+  },
+  {
     title: "Parked Tasks",
     description: "Find real tasks that are intentionally not active right now.",
     href: "/tasks?whenBucket=PARKING_LOT"
@@ -21,7 +31,7 @@ const workingNow = [
   }
 ];
 
-const comingLater = ["Notebook Index", "Reading Paths", "Principles", "Parked Ideas"];
+const comingLater = ["Reading Paths", "Principles", "Parked Ideas"];
 
 export default function LibraryPage() {
   return (

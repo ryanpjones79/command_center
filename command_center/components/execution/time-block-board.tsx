@@ -16,6 +16,7 @@ import {
   formatRecurrenceFrequency,
   formatRecurrenceWeekdays
 } from "@/lib/execution-options";
+import { CurrentSeasonCard } from "./current-season-card";
 import { HowRyanOSWorksCard } from "./how-ryanos-works-card";
 import { MorningCard } from "./morning-card";
 import { MorningLaunchCard } from "./morning-launch-card";
@@ -76,6 +77,13 @@ type AgendaItem =
 
 type TimeBlockBoardProps = {
   calendarEvents: BoardCalendarEvent[];
+  currentSeason: {
+    description: string | null;
+    icon: string | null;
+    projects: { id: string; name: string }[];
+    themeColor: string | null;
+    title: string;
+  } | null;
   dailyPlan: {
     dateKey: string;
     needleMove: string | null;
@@ -378,6 +386,7 @@ function minutesLabel(minutes: number) {
 
 export function TimeBlockBoard({
   calendarEvents,
+  currentSeason,
   dailyPlan,
   date,
   rykasDay,
@@ -997,6 +1006,8 @@ export function TimeBlockBoard({
   return (
     <div className="space-y-4">
       {taskDetailPanel}
+
+      <CurrentSeasonCard season={currentSeason} />
 
       <MorningLaunchCard
         isComplete={isMorningLaunchComplete}

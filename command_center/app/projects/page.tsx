@@ -7,12 +7,19 @@ import { CreateProjectForm } from "@/components/execution/create-project-form";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { executionSelectOptions, formatExecutionLabel } from "@/lib/execution-options";
+import { formatNotebookTitle } from "@/lib/notebook-format";
+import { formatNotebookEntryType } from "@/lib/notebook-options";
 import { requireUser } from "@/lib/session";
 import { getProjectMaintenanceData } from "@/server/execution-service";
 
+function formatNotebookEntryDate(value: Date | null) {
+  if (!value) return "No date";
+  return value.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 export default async function ProjectsPage() {
   const user = await requireUser();
-  const { projects, domains } = await getProjectMaintenanceData(user.id);
+  const { projects, domains, seasons } = await getProjectMaintenanceData(user.id);
 
   return (
     <main className="space-y-6">
@@ -39,7 +46,14 @@ export default async function ProjectsPage() {
             <CardTitle className="text-base">Add Project</CardTitle>
           </CardHeader>
           <CardContent>
-            <CreateProjectForm domains={domains.map((domain) => ({ id: domain.id, name: domain.name }))} />
+            <CreateProjectForm
+              domains={domains.map((domain) => ({ id: domain.id, name: domain.name }))}
+              seasons={seasons.map((season) => ({
+                id: season.id,
+                isCurrent: season.isCurrent,
+                title: season.title
+              }))}
+            />
           </CardContent>
         </Card>
 
@@ -63,6 +77,9 @@ export default async function ProjectsPage() {
                   <div className="flex flex-wrap gap-2">
                     <Badge variant="outline">{formatExecutionLabel(project.status)}</Badge>
                     <Badge variant="outline">{formatExecutionLabel(project.activeStatus)}</Badge>
+                    <Badge variant={project.season ? "secondary" : "outline"}>
+                      {project.season?.title ?? "No Season"}
+                    </Badge>
                     <Badge variant={project.weeklyFocus === "TOP_3" ? "default" : "secondary"}>
                       {formatExecutionLabel(project.weeklyFocus)}
                     </Badge>
@@ -101,6 +118,34 @@ export default async function ProjectsPage() {
                   </div>
                 )}
 
+                {project.notebookEntries.length > 0 && (
+                  <div className="rounded-xl border border-border/70 bg-background/30 p-3">
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      Linked Notebook Entries
+                    </p>
+                    <div className="mt-3 grid gap-2">
+                      {project.notebookEntries.map((entry) => (
+                        <div
+                          className="rounded-lg border bg-card/70 p-3 text-sm"
+                          key={entry.id}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="font-medium">{entry.title}</p>
+                            <Badge variant="outline">{formatNotebookEntryType(entry.entryType)}</Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {formatNotebookTitle(entry.notebook)} / Page {entry.pageNumber} /{" "}
+                            {formatNotebookEntryDate(entry.date)}
+                          </p>
+                          {entry.summary && (
+                            <p className="mt-2 text-sm text-muted-foreground">{entry.summary}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <details className="rounded-lg border border-border/70 p-3">
                   <summary className="cursor-pointer text-sm font-medium">Edit Project</summary>
                   <form action={updateExecutionProjectAction} className="mt-3 grid gap-3">
@@ -109,6 +154,19 @@ export default async function ProjectsPage() {
                       {domains.map((domain) => (
                         <option key={domain.id} value={domain.id}>
                           {domain.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                      defaultValue={project.seasonId ?? ""}
+                      name="seasonId"
+                    >
+                      <option value="">No season</option>
+                      {seasons.map((season) => (
+                        <option key={season.id} value={season.id}>
+                          {season.isCurrent ? "Current - " : ""}
+                          {season.title}
                         </option>
                       ))}
                     </select>

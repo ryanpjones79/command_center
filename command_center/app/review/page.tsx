@@ -5,9 +5,9 @@ import { Badge } from "@/components/ui/badge";
 
 const primaryDestinations = [
   {
-    title: "Project Control",
-    description: "Review project health, stale work, blocked items, and Top 3 focus.",
-    href: "/weekly-review"
+    title: "Weekly Reset",
+    description: "Reflect on paper, reconcile projects, and choose the next week.",
+    href: "/review/weekly-reset"
   },
   {
     title: "Daily Brief",

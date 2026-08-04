@@ -51,3 +51,41 @@
   - Local SQLite schema was synced safely with `node scripts/prisma-command.mjs db push --skip-generate`.
 - Next:
   - S3 Blocks: 5 type colors on the grid, needle star, server-enforced one needle per user/day, and shipped tap action.
+
+## 2026-08-03 Phase 5 - Seasons
+
+- Shipped Seasons as a lightweight organizing layer:
+  - Added `Season` to both Prisma schemas with title, description, dates, status, theme color, icon, and current-season flag.
+  - Added optional `seasonId` on `ExecutionProject`; existing projects default to no season.
+  - Added additive migration `20260803002000_add_seasons`.
+  - Added service/actions that enforce only one current season per user through transactions.
+  - Added `/library/seasons` as the Season Archive with current season, editable seasons, completed seasons by year, and project context.
+  - Added optional Season assignment to project create/edit surfaces.
+  - Added Current Season compass card near the top of Today.
+  - Added current-season prompt to Weekly Reset and the printable weekly guide.
+- Verification:
+  - `node scripts/prisma-command.mjs format` passed for SQLite schema.
+  - `npx prisma format --schema prisma/schema.postgres.prisma` passed.
+  - `node scripts/prisma-command.mjs generate` passed.
+  - `node scripts/prisma-command.mjs db push --skip-generate` synced local SQLite.
+  - `npm test` passed: 9 files, 43 tests.
+  - `npm run build` passed.
+  - `npm run lint` passed.
+- Next:
+  - If desired, add a small default seed/current-season starter only after Ryan chooses the first real season title.
+
+## 2026-08-03 Phase 7 - RyanOS Method & Principles
+
+- Shipped RyanOS Method as a permanent Library reference:
+  - Rebuilt `/library/method` into a calm philosophy guide with Why RyanOS Exists, Paper vs RyanOS, Daily Rhythm, Weekly Rhythm, Core Principles, What Not To Capture, Reset The System, and Season Philosophy.
+  - Added a condensed print-only Method artifact intended for one-to-two page notebook insertion.
+  - Added print CSS for `.method-print-root`, `.method-print-grid`, and `.method-print-card`.
+  - Updated the compact Today "How RyanOS Works" card with a direct `Learn More` link to `/library/method`.
+  - Added a browser-only one-time onboarding gate that opens the Method page on first authenticated app use and never forces it again in that browser.
+- Constraints kept:
+  - No Prisma, database, migration, analytics, AI, score, or achievement changes.
+  - Onboarding state uses localStorage only.
+- Verification:
+  - `npm test` passed: 10 files, 49 tests.
+  - `npm run build` passed before the final copy compatibility patch.
+  - `npm run lint` passed.

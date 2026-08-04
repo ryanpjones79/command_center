@@ -1,49 +1,55 @@
-# Daily Action OS
+# Rykas Inc. Website
 
-Task-first companion web app for your emailed Daily Brief.
+Premium marketing site for a brand-facing Amazon launch, management, and channel-control partner, built inside the existing `command_center` Next.js app while preserving the authenticated internal execution dashboard at `/dashboard`.
 
-The Daily Brief stays in email. This app is the writeback and execution layer:
+## Information Architecture
 
-- printable 1-page Action Sheet
-- Follow-Up / Waiting visibility
-- Weekly Review / Project Control
-- low-friction task and project maintenance
-
-Legacy market-tool routes from the earlier Strat dashboard are still preserved, but they are no longer the primary navigation.
-
-## Primary Views
+Public marketing routes:
 
 - `/`
-  Daily Command Center and printable Action Sheet
-- `/print/action-sheet`
-  Dedicated print artifact with compact one-page and extended two-page modes
+- `/assessment`
+- `/amazon-launch`
+- `/channel-control`
+- `/services`
+- `/about`
+- `/contact`
+
+Legacy redirects:
+
+- `/strategy` -> `/amazon-launch`
+- `/results` -> `/channel-control`
+
+Preserved internal app routes:
+
+- `/dashboard`
+- `/daily-brief`
 - `/weekly-review`
-  Weekly Review and project control
 - `/tasks`
-  Full task list maintenance
 - `/projects`
-  Project list and domain maintenance
 - `/settings`
-  Architecture notes, field mapping, and legacy route access
 
-## Data Model
+## Stack
 
-The new execution layer uses:
+- Next.js 15 App Router
+- React 19
+- TypeScript
+- Tailwind CSS
+- Framer Motion
+- Prisma
+- shadcn-style UI primitives in `components/ui`
 
-- `ExecutionDomain`
-- `ExecutionProject`
-- `ExecutionTask`
+## Key Features
 
-This keeps the daily workflow task-first while still allowing weekly project review.
+- premium responsive marketing site with sticky header and desktop CTA
+- light/dark theme toggle with premium dark mode
+- animated homepage channel transformation visual
+- dedicated Amazon Channel Assessment intake path
+- strategy call and assessment forms that persist leads via Prisma `ContactLead`
+- SEO metadata plus `robots.txt` and `sitemap.xml`
+- CMS-like content config for easy copy editing
+- existing internal command-center app preserved behind auth
 
-Notable execution-layer features:
-
-- `pinToTodayUntilDone` for tasks that should stay visible across multiple days
-- project-aware task filters and bulk triage actions
-- follow-up bump actions for waiting items
-- dedicated compact and extended print modes
-
-## Local Run
+## Local Development
 
 Run these commands from the `command_center` folder.
 
@@ -53,17 +59,17 @@ Run these commands from the `command_center` folder.
 npm install
 ```
 
-2. Set env vars
+2. Copy environment variables if needed
 
 ```bash
 cp .env.example .env
 ```
 
-3. Run migrations and seed
+3. Sync Prisma schema
 
 ```bash
-npm run prisma:migrate
-npm run prisma:seed
+npm run prisma:db:push
+npm run prisma:generate
 ```
 
 4. Start the app
@@ -72,45 +78,83 @@ npm run prisma:seed
 npm run dev
 ```
 
-5. Login with:
-
-- `DEFAULT_USER_EMAIL`
-- `DEFAULT_USER_PASSWORD`
-
-## Useful Commands
+5. Optional checks
 
 ```bash
+npm run lint
 npm run build
-npm run test
-npm run migrate:legacy-execution
 ```
 
-## Railway Deploy
+## Where To Edit Content
 
-Railway is the cleanest single-place host for this app: one project, a web service, a PostgreSQL service, and a small cron service for the Daily Brief.
+Primary copy and route-driven content:
 
-Deployment notes:
+- `content/site-content.ts`
 
-- local development still uses SQLite via `prisma/schema.prisma`
-- Railway production should use Postgres via `prisma/schema.postgres.prisma`
-- the repo now auto-selects the Prisma schema based on `PRISMA_SCHEMA_PATH` or the `DATABASE_URL`
-- use `npm run railway:web:predeploy` on the web service before deploy to bootstrap Postgres schema and seed the default user
-- use `npm run railway:cron:start` as the cron service start command
+Public page files:
 
-Full setup steps live in [docs/railway-deploy.md](docs/railway-deploy.md).
+- `app/page.tsx`
+- `app/assessment/page.tsx`
+- `app/amazon-launch/page.tsx`
+- `app/channel-control/page.tsx`
+- `app/services/page.tsx`
+- `app/about/page.tsx`
+- `app/contact/page.tsx`
 
-## Netlify Deploy
+Shared marketing components:
 
-If you prefer simpler app hosting, Netlify is also supported.
+- `components/marketing/site-header.tsx`
+- `components/marketing/site-footer.tsx`
+- `components/marketing/channel-transformation-visual.tsx`
+- `components/marketing/assessment-form.tsx`
+- `components/marketing/contact-form.tsx`
+- `components/marketing/lead-magnet-form.tsx`
+- `components/marketing/testimonial-grid.tsx`
 
-- Netlify can now be kept as the primary platform for both app hosting and database setup through Netlify DB
-- the repo includes a scheduled Daily Brief function for Netlify
-- the repo root `netlify.toml` points Netlify at this `command_center` folder automatically
+Theme and global styling:
 
-Setup steps live in [docs/netlify-deploy.md](docs/netlify-deploy.md).
+- `app/globals.css`
+- `app/layout.tsx`
+
+Lead persistence:
+
+- `prisma/schema.prisma`
+- `prisma/schema.postgres.prisma`
+
+## Brand Setup Checklist
+
+Before production launch, update:
+
+- brand name, contact info, and `siteUrl` in `content/site-content.ts`
+- strategy call scheduler embed placeholder on `app/contact/page.tsx`
+- illustrative testimonials with approved real proof
+- any placeholder email address used for contact links
+
+## Deployment
+
+This repo already supports Netlify, Vercel, and Railway. The deploy base directory remains `command_center`.
+
+### Vercel
+
+- Base directory: `command_center`
+- Build command: `npm run vercel:build`
+- Output: Next.js default
+
+### Netlify
+
+- Base directory: `command_center`
+- Build command: `npm run netlify:build`
+- Scheduled functions already live under `netlify/functions`
+
+### Railway
+
+- Web predeploy: `npm run railway:web:predeploy`
+- Web start: `npm run railway:web:start`
+- Optional cron start: `npm run railway:cron:start`
 
 ## Notes
 
-- Print styles are optimized for the Action Sheet on standard letter paper.
-- PHI guardrails are still enforced on execution writeback fields.
-- Architecture and migration notes live in [docs/action-sheet-redesign.md](docs/action-sheet-redesign.md).
+- The public site now owns `/`, while the internal action sheet moved to `/dashboard`.
+- Login redirects authenticated users to `/dashboard`.
+- The public marketing shell is intentionally kept separate from the authenticated app shell.
+- Public messaging is written for brands, manufacturers, and ecommerce operators seeking Amazon help, not for marketplace education.

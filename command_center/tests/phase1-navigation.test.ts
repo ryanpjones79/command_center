@@ -74,12 +74,12 @@ describe("Phase 1 navigation information architecture", () => {
     expect(source).toContain('href: "/work/areas"');
   });
 
-  it("renders Review landing with Project Control and Daily Brief links", () => {
+  it("renders Review landing with Weekly Reset and Daily Brief links", () => {
     const source = sourceForRoute("/review");
 
     expect(source).toContain("Close the day, review the system, and choose what deserves attention next.");
-    expect(source).toContain('title: "Project Control"');
-    expect(source).toContain('href: "/weekly-review"');
+    expect(source).toContain('title: "Weekly Reset"');
+    expect(source).toContain('href: "/review/weekly-reset"');
     expect(source).toContain('href: "/daily-brief"');
   });
 
@@ -100,6 +100,7 @@ describe("Phase 1 navigation information architecture", () => {
       "/tasks",
       "/projects",
       "/weekly-review",
+      "/review/weekly-reset",
       "/daily-brief",
       "/dashboard",
       "/print/action-sheet",
