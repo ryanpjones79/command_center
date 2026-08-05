@@ -20,6 +20,7 @@ import {
   getTodayPlanningRow,
   type DailyPlanningInputs
 } from "@/server/google-sheets-service";
+import { getDailyReadingBrief } from "@/lib/daily-readings";
 import { getDailyBriefNews, type DailyNewsTopic } from "@/server/news-service";
 
 export type DailyBriefStatus = "ok" | "missing";
@@ -53,6 +54,7 @@ export type DailyBriefData = {
 };
 
 const briefSectionOrder = [
+  "READ",
   "MISSION FOR TODAY",
   "MORNING LAUNCH",
   "MEAL PLAN",
@@ -361,6 +363,17 @@ function buildMealPlanLines() {
   return ["Breakfast:", "Lunch:", "Dinner:", "Snack:"];
 }
 
+function buildReadLines(referenceDate: Date) {
+  const reading = getDailyReadingBrief(referenceDate);
+
+  return [
+    "READ",
+    `Current reading: ${reading.title} - ${reading.reference}`,
+    `Theme: ${reading.theme}`,
+    `Instruction: ${reading.instruction}`
+  ];
+}
+
 function buildQuickWins(
   planning: DailyPlanningInputs,
   executionContext: DailyBriefExecutionContext | null
@@ -599,6 +612,8 @@ function buildMissingBrief(referenceDate: Date, missingInputs: string[]) {
     "DAILY BRIEF",
     `Date: ${formatDateLine(referenceDate)}`,
     "",
+    ...buildReadLines(referenceDate),
+    "",
     "MISSING INPUTS",
     ...missingInputs.map((item) => `- ${item}`)
   ].join("\n");
@@ -649,6 +664,8 @@ function buildBriefText(
   const lines = [
     "DAILY BRIEF",
     `Date: ${formatDateLine(referenceDate)}`,
+    "",
+    ...buildReadLines(referenceDate),
     "",
     "MISSION FOR TODAY",
     `- ${mission}`,

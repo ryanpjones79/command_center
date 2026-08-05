@@ -20,6 +20,7 @@ type DailyBriefPageProps = {
 };
 
 const briefSectionOrder = [
+  "READ",
   "MISSION FOR TODAY",
   "MORNING LAUNCH",
   "MEAL PLAN",
@@ -86,6 +87,7 @@ function getExactlyThree(lines: string[]) {
 }
 
 function buildPrintSections(sections: Map<string, string[]>): PrintSection[] {
+  const read = getSectionLines(sections, "READ", 3);
   const mission = getSectionLines(sections, "MISSION FOR TODAY", 1);
   const schedule = getSectionLines(sections, "SCHEDULE SNAPSHOT");
   const workBlocks = getSectionLines(sections, "BEST WORK BLOCKS", 2);
@@ -101,6 +103,19 @@ function buildPrintSections(sections: Map<string, string[]>): PrintSection[] {
   const watchouts = getSectionLines(sections, "WATCHOUTS", 2);
 
   return [
+    {
+      title: "Read",
+      lines:
+        read.length > 0
+          ? read.map((line) =>
+              line
+                .replace("Current reading: ", "")
+                .replace("Theme: ", "")
+                .replace("Instruction: ", "")
+            )
+          : ["Read from the physical book. Write one line."],
+      className: "daily-brief-print-card-wide"
+    },
     {
       title: "Mission for Today",
       lines: mission.length > 0 ? mission : ["[ ]"],

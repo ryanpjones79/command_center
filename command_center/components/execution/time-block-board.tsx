@@ -448,7 +448,7 @@ export function TimeBlockBoard({
     );
     setRykasBacklog(String(rykasDay.backlogAfter));
     setShutdownTomorrow(dailyPlan.shutdownNote ?? "");
-  }, [dailyPlan, rykasDay]);
+  }, [dailyPlan.dateKey]);
 
   useEffect(() => {
     const storageKey = `ryanos-execution:${dailyPlan.dateKey}`;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dailyReadings,
+  getDailyReadingBrief,
   getDailyReadingForDate,
   getDayOfYear
 } from "@/lib/daily-readings";
@@ -8,9 +9,7 @@ import {
 describe("daily readings", () => {
   it("provides one reading for every possible day of the year", () => {
     expect(dailyReadings).toHaveLength(366);
-    expect(new Set(dailyReadings.map((reading) => reading.day)).size).toBe(
-      366
-    );
+    expect(new Set(dailyReadings.map((reading) => reading.day)).size).toBe(366);
   });
 
   it("rotates evenly across Buddhism, Gita, and Stoicism", () => {
@@ -46,5 +45,19 @@ describe("daily readings", () => {
 
     expect(getDailyReadingForDate(new Date(2026, 0, 1, 12)).day).toBe(1);
     expect(getDailyReadingForDate(new Date(2028, 11, 31, 12)).day).toBe(366);
+  });
+
+  it("provides a compact brief-safe reading summary without the long passage", () => {
+    const reading = getDailyReadingBrief(new Date(2026, 0, 1, 12));
+
+    expect(reading).toEqual({
+      title: "The Twin-Verses",
+      reference: "Dhammapada 1",
+      theme: "Attention and conduct",
+      instruction:
+        "Read from the physical book. Write one line in your notebook.",
+      sourceUrl: "https://www.gutenberg.org/ebooks/2017"
+    });
+    expect(reading).not.toHaveProperty("passage");
   });
 });

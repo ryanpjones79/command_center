@@ -394,6 +394,30 @@ export function getDailyReadingForDate(date: Date) {
   return dailyReadings[dayIndex];
 }
 
+export function getDailyReadingTheme(reading: DailyReading) {
+  switch (reading.tradition) {
+    case "Buddhism":
+      return "Attention and conduct";
+    case "Gita":
+      return "Action without attachment";
+    case "Stoicism":
+      return "What is yours to govern";
+  }
+}
+
+export function getDailyReadingBrief(date: Date) {
+  const reading = getDailyReadingForDate(date);
+
+  return {
+    title: reading.source,
+    reference: reading.title,
+    theme: getDailyReadingTheme(reading),
+    instruction:
+      "Read from the physical book. Write one line in your notebook.",
+    sourceUrl: reading.sourceUrl
+  };
+}
+
 export const dailyReadingSources = [
   "https://www.gutenberg.org/ebooks/2017",
   "https://www.gutenberg.org/ebooks/2388",
