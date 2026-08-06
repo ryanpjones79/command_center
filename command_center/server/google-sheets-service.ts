@@ -5,6 +5,7 @@ export type DailyPlanningInputs = {
   workdayWindow: string;
   dayType: string;
   availableWorkBlocks: string[];
+  scheduledWorkBlocks: string[];
   bestDeepWorkBlock: string;
   topPriorities: string[];
   quickWins: string[];
@@ -16,6 +17,7 @@ export type DailyPlanningInputs = {
   outlookSweep: string;
   gratitude: string;
   relationshipConnection: string;
+  currentSeason: string;
   raw: Record<string, string>;
 };
 
@@ -106,6 +108,7 @@ export async function getTodayPlanningRow(referenceDate = new Date()) {
     workdayWindow: readValue(record, ["workdaywindow"]),
     dayType: readValue(record, ["daytype"]),
     availableWorkBlocks: splitList(readValue(record, ["availableworkblocks"])),
+    scheduledWorkBlocks: [],
     bestDeepWorkBlock: readValue(record, ["bestdeepworkblock"]),
     topPriorities,
     quickWins: splitList(readValue(record, ["quickwins"])),
@@ -117,6 +120,7 @@ export async function getTodayPlanningRow(referenceDate = new Date()) {
     outlookSweep: readValue(record, ["outlooksweep"]),
     gratitude: readValue(record, ["gratitude"]),
     relationshipConnection: readValue(record, ["relationshipconnection"]),
+    currentSeason: "",
     raw: record
   };
 }

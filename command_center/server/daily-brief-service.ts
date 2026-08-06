@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { formatExecutionDurationBucket } from "@/lib/execution-options";
 import {
   DAILY_BRIEF_PROMPT_ENHANCEMENTS,
   DAILY_BRIEF_PROMPT_VERSION
@@ -7,6 +8,7 @@ import { getActionSheetData } from "@/server/execution-service";
 import {
   deriveWorkBlocksFromEvents,
   formatCalendarEventLine,
+  getCalendarDayRange,
   getTodaysCalendarEvents,
   type CalendarEvent,
   type WorkBlock
@@ -16,10 +18,7 @@ import {
   getGoogleGmailClient,
   getMissingGoogleConfigKeys
 } from "@/server/google-client";
-import {
-  getTodayPlanningRow,
-  type DailyPlanningInputs
-} from "@/server/google-sheets-service";
+import { type DailyPlanningInputs } from "@/server/google-sheets-service";
 import { getDailyReadingBrief } from "@/lib/daily-readings";
 import { getDailyBriefNews, type DailyNewsTopic } from "@/server/news-service";
 
@@ -146,6 +145,163 @@ async function resolveDailyBriefUserId(userId?: string) {
   });
 
   return fallbackUser?.id ?? null;
+}
+
+function formatDateKey(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function formatBriefTimeRange(start: Date, end: Date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: getDailyBriefTimeZone(),
+    hour: "numeric",
+    minute: "2-digit"
+  });
+
+  return `${formatter.format(start)}-${formatter.format(end)}`;
+}
+
+function formatTaskForBrief(task: {
+  title: string;
+  estimatedDuration: string | null;
+  project?: { name: string } | null;
+}) {
+  const duration = task.estimatedDuration
+    ? ` (${formatExecutionDurationBucket(task.estimatedDuration)})`
+    : "";
+  const project = task.project?.name ? ` - ${task.project.name}` : "";
+
+  return `${task.title}${duration}${project}`;
+}
+
+async function getRyanOsPlanningInputs(
+  userId: string,
+  referenceDate: Date
+): Promise<DailyPlanningInputs> {
+  const dayRange = getCalendarDayRange(referenceDate);
+  const now = new Date();
+
+  const [dailyPlan, rawTasks, currentSeason] = await Promise.all([
+    prisma.dailyPlan.upsert({
+      where: { userId_date: { userId, date: dayRange.start } },
+      update: {},
+      create: { userId, date: dayRange.start }
+    }),
+    prisma.executionTask.findMany({
+      where: {
+        userId,
+        status: { notIn: ["DONE", "DROPPED"] }
+      },
+      include: { project: true, domain: true },
+      orderBy: [{ pinToTodayUntilDone: "desc" }, { updatedAt: "asc" }]
+    }),
+    prisma.season.findFirst({
+      where: { userId, isCurrent: true },
+      include: {
+        projects: {
+          where: { activeStatus: { notIn: ["COMPLETED", "PARKED"] } },
+          orderBy: [{ weeklyFocus: "asc" }, { priority: "desc" }],
+          take: 5
+        }
+      }
+    })
+  ]);
+
+  const activeTasks = rawTasks.filter(
+    (task) => task.whenBucket !== "PARKING_LOT" && task.whenBucket !== "LATER"
+  );
+  const scheduledToday = activeTasks
+    .filter(
+      (task) =>
+        task.scheduledStart &&
+        task.scheduledEnd &&
+        task.scheduledStart >= dayRange.start &&
+        task.scheduledStart < dayRange.end
+    )
+    .sort(
+      (left, right) =>
+        (left.scheduledStart?.getTime() ?? 0) -
+        (right.scheduledStart?.getTime() ?? 0)
+    );
+  const dueOrFollowUpToday = activeTasks.filter(
+    (task) =>
+      (task.dueDate &&
+        task.dueDate >= dayRange.start &&
+        task.dueDate < dayRange.end) ||
+      (task.followUpDate &&
+        task.followUpDate >= dayRange.start &&
+        task.followUpDate < dayRange.end)
+  );
+  const todayTasks = activeTasks.filter(
+    (task) =>
+      task.whenBucket === "TODAY" ||
+      task.pinToTodayUntilDone ||
+      scheduledToday.some((scheduled) => scheduled.id === task.id)
+  );
+  const topProjectTasks = activeTasks.filter(
+    (task) => task.project?.weeklyFocus === "TOP_3"
+  );
+  const quickWins = activeTasks.filter(
+    (task) =>
+      task.type === "QUICK_WIN" ||
+      task.estimatedDuration === "UNDER_30_MIN"
+  );
+  const quickStartQueue = [
+    ...dueOrFollowUpToday,
+    ...quickWins,
+    ...todayTasks
+  ];
+  const topPriorities = uniqueNonEmpty([
+    dailyPlan.needleMove,
+    ...todayTasks.map(formatTaskForBrief),
+    ...topProjectTasks.map(formatTaskForBrief)
+  ]).slice(0, 3);
+  const scheduledWorkBlocks = scheduledToday
+    .map((task) =>
+      task.scheduledStart && task.scheduledEnd
+        ? `${formatBriefTimeRange(task.scheduledStart, task.scheduledEnd)} -> ${task.title}`
+        : ""
+    )
+    .filter(Boolean)
+    .slice(0, 5);
+  const seasonProjects =
+    currentSeason?.projects.map((project) => project.name).join(", ") ?? "";
+  const notes = uniqueNonEmpty([
+    dailyPlan.shutdownNote
+      ? `Shutdown note from last plan: ${dailyPlan.shutdownNote}`
+      : "",
+    currentSeason
+      ? `Current Season: ${currentSeason.title}${seasonProjects ? ` (${seasonProjects})` : ""}`
+      : ""
+  ]).join(" ");
+
+  return {
+    date: formatDateKey(dayRange.start),
+    workdayWindow: process.env.DAILY_BRIEF_WORKDAY_WINDOW || "8:00 AM-5:00 PM",
+    dayType: scheduledToday.length > 0 ? "RyanOS planned day" : "RyanOS open day",
+    availableWorkBlocks: [],
+    scheduledWorkBlocks,
+    bestDeepWorkBlock: scheduledWorkBlocks[0] ?? "",
+    topPriorities,
+    quickWins: uniqueNonEmpty(quickWins.map(formatTaskForBrief)).slice(0, 2),
+    notes,
+    energy: "",
+    mustBeforeNoon: "",
+    quickStartQueue: uniqueNonEmpty(quickStartQueue.map(formatTaskForBrief)).slice(0, 3),
+    morningLaunch: [
+      "Read the daily passage.",
+      "Reflect in the notebook.",
+      "Confirm Today's Needle Move."
+    ],
+    outlookSweep: "",
+    gratitude: "",
+    relationshipConnection: "",
+    currentSeason: currentSeason?.title ?? "",
+    raw: {
+      source: "RyanOS app",
+      generatedAt: now.toISOString()
+    }
+  };
 }
 
 function sameOrBeforeDay(left: Date, right: Date) {
@@ -401,6 +557,10 @@ function buildWorkBlockLines(
   executionContext: DailyBriefExecutionContext | null,
   referenceDate: Date
 ) {
+  if (planning.scheduledWorkBlocks.length > 0) {
+    return planning.scheduledWorkBlocks.slice(0, 3);
+  }
+
   if (planning.availableWorkBlocks.length > 0) {
     return planning.availableWorkBlocks.slice(0, 3).map((block, index) => {
       const target =
@@ -852,7 +1012,9 @@ export async function getDailyBriefData(
   if (missingInputs.length === 0) {
     const [planningResult, scheduleResult, newsResult, actionSheetResult] =
       await Promise.allSettled([
-        getTodayPlanningRow(referenceDate),
+        resolvedUserId
+          ? getRyanOsPlanningInputs(resolvedUserId, referenceDate)
+          : Promise.resolve(null),
         getTodaysCalendarEvents(referenceDate),
         getDailyBriefNews(3),
         resolvedUserId
@@ -863,13 +1025,11 @@ export async function getDailyBriefData(
     if (planningResult.status === "fulfilled") {
       planning = planningResult.value;
       if (!planning) {
-        missingInputs.push(
-          `No planning row found for ${referenceDate.toISOString().slice(0, 10)} in ${config.sheetName}.`
-        );
+        missingInputs.push("No RyanOS app user found for Daily Brief inputs.");
       }
     } else {
       missingInputs.push(
-        `Planning row read failed: ${planningResult.reason instanceof Error ? planningResult.reason.message : String(planningResult.reason)}`
+        `RyanOS planning read failed: ${planningResult.reason instanceof Error ? planningResult.reason.message : String(planningResult.reason)}`
       );
     }
 
@@ -905,7 +1065,8 @@ export async function getDailyBriefData(
 
   if (planning) {
     workBlocks =
-      planning.availableWorkBlocks.length > 0
+      planning.availableWorkBlocks.length > 0 ||
+      planning.scheduledWorkBlocks.length > 0
         ? []
         : deriveWorkBlocksFromEvents(
             schedule,

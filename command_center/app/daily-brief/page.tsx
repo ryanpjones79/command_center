@@ -231,7 +231,7 @@ export default async function DailyBriefPage({
               Operator Brief
             </h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Live Google Calendar, planning-sheet, and news inputs rendered
+              Live Google Calendar, RyanOS app inputs, and news rendered
               through your Action Daily OS brief rules.
             </p>
           </div>
@@ -276,7 +276,11 @@ export default async function DailyBriefPage({
                 Status: {brief.status === "ok" ? "Ready" : "Missing inputs"}
               </p>
               <p>Calendar events: {brief.schedule.length}</p>
-              <p>Derived work blocks: {brief.workBlocks.length}</p>
+              <p>
+                Work blocks:{" "}
+                {brief.planning?.scheduledWorkBlocks.length ||
+                  brief.workBlocks.length}
+              </p>
               <p>News topics: {brief.newsTopics.length}</p>
               <p>Email target: {brief.emailTo || "Not configured"}</p>
             </CardContent>

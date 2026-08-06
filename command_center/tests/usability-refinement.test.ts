@@ -94,6 +94,20 @@ describe("RyanOS usability refinement", () => {
     expect(page).toContain('title: "Read"');
   });
 
+  it("derives Daily Brief planning from RyanOS instead of Google Sheets", () => {
+    const service = readSource("server", "daily-brief-service.ts");
+    const page = readSource("app", "daily-brief", "page.tsx");
+
+    expect(service).toContain("getRyanOsPlanningInputs");
+    expect(service).toContain("dailyPlan.needleMove");
+    expect(service).toContain("scheduledWorkBlocks");
+    expect(service).toContain("No RyanOS app user found");
+    expect(service).not.toContain("getTodayPlanningRow");
+    expect(service).not.toContain("No planning row found");
+    expect(page).toContain("RyanOS app inputs");
+    expect(page).not.toContain("planning-sheet");
+  });
+
   it("keeps News Watch online-only for print", () => {
     const page = readSource("app", "daily-brief", "page.tsx");
 

@@ -15,9 +15,7 @@ export type GoogleConfigSnapshot = {
 const requiredGoogleKeys = [
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
-  "GOOGLE_REFRESH_TOKEN",
-  "GOOGLE_SHEETS_SPREADSHEET_ID",
-  "GOOGLE_SHEETS_SHEET_NAME"
+  "GOOGLE_REFRESH_TOKEN"
 ] as const;
 
 function readEnv(name: string) {
@@ -49,10 +47,6 @@ export function getMissingGoogleConfigKeys() {
         return !snapshot.clientSecret;
       case "GOOGLE_REFRESH_TOKEN":
         return !snapshot.refreshToken;
-      case "GOOGLE_SHEETS_SPREADSHEET_ID":
-        return !snapshot.spreadsheetId;
-      case "GOOGLE_SHEETS_SHEET_NAME":
-        return !snapshot.sheetName;
       default:
         return false;
     }
