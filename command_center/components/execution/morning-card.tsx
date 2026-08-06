@@ -69,6 +69,7 @@ export function MorningCard({
   ];
   const [isCommitmentDetailsOpen, setIsCommitmentDetailsOpen] = useState(false);
   const [isFocusCheckOpen, setIsFocusCheckOpen] = useState(false);
+  const [selectedArea, setSelectedArea] = useState("");
   const hasActiveFocusCheck =
     buildNeedsRecipient || shouldWarnRykasBacklog || hasEightyPercentItem;
   const needsRecipientDetail = buildNeedsRecipient;
@@ -123,14 +124,25 @@ export function MorningCard({
                 value={presenceIntention}
               />
               <span className="flex flex-wrap gap-1.5 text-[11px] text-slate-500">
-                {relationshipExamples.map((example) => (
-                  <span
-                    className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1"
-                    key={example}
-                  >
-                    {example}
-                  </span>
-                ))}
+                {relationshipExamples.map((example) => {
+                  const isSelected = presenceIntention === example;
+
+                  return (
+                    <button
+                      aria-pressed={isSelected}
+                      className={`min-h-8 rounded-full border px-2.5 py-1 transition focus:outline-none focus:ring-2 focus:ring-emerald-300/25 ${
+                        isSelected
+                          ? "border-emerald-200/60 bg-emerald-300/15 text-emerald-50"
+                          : "border-white/10 bg-white/[0.05] text-slate-400 hover:border-white/20 hover:bg-white/10 hover:text-slate-200"
+                      }`}
+                      key={example}
+                      onClick={() => setPresenceIntention(example)}
+                      type="button"
+                    >
+                      {example}
+                    </button>
+                  );
+                })}
               </span>
             </label>
             <label className="grid gap-2 text-sm text-slate-300">
@@ -207,15 +219,31 @@ export function MorningCard({
                 Where does this work belong?
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                {primaryAreas.map((type) => (
-                  <span
-                    className="rounded-full border border-white/10 bg-white/[0.07] px-3 py-1.5 text-xs text-slate-300"
-                    key={type}
-                  >
-                    {type}
-                  </span>
-                ))}
+                {primaryAreas.map((type) => {
+                  const isSelected = selectedArea === type;
+
+                  return (
+                    <button
+                      aria-pressed={isSelected}
+                      className={`min-h-9 rounded-full border px-3 py-1.5 text-xs transition focus:outline-none focus:ring-2 focus:ring-emerald-300/25 ${
+                        isSelected
+                          ? "border-emerald-200/60 bg-emerald-300/15 text-emerald-50"
+                          : "border-white/10 bg-white/[0.07] text-slate-300 hover:border-white/20 hover:bg-white/10"
+                      }`}
+                      key={type}
+                      onClick={() => setSelectedArea(type)}
+                      type="button"
+                    >
+                      {type}
+                    </button>
+                  );
+                })}
               </div>
+              {selectedArea && (
+                <p className="mt-2 text-xs text-emerald-100/80">
+                  Selected area: {selectedArea}
+                </p>
+              )}
             </div>
 
             {showCommitmentDetails && (

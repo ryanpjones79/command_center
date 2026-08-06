@@ -34,7 +34,7 @@ describe("RyanOS usability refinement", () => {
     expect(morningCard).toContain("setDecisionRule(event.target.value)");
   });
 
-  it("keeps area and status chips display-only while separating their meaning", () => {
+  it("makes relationship and area pills interactive without changing scheduling logic", () => {
     const morningCard = readSource(
       "components",
       "execution",
@@ -47,6 +47,10 @@ describe("RyanOS usability refinement", () => {
     expect(morningCard).toContain(
       'const advancedStatusLabels = ["Needle Move", "Parking"]'
     );
+    expect(morningCard).toContain("setPresenceIntention(example)");
+    expect(morningCard).toContain("setSelectedArea(type)");
+    expect(morningCard).toContain("Selected area:");
+    expect(morningCard).toContain("aria-pressed={isSelected}");
     expect(morningCard).not.toContain("setBlockTypes");
   });
 
