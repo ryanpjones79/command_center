@@ -9,7 +9,7 @@ type MorningLaunchCardProps = {
   onExpand: () => void;
 };
 
-const steps = ["Read", "Write", "Decide"];
+const steps = ["Read", "Reflect", "Decide"];
 
 export function MorningLaunchCard({
   dailyReading,
@@ -96,13 +96,13 @@ export function MorningLaunchCard({
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.07] p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-200/80">
-                  Write
+                  Reflect
                 </p>
                 <p className="mt-3 text-lg font-semibold">
                   Take your notebook.
                 </p>
                 <p className="text-sm text-slate-300">
-                  Write for a few minutes.
+                  Reflect for a few minutes.
                 </p>
                 <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-300">
                   <li>What deserves my attention today?</li>

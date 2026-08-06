@@ -17,6 +17,11 @@ describe("Phase 2A morning launch UI", () => {
     expect(source).toContain("dailyReading.tradition");
     expect(source).toContain("dailyReading.passage");
     expect(source).toContain("dailyReading.prompt");
+    expect(source).toContain("Reflect");
+    expect(source).toContain("Reflect for a few minutes.");
+    expect(source).toContain("What deserves my attention today?");
+    expect(source).toContain("What can I release?");
+    expect(source).toContain("How do I want to show up?");
     expect(source).toContain("Continue to Today");
     expect(source).toContain("Close RyanOS");
     expect(source).not.toContain("save");
