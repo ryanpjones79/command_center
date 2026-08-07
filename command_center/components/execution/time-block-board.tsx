@@ -433,6 +433,8 @@ export function TimeBlockBoard({
     dailyPlan.shutdownNote ?? ""
   );
   const [message, setMessage] = useState("");
+  const [availableAreaFilter, setAvailableAreaFilter] = useState("all");
+  const [availableProjectFilter, setAvailableProjectFilter] = useState("all");
   const [localScheduledTasks, setLocalScheduledTasks] =
     useState(scheduledTasks);
   const [localUnscheduledTasks, setLocalUnscheduledTasks] =
@@ -536,6 +538,63 @@ export function TimeBlockBoard({
     [...localUnscheduledTasks, ...localScheduledTasks].find(
       (task) => task.id === selectedTaskId
     ) ?? null;
+  const availableAreaOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(localUnscheduledTasks.map((task) => task.domain.name))
+      ).sort((left, right) => left.localeCompare(right)),
+    [localUnscheduledTasks]
+  );
+  const availableProjectOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          localUnscheduledTasks
+            .filter(
+              (task) =>
+                availableAreaFilter === "all" ||
+                task.domain.name === availableAreaFilter
+            )
+            .map((task) => task.project?.name ?? "No project")
+        )
+      ).sort((left, right) => {
+        if (left === "No project") return 1;
+        if (right === "No project") return -1;
+        return left.localeCompare(right);
+      }),
+    [availableAreaFilter, localUnscheduledTasks]
+  );
+  const visibleUnscheduledTasks = useMemo(
+    () =>
+      localUnscheduledTasks
+        .filter(
+          (task) =>
+            availableAreaFilter === "all" ||
+            task.domain.name === availableAreaFilter
+        )
+        .filter(
+          (task) =>
+            availableProjectFilter === "all" ||
+            (task.project?.name ?? "No project") === availableProjectFilter
+        )
+        .sort((left, right) => {
+          const leftDue = left.dueDate?.getTime() ?? Number.POSITIVE_INFINITY;
+          const rightDue =
+            right.dueDate?.getTime() ?? Number.POSITIVE_INFINITY;
+
+          if (leftDue !== rightDue) return leftDue - rightDue;
+          return left.title.localeCompare(right.title);
+        }),
+    [availableAreaFilter, availableProjectFilter, localUnscheduledTasks]
+  );
+  useEffect(() => {
+    if (
+      availableProjectFilter !== "all" &&
+      !availableProjectOptions.includes(availableProjectFilter)
+    ) {
+      setAvailableProjectFilter("all");
+    }
+  }, [availableProjectFilter, availableProjectOptions]);
   const agendaItems = useMemo<AgendaItem[]>(() => {
     const calendarItems: AgendaItem[] = timedEvents.map((event) => ({
       id: event.id,
@@ -910,6 +969,55 @@ export function TimeBlockBoard({
     </div>
   ) : null;
 
+  const availableWorkControls = (
+    <div className="mt-3 rounded-2xl border border-border bg-muted/25 p-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="space-y-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Area
+          <select
+            className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm normal-case tracking-normal text-foreground outline-none transition focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+            onChange={(event) => {
+              setAvailableAreaFilter(event.target.value);
+              setAvailableProjectFilter("all");
+            }}
+            value={availableAreaFilter}
+          >
+            <option value="all">All areas</option>
+            {availableAreaOptions.map((area) => (
+              <option key={area} value={area}>
+                {area}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Project
+          <select
+            className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm normal-case tracking-normal text-foreground outline-none transition focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+            onChange={(event) => setAvailableProjectFilter(event.target.value)}
+            value={availableProjectFilter}
+          >
+            <option value="all">All projects</option>
+            {availableProjectOptions.map((project) => (
+              <option key={project} value={project}>
+                {project}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span>
+          Showing {visibleUnscheduledTasks.length} of{" "}
+          {localUnscheduledTasks.length}
+        </span>
+        <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">
+          Sorted by due date
+        </span>
+      </div>
+    </div>
+  );
+
   const mobileTaskQueue = (
     <section className="rounded-[1.75rem] border border-emerald-300/20 bg-slate-950/95 p-4 text-white shadow-[0_18px_70px_rgba(2,6,23,0.36)] lg:hidden">
       <div className="flex items-center justify-between gap-3">
@@ -920,19 +1028,26 @@ export function TimeBlockBoard({
           <h3 className="mt-1 text-lg font-semibold">Choose only what fits</h3>
         </div>
         <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs text-slate-200">
-          {localUnscheduledTasks.length} open
+          {visibleUnscheduledTasks.length} open
         </span>
       </div>
+      {availableWorkControls}
       <div className="mt-3 max-h-[58vh] space-y-2 overflow-y-auto pr-1">
-        {localUnscheduledTasks.length === 0 && (
+        {visibleUnscheduledTasks.length === 0 && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4 text-sm text-slate-300">
-            <p>No available work is waiting.</p>
+            <p>
+              {localUnscheduledTasks.length === 0
+                ? "No available work is waiting."
+                : "No available work matches these filters."}
+            </p>
             <p className="mt-1 text-xs text-slate-400">
-              Stay with the commitments already placed.
+              {localUnscheduledTasks.length === 0
+                ? "Stay with the commitments already placed."
+                : "Clear the filters or stay with the commitments already placed."}
             </p>
           </div>
         )}
-        {localUnscheduledTasks.map((task) => {
+        {visibleUnscheduledTasks.map((task) => {
           const openSlots = findOpenSlots(task, 3);
           return (
             <div
@@ -958,6 +1073,9 @@ export function TimeBlockBoard({
                     <span>{task.domain.name}</span>
                     {task.project && <span>{task.project.name}</span>}
                     <span>{formatExecutionLabel(task.priority)}</span>
+                    {task.dueDate && (
+                      <span>Due {formatShortDate(task.dueDate, timeZone)}</span>
+                    )}
                     {task.estimatedDuration && (
                       <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-slate-100">
                         {formatExecutionDurationBucket(task.estimatedDuration)}
@@ -1345,14 +1463,16 @@ export function TimeBlockBoard({
               <p className="mt-1 text-xs text-muted-foreground">
                 Drop a scheduled task here to move it back to the queue.
               </p>
+              {availableWorkControls}
               <div className="mt-4 space-y-2.5">
-                {localUnscheduledTasks.length === 0 && (
+                {visibleUnscheduledTasks.length === 0 && (
                   <div className="rounded-2xl border border-dashed bg-muted/25 p-4 text-sm leading-6 text-muted-foreground">
-                    No available work is waiting. Stay with the commitments
-                    already placed.
+                    {localUnscheduledTasks.length === 0
+                      ? "No available work is waiting. Stay with the commitments already placed."
+                      : "No available work matches these filters. Clear the filters or stay with the commitments already placed."}
                   </div>
                 )}
-                {localUnscheduledTasks.map((task) => (
+                {visibleUnscheduledTasks.map((task) => (
                   <div
                     aria-label={`Open task details for ${task.title}`}
                     className="cursor-grab rounded-[1.25rem] border bg-background/65 p-3.5 shadow-sm outline-none transition hover:border-primary/40 hover:bg-background focus:ring-2 focus:ring-primary/25 active:cursor-grabbing"
@@ -1379,6 +1499,11 @@ export function TimeBlockBoard({
                       <span>{task.domain.name}</span>
                       {task.project && <span>{task.project.name}</span>}
                       <span>{formatExecutionLabel(task.priority)}</span>
+                      {task.dueDate && (
+                        <span>
+                          Due {formatShortDate(task.dueDate, timeZone)}
+                        </span>
+                      )}
                       {task.estimatedDuration && (
                         <span className="rounded-full border bg-muted/40 px-2 py-0.5 text-foreground">
                           {formatExecutionDurationBucket(
