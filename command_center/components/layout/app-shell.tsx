@@ -18,7 +18,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-shell-container mx-auto min-h-screen max-w-7xl px-3 pb-28 pt-3 sm:px-6 sm:py-6 lg:px-8">
-      <header className="app-shell-header sticky top-0 z-40 mb-4 overflow-hidden rounded-2xl border bg-card/90 p-3 shadow-sm backdrop-blur sm:static sm:mb-6 sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:p-4">
+      <header className="app-shell-header sticky top-0 z-40 mb-4 rounded-2xl border bg-card/90 p-3 shadow-sm backdrop-blur sm:static sm:mb-6 sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:p-4">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground sm:hidden">

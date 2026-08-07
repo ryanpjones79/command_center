@@ -48,7 +48,7 @@ export function WisdomEntryForm() {
           placeholder="Optional practical application."
         />
       </label>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3">
         <label className="grid gap-2 text-sm font-medium">
           Source type
           <select
@@ -78,7 +78,7 @@ export function WisdomEntryForm() {
           </select>
         </label>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3">
         <label className="grid gap-2 text-sm font-medium">
           Source name/title
           <input
@@ -96,7 +96,7 @@ export function WisdomEntryForm() {
           />
         </label>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3">
         <label className="grid gap-2 text-sm font-medium">
           Page/reference
           <input

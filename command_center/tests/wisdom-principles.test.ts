@@ -20,10 +20,18 @@ describe("Wisdom & Principles MVP", () => {
   it("exposes Wisdom from Library and global quick capture", () => {
     const library = readSource("app", "library", "page.tsx");
     const shell = readSource("components", "layout", "app-shell.tsx");
+    const quickCapture = readSource(
+      "components",
+      "library",
+      "wisdom-quick-capture.tsx"
+    );
 
     expect(library).toContain("Wisdom & Principles");
     expect(library).toContain("/library/wisdom");
     expect(shell).toContain("WisdomQuickCapture");
+    expect(shell).not.toContain("overflow-hidden rounded-2xl");
+    expect(quickCapture).toContain("hasSubmitted");
+    expect(quickCapture).toContain("z-[100]");
   });
 
   it("renders Today Principle and supports resurfacing actions", () => {

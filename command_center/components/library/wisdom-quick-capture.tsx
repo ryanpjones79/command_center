@@ -7,16 +7,18 @@ import { wisdomSourceTypes } from "@/lib/wisdom-options";
 
 export function WisdomQuickCapture() {
   const [open, setOpen] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [state, formAction, pending] = useActionState(
     quickCaptureWisdomAction,
     { ok: true, error: "" }
   );
 
   useEffect(() => {
-    if (state.ok && !pending) {
+    if (hasSubmitted && state.ok && !pending) {
       setOpen(false);
+      setHasSubmitted(false);
     }
-  }, [pending, state.ok]);
+  }, [hasSubmitted, pending, state.ok]);
 
   return (
     <>
@@ -31,12 +33,13 @@ export function WisdomQuickCapture() {
       {open && (
         <div
           aria-modal="true"
-          className="fixed inset-0 z-[80] flex items-end bg-black/55 p-3 backdrop-blur-sm sm:items-center sm:justify-center"
+          className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-black/70 p-3 backdrop-blur-sm"
           role="dialog"
         >
           <form
             action={formAction}
-            className="w-full max-w-lg rounded-[1.5rem] border bg-card p-5 shadow-2xl"
+            className="my-6 w-full max-w-lg rounded-[1.5rem] border border-white/15 bg-slate-950 p-5 text-white shadow-2xl"
+            onSubmit={() => setHasSubmitted(true)}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -50,8 +53,11 @@ export function WisdomQuickCapture() {
               </div>
               <button
                 aria-label="Close wisdom capture"
-                className="rounded-full border px-3 py-1 text-sm"
-                onClick={() => setOpen(false)}
+                className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-sm text-white"
+                onClick={() => {
+                  setHasSubmitted(false);
+                  setOpen(false);
+                }}
                 type="button"
               >
                 Close
@@ -61,7 +67,7 @@ export function WisdomQuickCapture() {
             <label className="mt-5 grid gap-2 text-sm font-medium">
               Idea / nugget
               <textarea
-                className="min-h-32 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="min-h-32 rounded-md border border-white/15 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-slate-500"
                 name="idea"
                 placeholder="What is worth remembering?"
                 required
@@ -72,7 +78,7 @@ export function WisdomQuickCapture() {
               <label className="grid gap-2 text-sm font-medium">
                 Source type
                 <select
-                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  className="h-10 rounded-md border border-white/15 bg-slate-900 px-3 text-sm text-white"
                   defaultValue="other"
                   name="sourceType"
                 >
@@ -86,7 +92,7 @@ export function WisdomQuickCapture() {
               <label className="grid gap-2 text-sm font-medium">
                 Source
                 <input
-                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  className="h-10 rounded-md border border-white/15 bg-slate-900 px-3 text-sm text-white placeholder:text-slate-500"
                   name="sourceName"
                   placeholder="Book, podcast, person"
                 />
@@ -96,7 +102,7 @@ export function WisdomQuickCapture() {
             <label className="mt-4 grid gap-2 text-sm font-medium">
               Photo/reference URL
               <input
-                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-10 rounded-md border border-white/15 bg-slate-900 px-3 text-sm text-white placeholder:text-slate-500"
                 name="photoUrl"
                 placeholder="Optional image URL or file reference"
               />
@@ -109,7 +115,10 @@ export function WisdomQuickCapture() {
             <div className="mt-5 flex justify-end gap-2">
               <Button
                 disabled={pending}
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setHasSubmitted(false);
+                  setOpen(false);
+                }}
                 type="button"
                 variant="outline"
               >
