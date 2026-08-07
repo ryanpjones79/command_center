@@ -31,7 +31,9 @@ describe("Wisdom & Principles MVP", () => {
     expect(shell).toContain("WisdomQuickCapture");
     expect(shell).not.toContain("overflow-hidden rounded-2xl");
     expect(quickCapture).toContain("hasSubmitted");
-    expect(quickCapture).toContain("z-[100]");
+    expect(quickCapture).toContain("createPortal");
+    expect(quickCapture).toContain("document.body");
+    expect(quickCapture).toContain("z-[1000]");
   });
 
   it("renders Today Principle and supports resurfacing actions", () => {
