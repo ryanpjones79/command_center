@@ -5,6 +5,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 const workingNow = [
   {
+    title: "Wisdom & Principles",
+    description: "Capture distilled ideas and resurface active principles.",
+    href: "/library/wisdom"
+  },
+  {
     title: "Season Archive",
     description: "See the current season and completed seasons by year.",
     href: "/library/seasons"
@@ -31,7 +36,7 @@ const workingNow = [
   }
 ];
 
-const comingLater = ["Reading Paths", "Principles", "Parked Ideas"];
+const comingLater = ["Reading Paths", "Parked Ideas"];
 
 export default function LibraryPage() {
   return (

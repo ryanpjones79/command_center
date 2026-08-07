@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Settings } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { logoutAction } from "@/app/actions";
+import { WisdomQuickCapture } from "@/components/library/wisdom-quick-capture";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -53,6 +54,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
+          <WisdomQuickCapture />
           <Button
             aria-label="Settings"
             className="h-9 w-9 shrink-0 px-0"

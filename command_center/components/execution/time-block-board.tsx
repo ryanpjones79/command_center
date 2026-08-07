@@ -23,6 +23,7 @@ import { MorningCard } from "./morning-card";
 import { MorningLaunchCard } from "./morning-launch-card";
 import { RyanOsBlockPalette } from "./ryanos-block-palette";
 import { ShutdownPanel } from "./shutdown-panel";
+import { TodayPrincipleCard } from "./today-principle-card";
 import { TimeBlockGrid } from "./time-block-grid";
 
 type BoardCalendarEvent = {
@@ -95,6 +96,20 @@ type TimeBlockBoardProps = {
   rykasDay: {
     backlogAfter: number;
   };
+  todaysPrinciple: {
+    id: string;
+    title: string;
+    idea: string;
+    takeaway: string | null;
+    application: string | null;
+    category: string;
+    sourceType: string;
+    sourceName: string | null;
+    favorite: boolean;
+    active: boolean;
+    tags: string | null;
+    reflections: { id: string; text: string; createdAt: Date }[];
+  } | null;
   scheduledTasks: BoardTask[];
   timeZone: string;
   unscheduledTasks: BoardTask[];
@@ -391,6 +406,7 @@ export function TimeBlockBoard({
   dailyPlan,
   date,
   rykasDay,
+  todaysPrinciple,
   scheduledTasks,
   timeZone,
   unscheduledTasks
@@ -1017,6 +1033,8 @@ export function TimeBlockBoard({
         onComplete={() => setIsMorningLaunchComplete(true)}
         onExpand={() => setIsMorningLaunchComplete(false)}
       />
+
+      <TodayPrincipleCard principle={todaysPrinciple} />
 
       <div
         className={`space-y-4 transition duration-300 ease-out ${

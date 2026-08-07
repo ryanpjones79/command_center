@@ -108,6 +108,8 @@ model User {
   weeklyResets      WeeklyReset[]
   notebooks         Notebook[]
   notebookEntries   NotebookEntryIndex[]
+  wisdomEntries     WisdomEntry[]
+  wisdomReflections WisdomReflection[]
   seasons           Season[]
 }
 
@@ -439,12 +441,61 @@ model NotebookEntryIndex {
   notebook   Notebook          @relation(fields: [notebookId], references: [id], onDelete: Cascade)
   domain     ExecutionDomain?  @relation(fields: [domainId], references: [id], onDelete: SetNull)
   project    ExecutionProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  wisdomEntries WisdomEntry[]
 
   @@index([userId, date])
   @@index([userId, entryType])
   @@index([notebookId, pageNumber])
   @@index([domainId])
   @@index([projectId])
+}
+
+model WisdomEntry {
+  id              String             @id @default(cuid())
+  userId          String
+  title           String
+  idea            String
+  takeaway        String?
+  application     String?
+  sourceType      String             @default("other")
+  sourceName      String?
+  author          String?
+  reference       String?
+  category        String             @default("Other")
+  capturedAt      DateTime           @default(now())
+  favorite        Boolean            @default(false)
+  active          Boolean            @default(false)
+  tags            String?
+  photoUrl        String?
+  status          String             @default("library")
+  notebookEntryId String?
+  lastShownAt     DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notebookEntry   NotebookEntryIndex? @relation(fields: [notebookEntryId], references: [id], onDelete: SetNull)
+  reflections     WisdomReflection[]
+
+  @@index([userId, status, active, favorite])
+  @@index([userId, category])
+  @@index([userId, sourceType])
+  @@index([userId, lastShownAt])
+  @@index([notebookEntryId])
+}
+
+model WisdomReflection {
+  id        String      @id @default(cuid())
+  userId    String
+  wisdomId  String
+  date      DateTime    @default(now())
+  text      String
+  createdAt DateTime    @default(now())
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wisdom    WisdomEntry @relation(fields: [wisdomId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([wisdomId, createdAt])
 }
 
 model DailyBriefDispatch {

@@ -3,6 +3,7 @@ import { TimeBlockBoard } from "@/components/execution/time-block-board";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/session";
 import { getTimeBlockPlannerData } from "@/server/execution-service";
+import { getTodaysPrinciple } from "@/server/wisdom-service";
 
 type TimeBlocksPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -34,7 +35,10 @@ export default async function TimeBlocksPage({
   const user = await requireUser();
   const params = await searchParams;
   const selectedDate = dateFromParam(firstParam(params.date));
-  const planner = await getTimeBlockPlannerData(user.id, selectedDate);
+  const [planner, todaysPrinciple] = await Promise.all([
+    getTimeBlockPlannerData(user.id, selectedDate),
+    getTodaysPrinciple(user.id)
+  ]);
 
   return (
     <main className="space-y-5 sm:space-y-6">
@@ -93,6 +97,7 @@ export default async function TimeBlocksPage({
         dailyPlan={planner.dailyPlan}
         date={planner.date}
         rykasDay={planner.rykasDay}
+        todaysPrinciple={todaysPrinciple}
         scheduledTasks={planner.scheduledTasks}
         timeZone={planner.timeZone}
         unscheduledTasks={planner.unscheduledTasks}

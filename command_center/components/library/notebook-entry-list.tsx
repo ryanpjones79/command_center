@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { promoteNotebookEntryToWisdomAction } from "@/app/library/wisdom/actions";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatNotebookEntryType } from "@/lib/notebook-options";
 import { formatNotebookTitle } from "@/lib/notebook-format";
@@ -87,6 +89,13 @@ export function NotebookEntryList({ entries }: { entries: NotebookEntryListItem[
               <p className="mt-1 text-sm text-muted-foreground">{entry.summary}</p>
             </div>
           )}
+          <div className="mt-4 flex justify-end">
+            <form action={promoteNotebookEntryToWisdomAction.bind(null, entry.id)}>
+              <Button size="sm" type="submit" variant="outline">
+                Promote to Wisdom
+              </Button>
+            </form>
+          </div>
         </article>
       ))}
     </div>
