@@ -22,6 +22,8 @@ describe("Phase 2A morning launch UI", () => {
     expect(source).toContain("What deserves my attention today?");
     expect(source).toContain("What can I release?");
     expect(source).toContain("How do I want to show up?");
+    expect(source).toContain('href="/daily-brief"');
+    expect(source).toContain("Open Daily Brief");
     expect(source).toContain("Continue to Today");
     expect(source).toContain("Close RyanOS");
     expect(source).not.toContain("save");

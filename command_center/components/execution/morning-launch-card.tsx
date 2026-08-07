@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import type { DailyReading } from "@/lib/daily-readings";
 
 type MorningLaunchCardProps = {
@@ -42,28 +44,44 @@ export function MorningLaunchCard({
                 ))}
               </div>
             </div>
-            <button
-              aria-label="Expand Morning Compass"
-              className="min-h-10 shrink-0 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
-              onClick={onExpand}
-              type="button"
-            >
-              Expand
-            </button>
+            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+              <Link
+                className="inline-flex min-h-10 items-center rounded-full border border-emerald-200/25 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-300/15 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
+                href="/daily-brief"
+              >
+                Daily Brief
+              </Link>
+              <button
+                aria-label="Expand Morning Compass"
+                className="min-h-10 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
+                onClick={onExpand}
+                type="button"
+              >
+                Expand
+              </button>
+            </div>
           </div>
         ) : (
           <div className="grid gap-5">
-            <div className="max-w-2xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-200/80">
-                Morning Compass
-              </p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-tight">
-                Find the day before you fill it.
-              </h2>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">
-                The notebook is your first workspace. RyanOS opens after the day
-                has a shape.
-              </p>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-2xl">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-200/80">
+                  Morning Compass
+                </p>
+                <h2 className="mt-2 text-3xl font-semibold tracking-tight">
+                  Find the day before you fill it.
+                </h2>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-300">
+                  The notebook is your first workspace. RyanOS opens after the day
+                  has a shape.
+                </p>
+              </div>
+              <Link
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-2xl border border-emerald-200/25 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-300/15 focus:outline-none focus:ring-2 focus:ring-emerald-300/30 sm:w-auto"
+                href="/daily-brief"
+              >
+                Open Daily Brief
+              </Link>
             </div>
 
             <div className="grid gap-3 lg:grid-cols-3">
