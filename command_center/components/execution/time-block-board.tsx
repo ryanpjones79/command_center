@@ -21,7 +21,6 @@ import { CurrentSeasonCard } from "./current-season-card";
 import { HowRyanOSWorksCard } from "./how-ryanos-works-card";
 import { MorningCard } from "./morning-card";
 import { MorningLaunchCard } from "./morning-launch-card";
-import { RyanOsBlockPalette } from "./ryanos-block-palette";
 import { ShutdownPanel } from "./shutdown-panel";
 import { TodayPrincipleCard } from "./today-principle-card";
 import { TimeBlockGrid } from "./time-block-grid";
@@ -391,13 +390,6 @@ function priorityTone(priority: string) {
     default:
       return "border-emerald-400/35 bg-emerald-500/12 text-emerald-100";
   }
-}
-
-function minutesLabel(minutes: number) {
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
 export function TimeBlockBoard({
@@ -1125,20 +1117,6 @@ export function TimeBlockBoard({
       needleMove
     ) && !buildRecipient.trim();
 
-  const ryanOsBlocksPanel = (
-    <RyanOsBlockPalette
-      findOpenSlotsForMinutes={findOpenSlotsForMinutes}
-      formatClock={formatClock}
-      isPending={isPending}
-      minutesLabel={minutesLabel}
-      pendingTaskId={pendingTaskId}
-      scheduleRyanOsBlock={scheduleRyanOsBlock}
-      setDraggedTaskId={setDraggedTaskId}
-      templates={ryanOsBlockTemplates}
-      timeZone={timeZone}
-    />
-  );
-
   return (
     <div className="space-y-4">
       {taskDetailPanel}
@@ -1252,8 +1230,6 @@ export function TimeBlockBoard({
         </section>
 
         <div className="grid gap-4 lg:hidden">
-          {ryanOsBlocksPanel}
-
           {contextEvents.length > 0 && (
             <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3">
@@ -1441,7 +1417,6 @@ export function TimeBlockBoard({
           </section>
 
           <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
-            {ryanOsBlocksPanel}
             <section
               className="rounded-2xl border bg-card p-4 shadow-sm"
               onDragOver={(event) => event.preventDefault()}

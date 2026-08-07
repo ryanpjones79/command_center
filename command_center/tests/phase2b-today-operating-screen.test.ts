@@ -15,7 +15,6 @@ describe("Phase 2B Today operating screen", () => {
     expect(boardSource).toContain("<MorningLaunchCard");
     expect(boardSource).toContain("<MorningCard");
     expect(boardSource).toContain("<HowRyanOSWorksCard");
-    expect(boardSource).toContain("<RyanOsBlockPalette");
     expect(boardSource).toContain("<TimeBlockGrid");
     expect(boardSource).toContain("<ShutdownPanel");
     expect(boardSource).not.toContain("schema.prisma");
@@ -39,12 +38,9 @@ describe("Phase 2B Today operating screen", () => {
   });
 
   it("uses calmer operating language for commitments and work supply", () => {
-    const paletteSource = readComponent("ryanos-block-palette.tsx");
     const boardSource = readComponent("time-block-board.tsx");
     const shutdownSource = readComponent("shutdown-panel.tsx");
 
-    expect(paletteSource).toContain("Today's commitments");
-    expect(paletteSource).toContain("Place what keeps the day honest");
     expect(boardSource).toContain("Available Work");
     expect(boardSource).toContain("No available work is waiting.");
     expect(boardSource).toContain("Calendar + placed work");
