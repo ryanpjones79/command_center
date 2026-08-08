@@ -240,31 +240,33 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
             <CardContent>
               <form
                 action={bulkUpdateExecutionTasksAction}
-                className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_minmax(180px,220px)_minmax(180px,220px)_auto]"
+                className="space-y-4"
                 id="bulk-task-update-form"
               >
                 <input name="returnTo" type="hidden" value={returnTo} />
-                <p className="text-sm leading-6 text-muted-foreground md:col-span-2 xl:col-span-1">
+                <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
                   Select tasks below, then move, pin, assign, or push follow-up dates in one pass. Parking Lot is a bucket, not a separate screen.
                 </p>
-                <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="MOVE_THIS_WEEK" name="bulkAction">
-                  {bulkActionOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="" name="targetProjectId">
-                  <option value="">No project</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-                <SubmitButton className="h-9 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground md:w-fit xl:w-auto" pendingLabel="Applying..." type="submit">
-                  Apply to Selected
-                </SubmitButton>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(180px,220px)_minmax(180px,220px)_auto] xl:items-center xl:justify-start">
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" defaultValue="MOVE_THIS_WEEK" name="bulkAction">
+                    {bulkActionOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" defaultValue="" name="targetProjectId">
+                    <option value="">No project</option>
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                  <SubmitButton className="h-9 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground sm:col-span-2 sm:w-fit xl:col-span-1" pendingLabel="Applying..." type="submit">
+                    Apply to Selected
+                  </SubmitButton>
+                </div>
               </form>
             </CardContent>
           </Card>
