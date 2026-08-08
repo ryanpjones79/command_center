@@ -70,7 +70,16 @@ describe("Phase 4 Guided Weekly Reset", () => {
     const serialized = serializeWeeklyResetOutcomes({
       topThreeProjectIds: ["project_1", "project_2"],
       peopleIntentions: ["Daughter", "Customer"],
-      staleDecisions: { "task:1": "Park" }
+      staleDecisions: { "task:1": "Park" },
+      healthMetrics: {
+        belowCaloriesDays: 5,
+        walkingDays: 4,
+        workoutDays: 3
+      },
+      calendarPrep: {
+        cchcsImported: true,
+        kidsEventsAdded: false
+      }
     });
     const parsed = parseWeeklyResetOutcomes(serialized);
 
@@ -79,6 +88,8 @@ describe("Phase 4 Guided Weekly Reset", () => {
     expect(parsed.topThreeProjectIds).toEqual(["project_1", "project_2"]);
     expect(parsed.peopleIntentions).toEqual(["Daughter", "Customer"]);
     expect(parsed.staleDecisions?.["task:1"]).toBe("Park");
+    expect(parsed.healthMetrics?.belowCaloriesDays).toBe(5);
+    expect(parsed.calendarPrep?.cchcsImported).toBe(true);
   });
 
   it("offers the approved stale-work decisions without punitive language", () => {
@@ -106,6 +117,10 @@ describe("Phase 4 Guided Weekly Reset", () => {
     expect(weeklyPage).toContain("Take your notebook.");
     expect(weeklyPage).toContain("Process your notebook.");
     expect(weeklyPage).toContain("Project Control Foundation");
+    expect(weeklyPage).toContain("Close Last Week");
+    expect(weeklyPage).toContain("Prepare Next Week");
+    expect(weeklyPage).toContain("Import CCHCS calendar to Google Calendar");
+    expect(weeklyPage).toContain("Add kids events for the week to Google Calendar");
     expect(weeklyPage).toContain("Weekly Reset Complete");
     expect(projectControl).toContain("Top 3 Projects");
     expect(projectControl).toContain("Missing Next Action");
@@ -118,6 +133,8 @@ describe("Phase 4 Guided Weekly Reset", () => {
 
     expect(weeklyPage).toContain("Weekly Guide");
     expect(weeklyPage).toContain("Important Meetings");
+    expect(weeklyPage).toContain("Health Signals");
+    expect(weeklyPage).toContain("Calendar Prep");
     expect(weeklyPage).toContain("Notebook Reminder");
     expect(weeklyPage).toContain("Relationship Intention");
     expect(weeklyPage).toContain("Needle Move Reminder");

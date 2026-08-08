@@ -25,6 +25,15 @@ export type WeeklyResetOutcomes = {
   topThreeProjectIds?: string[];
   peopleIntentions?: string[];
   staleDecisions?: Record<string, StaleDecision>;
+  healthMetrics?: {
+    belowCaloriesDays?: number;
+    walkingDays?: number;
+    workoutDays?: number;
+  };
+  calendarPrep?: {
+    cchcsImported?: boolean;
+    kidsEventsAdded?: boolean;
+  };
 };
 
 export function startOfWeek(value: Date) {

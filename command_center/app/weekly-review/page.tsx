@@ -197,6 +197,8 @@ export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPag
     data.review.projects.filter((project) => project.weeklyFocus === "TOP_3").map((project) => project.id);
   const peopleValue = data.outcomes.peopleIntentions?.join("\n") ?? "";
   const currentSeason = data.workspace.seasons.find((season) => season.isCurrent) ?? null;
+  const healthMetrics = data.outcomes.healthMetrics ?? {};
+  const calendarPrep = data.outcomes.calendarPrep ?? {};
 
   return (
     <main className="space-y-6">
@@ -453,6 +455,81 @@ export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPag
                 </CardContent>
               </Card>
 
+              <Card className="bg-background/35">
+                <CardHeader>
+                  <CardTitle className="text-base">Close Last Week</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Track signals, not perfection. Use 0-7 for how many days each one happened.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="grid gap-1.5 text-sm font-medium">
+                      Below calories
+                      <input
+                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                        defaultValue={healthMetrics.belowCaloriesDays ?? ""}
+                        max={7}
+                        min={0}
+                        name="belowCaloriesDays"
+                        placeholder="0-7"
+                        type="number"
+                      />
+                    </label>
+                    <label className="grid gap-1.5 text-sm font-medium">
+                      Walked
+                      <input
+                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                        defaultValue={healthMetrics.walkingDays ?? ""}
+                        max={7}
+                        min={0}
+                        name="walkingDays"
+                        placeholder="0-7"
+                        type="number"
+                      />
+                    </label>
+                    <label className="grid gap-1.5 text-sm font-medium">
+                      Worked out
+                      <input
+                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                        defaultValue={healthMetrics.workoutDays ?? ""}
+                        max={7}
+                        min={0}
+                        name="workoutDays"
+                        placeholder="0-7"
+                        type="number"
+                      />
+                    </label>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-background/35">
+                <CardHeader>
+                  <CardTitle className="text-base">Prepare Next Week</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex min-h-12 items-center gap-3 rounded-xl border bg-card/70 p-3 text-sm">
+                    <input
+                      className="h-4 w-4"
+                      defaultChecked={calendarPrep.cchcsImported}
+                      name="cchcsImported"
+                      type="checkbox"
+                    />
+                    <span>Import CCHCS calendar to Google Calendar</span>
+                  </label>
+                  <label className="flex min-h-12 items-center gap-3 rounded-xl border bg-card/70 p-3 text-sm">
+                    <input
+                      className="h-4 w-4"
+                      defaultChecked={calendarPrep.kidsEventsAdded}
+                      name="kidsEventsAdded"
+                      type="checkbox"
+                    />
+                    <span>Add kids events for the week to Google Calendar</span>
+                  </label>
+                </CardContent>
+              </Card>
+
               <SubmitButton className="w-fit" pendingLabel="Saving..." type="submit">
                 Save Next Week
               </SubmitButton>
@@ -532,6 +609,8 @@ function WeeklyGuide({
     (data.outcomes.topThreeProjectIds ?? data.review.projects.filter((candidate) => candidate.weeklyFocus === "TOP_3").map((candidate) => candidate.id)).includes(project.id)
   );
   const people = data.outcomes.peopleIntentions ?? [];
+  const healthMetrics = data.outcomes.healthMetrics ?? {};
+  const calendarPrep = data.outcomes.calendarPrep ?? {};
 
   return (
     <div className="space-y-4 text-sm">
@@ -565,6 +644,19 @@ function WeeklyGuide({
         </ul>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Health Signals</p>
+          <p className="mt-1">
+            Calories {healthMetrics.belowCaloriesDays ?? 0}/7 · Walk {healthMetrics.walkingDays ?? 0}/7 · Workout {healthMetrics.workoutDays ?? 0}/7
+          </p>
+        </div>
+        <div className="rounded-xl border p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Calendar Prep</p>
+          <ul className="mt-1 space-y-1">
+            <li>[{calendarPrep.cchcsImported ? "x" : " "}] Import CCHCS calendar to Google Calendar</li>
+            <li>[{calendarPrep.kidsEventsAdded ? "x" : " "}] Add kids events for the week to Google Calendar</li>
+          </ul>
+        </div>
         <div className="rounded-xl border p-3">
           <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Important Meetings</p>
           <p className="mt-1">Review calendar before Monday planning.</p>

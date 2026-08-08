@@ -31,6 +31,12 @@ function parsePeople(value: FormDataEntryValue | null) {
     .slice(0, 12);
 }
 
+function parseWeekCount(value: FormDataEntryValue | null) {
+  const count = Number.parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(count)) return 0;
+  return Math.max(0, Math.min(7, count));
+}
+
 function normalizeDecision(value: string): StaleDecision {
   const decision = staleDecisionOptions.find((option) => option === value);
   return decision ?? "Return to Project";
@@ -131,7 +137,18 @@ export async function saveNextWeekAction(formData: FormData) {
     })
   ]);
 
-  await updateWeeklyResetOutcomes(user.id, { topThreeProjectIds });
+  await updateWeeklyResetOutcomes(user.id, {
+    topThreeProjectIds,
+    healthMetrics: {
+      belowCaloriesDays: parseWeekCount(formData.get("belowCaloriesDays")),
+      walkingDays: parseWeekCount(formData.get("walkingDays")),
+      workoutDays: parseWeekCount(formData.get("workoutDays"))
+    },
+    calendarPrep: {
+      cchcsImported: formData.get("cchcsImported") === "on",
+      kidsEventsAdded: formData.get("kidsEventsAdded") === "on"
+    }
+  });
   revalidateWeeklyReset();
   redirect(safeStep("people"));
 }
