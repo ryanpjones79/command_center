@@ -49,14 +49,14 @@ export default function LibraryPage() {
         </p>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid items-stretch gap-4 md:grid-cols-3">
         {workingNow.map((destination) => (
-          <Card className="bg-card/90" key={destination.href}>
+          <Card className="flex h-full flex-col bg-card/90" key={destination.href}>
             <CardHeader>
               <CardTitle>{destination.title}</CardTitle>
               <CardDescription>{destination.description}</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto">
               <Button asChild className="w-full">
                 <Link href={destination.href}>Open {destination.title}</Link>
               </Button>

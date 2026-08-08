@@ -12,6 +12,11 @@ const primaryDestinations = [
     title: "Projects",
     description: "Maintain project status, next actions, and active focus.",
     href: "/projects"
+  },
+  {
+    title: "Areas",
+    description: "Review the life and work areas that organize commitments.",
+    href: "/work/areas"
   }
 ];
 
@@ -32,14 +37,14 @@ export default function WorkPage() {
         </p>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2">
+      <section className="grid items-stretch gap-4 md:grid-cols-3">
         {primaryDestinations.map((destination) => (
-          <Card className="bg-card/90" key={destination.href}>
+          <Card className="flex h-full flex-col bg-card/90" key={destination.href}>
             <CardHeader>
               <CardTitle>{destination.title}</CardTitle>
               <CardDescription>{destination.description}</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto">
               <Button asChild className="w-full">
                 <Link href={destination.href}>Open {destination.title}</Link>
               </Button>
