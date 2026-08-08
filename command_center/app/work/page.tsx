@@ -12,11 +12,6 @@ const primaryDestinations = [
     title: "Projects",
     description: "Maintain project status, next actions, and active focus.",
     href: "/projects"
-  },
-  {
-    title: "Areas",
-    description: "Review the life and work areas that organize commitments.",
-    href: "/work/areas"
   }
 ];
 
@@ -37,7 +32,7 @@ export default function WorkPage() {
         </p>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid gap-4 md:grid-cols-2">
         {primaryDestinations.map((destination) => (
           <Card className="bg-card/90" key={destination.href}>
             <CardHeader>

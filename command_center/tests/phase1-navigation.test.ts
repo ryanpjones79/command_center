@@ -71,7 +71,7 @@ describe("Phase 1 navigation information architecture", () => {
     expect(source).toContain("Maintain commitments without turning maintenance into the day.");
     expect(source).toContain('href: "/tasks"');
     expect(source).toContain('href: "/projects"');
-    expect(source).toContain('href: "/work/areas"');
+    expect(source).not.toContain('href: "/work/areas"');
   });
 
   it("renders Review landing with Weekly Reset and Daily Brief links", () => {
