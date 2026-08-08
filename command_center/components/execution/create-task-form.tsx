@@ -26,6 +26,8 @@ type ProjectOption = {
   domainId: string;
 };
 
+const selectClass = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm";
+
 function Field({
   label,
   help,
@@ -62,7 +64,7 @@ export function CreateTaskForm({
     <form action={formAction} className="space-y-4">
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Area">
-          <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={defaultDomainId} name="domainId">
+          <select className={selectClass} defaultValue={defaultDomainId} name="domainId">
             {domains.map((domain) => (
               <option key={domain.id} value={domain.id}>
                 {domain.name}
@@ -71,7 +73,7 @@ export function CreateTaskForm({
           </select>
         </Field>
         <Field label="Project">
-          <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="" name="projectId">
+          <select className={selectClass} defaultValue="" name="projectId">
             <option value="">No project</option>
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
@@ -86,7 +88,7 @@ export function CreateTaskForm({
       </Field>
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Task type">
-          <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="ACTION" name="type">
+          <select className={selectClass} defaultValue="ACTION" name="type">
             {executionSelectOptions.taskTypes.map((value) => (
               <option key={value} value={value}>
                 {formatExecutionLabel(value)}
@@ -96,7 +98,7 @@ export function CreateTaskForm({
         </Field>
         <Field label="Status">
           <select
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            className={selectClass}
             defaultValue="NOT_STARTED"
             name="status"
           >
@@ -108,7 +110,7 @@ export function CreateTaskForm({
           </select>
         </Field>
         <Field label="Priority">
-          <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="MEDIUM" name="priority">
+          <select className={selectClass} defaultValue="MEDIUM" name="priority">
             {executionSelectOptions.priorities.map((value) => (
               <option key={value} value={value}>
                 {formatExecutionLabel(value)}
@@ -117,10 +119,10 @@ export function CreateTaskForm({
           </select>
         </Field>
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3">
         <Field label="Planning bucket" help="Where this should live until you schedule or finish it.">
           <select
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            className={selectClass}
             defaultValue="TODAY"
             name="whenBucket"
           >
@@ -139,7 +141,7 @@ export function CreateTaskForm({
         </Field>
       </div>
       <Field label="Estimated time" help="<30 min tasks can be suggested as quick wins.">
-        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="" name="estimatedDuration">
+        <select className={selectClass} defaultValue="" name="estimatedDuration">
           <option value="">No estimate yet</option>
           {executionSelectOptions.durationBuckets.map((value) => (
             <option key={value} value={value}>
@@ -148,9 +150,9 @@ export function CreateTaskForm({
           ))}
         </select>
       </Field>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3">
         <Field label="Repeats" help="Creates the next copy when you complete this one.">
-          <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue="NONE" name="recurrenceFrequency">
+          <select className={selectClass} defaultValue="NONE" name="recurrenceFrequency">
             {executionSelectOptions.recurrenceFrequencies.map((value) => (
               <option key={value} value={value}>
                 {formatRecurrenceFrequency(value)}
@@ -187,7 +189,7 @@ export function CreateTaskForm({
             ))}
         </div>
       </Field>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3">
         <Field label="Waiting on" help="Person, team, or dependency blocking the next move.">
           <Input name="waitingOn" placeholder="Name or dependency" />
         </Field>

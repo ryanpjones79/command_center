@@ -475,7 +475,11 @@ export async function getTaskMaintenanceData(
         ...(filters?.whenBucket
           ? { whenBucket: filters.whenBucket as never }
           : {}),
-        ...(filters?.status ? { status: filters.status as never } : {}),
+        ...(filters?.status && filters.status !== "ALL"
+          ? { status: filters.status as never }
+          : filters?.status === "ALL"
+            ? {}
+            : { status: { notIn: ["DONE", "DROPPED"] } }),
         ...(filters?.domainId ? { domainId: filters.domainId } : {}),
         ...(filters?.projectId ? { projectId: filters.projectId } : {}),
         ...(filters?.priority ? { priority: filters.priority as never } : {}),

@@ -43,7 +43,7 @@ const bulkActionOptions = [
   { value: "ASSIGN_PROJECT", label: "Assign project" }
 ] as const;
 
-const taskEditFieldClass = "h-9 rounded-md border border-input bg-background px-3 text-sm";
+const taskEditFieldClass = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm";
 
 function TaskEditField({
   label,
@@ -76,6 +76,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const bulkUpdated = typeof params.bulkUpdated === "string" ? Number.parseInt(params.bulkUpdated, 10) : 0;
   const bulkAction = typeof params.bulkAction === "string" ? params.bulkAction : undefined;
   const bulkError = typeof params.bulkError === "string" ? params.bulkError : undefined;
+  const isDefaultActiveView = !status || status === "";
   const currentFilters = new URLSearchParams();
   if (q) currentFilters.set("q", q);
   if (whenBucket) currentFilters.set("whenBucket", whenBucket);
@@ -106,7 +107,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
         <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Full Task List</p>
         <h2 className="text-4xl font-semibold tracking-tight">Task Maintenance</h2>
         <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          This is the maintenance surface. Use it to triage by project, move work between buckets, and keep the Action Sheet clean.
+          This is the maintenance surface. Completed tasks are stored as history and hidden by default.
         </p>
       </section>
 
@@ -200,7 +201,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                   defaultValue={status ?? ""}
                   name="status"
                 >
-                  <option value="">All statuses</option>
+                  <option value="">Active statuses</option>
+                  <option value="ALL">All including done</option>
                   {executionSelectOptions.taskStatuses.map((value) => (
                     <option key={value} value={value}>
                       {formatExecutionLabel(value)}
@@ -223,6 +225,11 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                   Apply
                 </SubmitButton>
               </form>
+              {isDefaultActiveView && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Showing active work only. Use the status filter to view Done, Dropped, or all archived work.
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -255,7 +262,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                     </option>
                   ))}
                 </select>
-                <SubmitButton className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground md:w-fit xl:w-auto" pendingLabel="Applying..." type="submit">
+                <SubmitButton className="h-9 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground md:w-fit xl:w-auto" pendingLabel="Applying..." type="submit">
                   Apply to Selected
                 </SubmitButton>
               </form>
