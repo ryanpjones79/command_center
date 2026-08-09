@@ -7,6 +7,7 @@ import {
   serializeWeeklyResetOutcomes,
   staleDecisionOptions,
   startOfWeek,
+  summarizeWeeklyHealthTrend,
   weeklyThemeExamples
 } from "@/server/review-service";
 
@@ -92,6 +93,23 @@ describe("Phase 4 Guided Weekly Reset", () => {
     expect(parsed.calendarPrep?.cchcsImported).toBe(true);
   });
 
+  it("summarizes weekly health metric trends without charts or scoring", () => {
+    const trend = summarizeWeeklyHealthTrend(
+      [
+        { weekOf: new Date(2026, 7, 3), healthMetrics: { walkingDays: 4 } },
+        { weekOf: new Date(2026, 6, 27), healthMetrics: { walkingDays: 3 } },
+        { weekOf: new Date(2026, 6, 20), healthMetrics: { walkingDays: 5 } },
+        { weekOf: new Date(2026, 6, 13), healthMetrics: { walkingDays: 2 } }
+      ],
+      "walkingDays",
+      4
+    );
+
+    expect(trend.hitGoalWeeks).toBe(2);
+    expect(trend.label).toBe("Building");
+    expect(trend.values).toHaveLength(4);
+  });
+
   it("offers the approved stale-work decisions without punitive language", () => {
     const projectControl = readSource("components", "review", "project-control.tsx");
     const weeklyPage = readSource("app", "weekly-review", "page.tsx");
@@ -112,15 +130,18 @@ describe("Phase 4 Guided Weekly Reset", () => {
   it("wraps Project Control in a guided wizard and preserves existing project intelligence", () => {
     const weeklyPage = readSource("app", "weekly-review", "page.tsx");
     const projectControl = readSource("components", "review", "project-control.tsx");
+    const reviewService = readSource("server", "review-service.ts");
 
     expect(weeklyPage).toContain("Begin Weekly Reset");
     expect(weeklyPage).toContain("Take your notebook.");
     expect(weeklyPage).toContain("Process your notebook.");
     expect(weeklyPage).toContain("Project Control Foundation");
     expect(weeklyPage).toContain("Close Last Week");
-    expect(weeklyPage).toContain("Goal: 7 days below calories");
-    expect(weeklyPage).toContain("Goal: 4 walks");
-    expect(weeklyPage).toContain("Goal: 2 workouts");
+    expect(reviewService).toContain("Goal: 7 days below calories");
+    expect(reviewService).toContain("Goal: 4 walks");
+    expect(reviewService).toContain("Goal: 2 workouts");
+    expect(weeklyPage).toContain("Last 4 Weeks");
+    expect(reviewService).toContain("Needs consistency");
     expect(weeklyPage).toContain("Prepare Next Week");
     expect(weeklyPage).toContain("Import CCHCS calendar to Google Calendar");
     expect(weeklyPage).toContain("Add kids events for the week to Google Calendar");

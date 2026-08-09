@@ -21,6 +21,29 @@ export const staleDecisionOptions = [
 
 export type StaleDecision = (typeof staleDecisionOptions)[number];
 
+export const weeklyHealthMetricTargets = [
+  {
+    help: "Goal: 7 days below calories",
+    key: "belowCaloriesDays",
+    label: "Calories",
+    target: 7
+  },
+  {
+    help: "Goal: 4 walks",
+    key: "walkingDays",
+    label: "Walking",
+    target: 4
+  },
+  {
+    help: "Goal: 2 workouts",
+    key: "workoutDays",
+    label: "Workouts",
+    target: 2
+  }
+] as const;
+
+export type WeeklyHealthMetricKey = (typeof weeklyHealthMetricTargets)[number]["key"];
+
 export type WeeklyResetOutcomes = {
   topThreeProjectIds?: string[];
   peopleIntentions?: string[];
@@ -35,6 +58,47 @@ export type WeeklyResetOutcomes = {
     kidsEventsAdded?: boolean;
   };
 };
+
+export type WeeklyHealthMetricSnapshot = {
+  weekOf: Date;
+  healthMetrics: NonNullable<WeeklyResetOutcomes["healthMetrics"]>;
+};
+
+export function summarizeWeeklyHealthTrend(
+  snapshots: WeeklyHealthMetricSnapshot[],
+  key: WeeklyHealthMetricKey,
+  target: number
+) {
+  const recent = snapshots
+    .filter((snapshot) => typeof snapshot.healthMetrics[key] === "number")
+    .slice(0, 4);
+
+  if (recent.length === 0) {
+    return {
+      hitGoalWeeks: 0,
+      label: "No history yet",
+      values: []
+    };
+  }
+
+  const values = recent.map((snapshot) => ({
+    value: snapshot.healthMetrics[key] ?? 0,
+    weekOf: snapshot.weekOf
+  }));
+  const hitGoalWeeks = values.filter((item) => item.value >= target).length;
+  const label =
+    hitGoalWeeks === recent.length
+      ? "Consistent"
+      : hitGoalWeeks >= Math.ceil(recent.length / 2)
+        ? "Building"
+        : "Needs consistency";
+
+  return {
+    hitGoalWeeks,
+    label,
+    values
+  };
+}
 
 export function startOfWeek(value: Date) {
   const date = new Date(value.getFullYear(), value.getMonth(), value.getDate());
@@ -104,7 +168,7 @@ export async function getGuidedWeeklyResetData(userId: string) {
   const reset = await getOrCreateWeeklyReset(userId);
   const weekEnd = addDays(reset.weekOf, 7);
 
-  const [review, workspace, notebookEntries] = await Promise.all([
+  const [review, workspace, notebookEntries, recentResets] = await Promise.all([
     getWeeklyReviewData(userId),
     getExecutionWorkspace(userId),
     prisma.notebookEntryIndex.findMany({
@@ -119,15 +183,31 @@ export async function getGuidedWeeklyResetData(userId: string) {
       },
       orderBy: [{ date: "desc" }, { updatedAt: "desc" }],
       take: 12
+    }),
+    prisma.weeklyReset.findMany({
+      where: { userId },
+      orderBy: { weekOf: "desc" },
+      take: 8
     })
   ]);
+  const recentHealthMetrics = recentResets
+    .map((weeklyReset) => ({
+      healthMetrics: parseWeeklyResetOutcomes(weeklyReset.outcomes).healthMetrics,
+      weekOf: weeklyReset.weekOf
+    }))
+    .filter(
+      (
+        item
+      ): item is WeeklyHealthMetricSnapshot => Boolean(item.healthMetrics)
+    );
 
   return {
     reset,
     outcomes: parseWeeklyResetOutcomes(reset.outcomes),
     review,
     workspace,
-    notebookEntries
+    notebookEntries,
+    recentHealthMetrics
   };
 }
 

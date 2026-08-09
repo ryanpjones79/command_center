@@ -21,6 +21,8 @@ import { requireUser } from "@/lib/session";
 import {
   getGuidedWeeklyResetData,
   getWeeklyResetStepStatus,
+  summarizeWeeklyHealthTrend,
+  weeklyHealthMetricTargets,
   weeklyThemeExamples
 } from "@/server/review-service";
 
@@ -40,27 +42,6 @@ const steps = [
   { key: "complete", label: "Complete" }
 ] as const;
 
-const weeklyHealthMetrics = [
-  {
-    help: "Goal: 7 days below calories",
-    key: "belowCaloriesDays",
-    label: "Calories",
-    target: 7
-  },
-  {
-    help: "Goal: 4 walks",
-    key: "walkingDays",
-    label: "Walking",
-    target: 4
-  },
-  {
-    help: "Goal: 2 workouts",
-    key: "workoutDays",
-    label: "Workouts",
-    target: 2
-  }
-] as const;
-
 type StepKey = (typeof steps)[number]["key"];
 
 function firstParam(value: string | string[] | undefined) {
@@ -78,6 +59,10 @@ function formatDate(value: Date | null | undefined) {
 
 function formatWeek(value: Date) {
   return value.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+function formatShortWeek(value: Date) {
+  return value.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function startOfDay(value: Date) {
@@ -485,7 +470,7 @@ export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPag
                     Track the weekly metrics that matter. Enter how many days or sessions happened.
                   </p>
                   <div className="grid gap-3 sm:grid-cols-3">
-                    {weeklyHealthMetrics.map((metric) => (
+                    {weeklyHealthMetricTargets.map((metric) => (
                       <label className="grid gap-2 rounded-xl border bg-card/70 p-3 text-sm font-medium" key={metric.key}>
                         <span>{metric.label}</span>
                         <input
@@ -500,6 +485,40 @@ export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPag
                         <span className="text-xs text-muted-foreground">{metric.help}</span>
                       </label>
                     ))}
+                  </div>
+                  <div className="rounded-xl border bg-card/70 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Last 4 Weeks
+                    </p>
+                    <div className="mt-3 grid gap-3">
+                      {weeklyHealthMetricTargets.map((metric) => {
+                        const trend = summarizeWeeklyHealthTrend(
+                          data.recentHealthMetrics,
+                          metric.key,
+                          metric.target
+                        );
+
+                        return (
+                          <div className="grid gap-2 rounded-lg border bg-background/45 p-3 text-sm sm:grid-cols-[120px_minmax(0,1fr)_auto] sm:items-center" key={metric.key}>
+                            <p className="font-medium">{metric.label}</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {trend.values.length > 0 ? (
+                                trend.values.map((item) => (
+                                  <span className="rounded-full border bg-card/80 px-2 py-0.5 text-xs" key={`${metric.key}-${item.weekOf.toISOString()}`}>
+                                    {formatShortWeek(item.weekOf)}: {item.value}/{metric.target}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-xs text-muted-foreground">No weekly history yet.</span>
+                              )}
+                            </div>
+                            <span className="rounded-full border bg-background px-2.5 py-1 text-xs text-muted-foreground">
+                              {trend.label}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -647,9 +666,11 @@ function WeeklyGuide({
         <div className="rounded-xl border p-3">
           <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Health Signals</p>
           <ul className="mt-1 space-y-1">
-            {weeklyHealthMetrics.map((metric) => (
+            {weeklyHealthMetricTargets.map((metric) => (
               <li key={metric.key}>
                 {metric.label}: {healthMetrics[metric.key] ?? 0}/{metric.target}
+                {" "}
+                ({summarizeWeeklyHealthTrend(data.recentHealthMetrics, metric.key, metric.target).label})
               </li>
             ))}
           </ul>
