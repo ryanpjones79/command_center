@@ -118,6 +118,9 @@ describe("Phase 4 Guided Weekly Reset", () => {
     expect(weeklyPage).toContain("Process your notebook.");
     expect(weeklyPage).toContain("Project Control Foundation");
     expect(weeklyPage).toContain("Close Last Week");
+    expect(weeklyPage).toContain("Goal: 7 days below calories");
+    expect(weeklyPage).toContain("Goal: 4 walks");
+    expect(weeklyPage).toContain("Goal: 2 workouts");
     expect(weeklyPage).toContain("Prepare Next Week");
     expect(weeklyPage).toContain("Import CCHCS calendar to Google Calendar");
     expect(weeklyPage).toContain("Add kids events for the week to Google Calendar");

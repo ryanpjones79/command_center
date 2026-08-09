@@ -40,6 +40,27 @@ const steps = [
   { key: "complete", label: "Complete" }
 ] as const;
 
+const weeklyHealthMetrics = [
+  {
+    help: "Goal: 7 days below calories",
+    key: "belowCaloriesDays",
+    label: "Calories",
+    target: 7
+  },
+  {
+    help: "Goal: 4 walks",
+    key: "walkingDays",
+    label: "Walking",
+    target: 4
+  },
+  {
+    help: "Goal: 2 workouts",
+    key: "workoutDays",
+    label: "Workouts",
+    target: 2
+  }
+] as const;
+
 type StepKey = (typeof steps)[number]["key"];
 
 function firstParam(value: string | string[] | undefined) {
@@ -461,45 +482,24 @@ export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPag
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    Track signals, not perfection. Use 0-7 for how many days each one happened.
+                    Track the weekly metrics that matter. Enter how many days or sessions happened.
                   </p>
                   <div className="grid gap-3 sm:grid-cols-3">
-                    <label className="grid gap-1.5 text-sm font-medium">
-                      Below calories
-                      <input
-                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                        defaultValue={healthMetrics.belowCaloriesDays ?? ""}
-                        max={7}
-                        min={0}
-                        name="belowCaloriesDays"
-                        placeholder="0-7"
-                        type="number"
-                      />
-                    </label>
-                    <label className="grid gap-1.5 text-sm font-medium">
-                      Walked
-                      <input
-                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                        defaultValue={healthMetrics.walkingDays ?? ""}
-                        max={7}
-                        min={0}
-                        name="walkingDays"
-                        placeholder="0-7"
-                        type="number"
-                      />
-                    </label>
-                    <label className="grid gap-1.5 text-sm font-medium">
-                      Worked out
-                      <input
-                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                        defaultValue={healthMetrics.workoutDays ?? ""}
-                        max={7}
-                        min={0}
-                        name="workoutDays"
-                        placeholder="0-7"
-                        type="number"
-                      />
-                    </label>
+                    {weeklyHealthMetrics.map((metric) => (
+                      <label className="grid gap-2 rounded-xl border bg-card/70 p-3 text-sm font-medium" key={metric.key}>
+                        <span>{metric.label}</span>
+                        <input
+                          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                          defaultValue={healthMetrics[metric.key] ?? ""}
+                          max={7}
+                          min={0}
+                          name={metric.key}
+                          placeholder={`Goal ${metric.target}`}
+                          type="number"
+                        />
+                        <span className="text-xs text-muted-foreground">{metric.help}</span>
+                      </label>
+                    ))}
                   </div>
                 </CardContent>
               </Card>
@@ -646,9 +646,13 @@ function WeeklyGuide({
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border p-3">
           <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Health Signals</p>
-          <p className="mt-1">
-            Calories {healthMetrics.belowCaloriesDays ?? 0}/7 · Walk {healthMetrics.walkingDays ?? 0}/7 · Workout {healthMetrics.workoutDays ?? 0}/7
-          </p>
+          <ul className="mt-1 space-y-1">
+            {weeklyHealthMetrics.map((metric) => (
+              <li key={metric.key}>
+                {metric.label}: {healthMetrics[metric.key] ?? 0}/{metric.target}
+              </li>
+            ))}
+          </ul>
         </div>
         <div className="rounded-xl border p-3">
           <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Calendar Prep</p>
