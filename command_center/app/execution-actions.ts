@@ -13,6 +13,7 @@ import {
   detectPhi,
   executionDomainSchema,
   executionProjectSchema,
+  executionTaskReferenceSchema,
   executionTaskSchema
 } from "@/lib/execution-validation";
 import { requireUser } from "@/lib/session";
@@ -557,6 +558,55 @@ export async function deleteExecutionTaskAction(formData: FormData) {
   if (!task) return;
 
   await prisma.executionTask.delete({ where: { id: task.id } });
+  revalidateTasksOnly();
+}
+
+export async function addExecutionTaskReferenceAction(formData: FormData) {
+  const user = await requireUser();
+  const parsed = executionTaskReferenceSchema.safeParse({
+    taskId: formData.get("taskId"),
+    provider: formData.get("provider") || "other",
+    title: formData.get("title"),
+    url: formData.get("url"),
+    note: formData.get("note")
+  });
+
+  if (!parsed.success) return;
+
+  const task = await getOwnedTask(user.id, parsed.data.taskId);
+  if (!task) return;
+
+  const phiWarnings = detectPhi(
+    [parsed.data.title, parsed.data.url ?? "", parsed.data.note ?? ""].join("\n")
+  );
+  if (phiWarnings.length > 0) return;
+
+  await prisma.executionTaskReference.create({
+    data: {
+      userId: user.id,
+      taskId: task.id,
+      provider: parsed.data.provider,
+      title: parsed.data.title,
+      url: parsed.data.url?.trim() || null,
+      note: parsed.data.note?.trim() || null
+    }
+  });
+
+  revalidateTasksOnly();
+}
+
+export async function deleteExecutionTaskReferenceAction(formData: FormData) {
+  const user = await requireUser();
+  const referenceId = String(formData.get("referenceId") ?? "");
+  if (!referenceId) return;
+
+  const reference = await prisma.executionTaskReference.findFirst({
+    where: { id: referenceId, userId: user.id },
+    select: { id: true }
+  });
+  if (!reference) return;
+
+  await prisma.executionTaskReference.delete({ where: { id: reference.id } });
   revalidateTasksOnly();
 }
 

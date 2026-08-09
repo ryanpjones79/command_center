@@ -56,3 +56,11 @@ export const executionTaskSchema = z.object({
   recurrenceWeekdays: z.string().max(20).nullish(),
   recurrenceEndDate: z.string().optional()
 });
+
+export const executionTaskReferenceSchema = z.object({
+  taskId: z.string().cuid(),
+  provider: z.enum(["gmail", "outlook", "other"]).default("other"),
+  title: z.string().min(2).max(180),
+  url: z.string().max(1000).optional(),
+  note: z.string().max(500).optional()
+});

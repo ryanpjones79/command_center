@@ -8,6 +8,10 @@ import {
 import type { ReactNode } from "react";
 import { CreateTaskForm } from "@/components/execution/create-task-form";
 import { SubmitButton } from "@/components/execution/submit-button";
+import {
+  TaskEmailReferenceForm,
+  TaskEmailReferenceList
+} from "@/components/execution/task-email-references";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -354,7 +358,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Source</p>
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Source / Reference</p>
                       <p className="mt-1 text-sm">{task.source || "None"}</p>
                     </div>
                     <div>
@@ -364,6 +368,16 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                   </div>
 
                   {task.note && <p className="mt-3 text-sm text-muted-foreground">{task.note}</p>}
+
+                  <div className="mt-4 grid gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Email References</p>
+                      <div className="mt-2">
+                        <TaskEmailReferenceList references={task.references} />
+                      </div>
+                    </div>
+                    <TaskEmailReferenceForm taskId={task.id} />
+                  </div>
 
                   <div className="mt-4 flex flex-wrap gap-2">
                     <form action={markDoneAction}>
@@ -532,12 +546,12 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
                             placeholder="Name or dependency"
                           />
                         </TaskEditField>
-                        <TaskEditField label="Source" help="Where this came from, if useful later.">
+                        <TaskEditField label="Source / reference" help="Short legacy note. Use email references above for Gmail or Outlook attachments.">
                           <input
                             className={taskEditFieldClass}
                             defaultValue={task.source ?? ""}
                             name="source"
-                            placeholder="Email, meeting, brief, idea"
+                            placeholder="Meeting, brief, idea, or quick source note"
                           />
                         </TaskEditField>
                       </div>

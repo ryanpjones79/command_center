@@ -193,8 +193,8 @@ export function CreateTaskForm({
         <Field label="Waiting on" help="Person, team, or dependency blocking the next move.">
           <Input name="waitingOn" placeholder="Name or dependency" />
         </Field>
-        <Field label="Source" help="Where this came from, if useful later.">
-          <Input name="source" placeholder="Email, meeting, brief, idea" />
+        <Field label="Source / reference" help="Short source note. After saving, attach Gmail or Outlook references from the task card.">
+          <Input name="source" placeholder="Meeting, brief, idea, or quick source note" />
         </Field>
       </div>
       <Field label="Notes">

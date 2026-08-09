@@ -1,6 +1,11 @@
 import { markExecutionTaskStatusAction, updateExecutionTaskAction } from "@/app/execution-actions";
 import type { ReactNode } from "react";
 import {
+  TaskEmailReferenceForm,
+  TaskEmailReferenceList,
+  type TaskEmailReference
+} from "@/components/execution/task-email-references";
+import {
   executionSelectOptions,
   executionWeekdayOptions,
   formatExecutionDurationBucket,
@@ -27,6 +32,7 @@ type TaskItem = {
   waitingOn: string | null;
   note: string | null;
   source?: string | null;
+  references?: TaskEmailReference[];
   isBlocked?: boolean;
   isQuickWinCandidate?: boolean;
   pinToTodayUntilDone?: boolean;
@@ -129,6 +135,12 @@ export function TaskLineItem({
             {task.waitingOn && <span className="text-[11px] text-muted-foreground">Waiting on {task.waitingOn}</span>}
           </div>
           {task.note && <p className="mt-1 text-xs text-muted-foreground">{task.note}</p>}
+          {task.source && <p className="mt-1 text-xs text-muted-foreground">Source: {task.source}</p>}
+
+          <div className="app-no-print mt-3 grid gap-3">
+            <TaskEmailReferenceList references={task.references ?? []} />
+            <TaskEmailReferenceForm taskId={task.id} />
+          </div>
 
           <details className="app-no-print mt-2 rounded-lg border border-border/70 p-2.5 sm:p-3">
             <summary className="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
@@ -302,12 +314,12 @@ export function TaskLineItem({
                     placeholder="Name or dependency"
                   />
                 </EditField>
-                <EditField label="Source" help="Where this came from, if useful later.">
+                <EditField label="Source / reference" help="Short legacy note. Use email references below for Gmail or Outlook attachments.">
                   <input
                     className={fieldClass}
                     defaultValue={task.source ?? ""}
                     name="source"
-                    placeholder="Email, meeting, brief, idea"
+                    placeholder="Meeting, brief, idea, or quick source note"
                   />
                 </EditField>
               </div>

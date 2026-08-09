@@ -332,7 +332,11 @@ export async function getActionSheetData(userId: string) {
         userId,
         status: { notIn: ["DONE", "DROPPED"] }
       },
-      include: { domain: true, project: true }
+      include: {
+        domain: true,
+        project: true,
+        references: { orderBy: { createdAt: "desc" } }
+      }
     }),
     prisma.executionProject.findMany({
       where: { userId, activeStatus: { not: "COMPLETED" } },
@@ -494,7 +498,11 @@ export async function getTaskMaintenanceData(
             }
           : {})
       },
-      include: { domain: true, project: true }
+      include: {
+        domain: true,
+        project: true,
+        references: { orderBy: { createdAt: "desc" } }
+      }
     }),
     prisma.executionDomain.findMany({
       where: { userId },
@@ -546,7 +554,11 @@ export async function getTimeBlockPlannerData(
         userId,
         status: { notIn: ["DONE", "DROPPED"] }
       },
-      include: { domain: true, project: true }
+      include: {
+        domain: true,
+        project: true,
+        references: { orderBy: { createdAt: "desc" } }
+      }
     }),
     prisma.executionDomain.findMany({
       where: { userId },

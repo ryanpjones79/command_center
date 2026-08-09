@@ -47,6 +47,13 @@ type BoardTask = {
   waitingOn: string | null;
   note: string | null;
   source: string | null;
+  references: {
+    id: string;
+    provider: string;
+    title: string;
+    url: string | null;
+    note: string | null;
+  }[];
   isBlocked: boolean;
   pinToTodayUntilDone: boolean;
   recurrenceFrequency: string;
@@ -128,6 +135,16 @@ const endHour = 21;
 const slotMinutes = 30;
 const pixelsPerMinute = 2;
 const minimumTimedEventMinutes = 5;
+const emailProviderLabels: Record<string, string> = {
+  gmail: "Gmail",
+  outlook: "Outlook",
+  other: "Email"
+};
+
+function isOpenableEmailReference(value: string | null) {
+  if (!value) return false;
+  return /^(https?:\/\/|mailto:|outlook:)/i.test(value.trim());
+}
 
 const decisionRules = [
   "CCHCS deadline / leadership-visible commitment within 48h",
@@ -890,6 +907,51 @@ export function TimeBlockBoard({
               {selectedTask.source || "None"}
             </p>
           </div>
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.06] p-3">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+            Email References
+          </p>
+          {selectedTask.references.length > 0 ? (
+            <div className="mt-2 grid gap-2">
+              {selectedTask.references.map((reference) => {
+                const hasLink = isOpenableEmailReference(reference.url);
+                return (
+                  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3" key={reference.id}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                          {emailProviderLabels[reference.provider] ?? "Email"}
+                        </p>
+                        <p className="mt-1 break-words text-sm font-medium text-slate-100">
+                          {reference.title}
+                        </p>
+                      </div>
+                      {hasLink && (
+                        <a
+                          className="rounded-full border border-white/15 px-3 py-1 text-xs font-medium text-slate-100 hover:bg-white/10"
+                          href={reference.url ?? ""}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Open
+                        </a>
+                      )}
+                    </div>
+                    {reference.note && (
+                      <p className="mt-2 text-xs text-slate-400">{reference.note}</p>
+                    )}
+                    {reference.url && !hasLink && (
+                      <p className="mt-2 break-words text-xs text-slate-400">{reference.url}</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-1 text-sm font-medium">None</p>
+          )}
         </div>
 
         <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.06] p-3">
