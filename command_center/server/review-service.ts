@@ -55,7 +55,10 @@ export type WeeklyResetOutcomes = {
   };
   calendarPrep?: {
     cchcsImported?: boolean;
+    flaggedCchcsEmailsChecked?: boolean;
+    appleNotesInboxProcessed?: boolean;
     kidsEventsAdded?: boolean;
+    starredGmailChecked?: boolean;
   };
 };
 

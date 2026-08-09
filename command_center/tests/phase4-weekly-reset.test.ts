@@ -79,7 +79,10 @@ describe("Phase 4 Guided Weekly Reset", () => {
       },
       calendarPrep: {
         cchcsImported: true,
-        kidsEventsAdded: false
+        flaggedCchcsEmailsChecked: true,
+        appleNotesInboxProcessed: false,
+        kidsEventsAdded: false,
+        starredGmailChecked: true
       }
     });
     const parsed = parseWeeklyResetOutcomes(serialized);
@@ -91,6 +94,8 @@ describe("Phase 4 Guided Weekly Reset", () => {
     expect(parsed.staleDecisions?.["task:1"]).toBe("Park");
     expect(parsed.healthMetrics?.belowCaloriesDays).toBe(5);
     expect(parsed.calendarPrep?.cchcsImported).toBe(true);
+    expect(parsed.calendarPrep?.flaggedCchcsEmailsChecked).toBe(true);
+    expect(parsed.calendarPrep?.starredGmailChecked).toBe(true);
   });
 
   it("summarizes weekly health metric trends without charts or scoring", () => {
@@ -145,6 +150,10 @@ describe("Phase 4 Guided Weekly Reset", () => {
     expect(weeklyPage).toContain("Prepare Next Week");
     expect(weeklyPage).toContain("Import CCHCS calendar to Google Calendar");
     expect(weeklyPage).toContain("Add kids events for the week to Google Calendar");
+    expect(weeklyPage).toContain("Check flagged CCHCS emails");
+    expect(weeklyPage).toContain("Check starred Gmail");
+    expect(weeklyPage).toContain("Process Apple Notes inbox");
+    expect(weeklyPage).toContain("Create tasks only for real commitments.");
     expect(weeklyPage).toContain("Weekly Reset Complete");
     expect(projectControl).toContain("Top 3 Projects");
     expect(projectControl).toContain("Missing Next Action");
@@ -158,7 +167,7 @@ describe("Phase 4 Guided Weekly Reset", () => {
     expect(weeklyPage).toContain("Weekly Guide");
     expect(weeklyPage).toContain("Important Meetings");
     expect(weeklyPage).toContain("Health Signals");
-    expect(weeklyPage).toContain("Calendar Prep");
+    expect(weeklyPage).toContain("Weekly Prep");
     expect(weeklyPage).toContain("Notebook Reminder");
     expect(weeklyPage).toContain("Relationship Intention");
     expect(weeklyPage).toContain("Needle Move Reminder");

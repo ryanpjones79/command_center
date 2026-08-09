@@ -146,7 +146,10 @@ export async function saveNextWeekAction(formData: FormData) {
     },
     calendarPrep: {
       cchcsImported: formData.get("cchcsImported") === "on",
-      kidsEventsAdded: formData.get("kidsEventsAdded") === "on"
+      flaggedCchcsEmailsChecked: formData.get("flaggedCchcsEmailsChecked") === "on",
+      appleNotesInboxProcessed: formData.get("appleNotesInboxProcessed") === "on",
+      kidsEventsAdded: formData.get("kidsEventsAdded") === "on",
+      starredGmailChecked: formData.get("starredGmailChecked") === "on"
     }
   });
   revalidateWeeklyReset();

@@ -15,7 +15,7 @@ import { ProjectControl, DecisionButtons } from "@/components/review/project-con
 import { SubmitButton } from "@/components/execution/submit-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatNotebookTitle } from "@/lib/notebook-format";
 import { requireUser } from "@/lib/session";
 import {
@@ -526,6 +526,9 @@ export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPag
               <Card className="bg-background/35">
                 <CardHeader>
                   <CardTitle className="text-base">Prepare Next Week</CardTitle>
+                  <CardDescription>
+                    Close the loose loops that can quietly become next week's noise.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-3 sm:grid-cols-2">
                   <label className="flex min-h-12 items-center gap-3 rounded-xl border bg-card/70 p-3 text-sm">
@@ -545,6 +548,42 @@ export default async function WeeklyReviewPage({ searchParams }: WeeklyReviewPag
                       type="checkbox"
                     />
                     <span>Add kids events for the week to Google Calendar</span>
+                  </label>
+                  <label className="flex min-h-12 items-start gap-3 rounded-xl border bg-card/70 p-3 text-sm">
+                    <input
+                      className="mt-0.5 h-4 w-4"
+                      defaultChecked={calendarPrep.flaggedCchcsEmailsChecked}
+                      name="flaggedCchcsEmailsChecked"
+                      type="checkbox"
+                    />
+                    <span>
+                      Check flagged CCHCS emails.
+                      <span className="block text-xs text-muted-foreground">Create tasks only for real commitments.</span>
+                    </span>
+                  </label>
+                  <label className="flex min-h-12 items-start gap-3 rounded-xl border bg-card/70 p-3 text-sm">
+                    <input
+                      className="mt-0.5 h-4 w-4"
+                      defaultChecked={calendarPrep.starredGmailChecked}
+                      name="starredGmailChecked"
+                      type="checkbox"
+                    />
+                    <span>
+                      Check starred Gmail.
+                      <span className="block text-xs text-muted-foreground">Task only what needs action.</span>
+                    </span>
+                  </label>
+                  <label className="flex min-h-12 items-start gap-3 rounded-xl border bg-card/70 p-3 text-sm sm:col-span-2">
+                    <input
+                      className="mt-0.5 h-4 w-4"
+                      defaultChecked={calendarPrep.appleNotesInboxProcessed}
+                      name="appleNotesInboxProcessed"
+                      type="checkbox"
+                    />
+                    <span>
+                      Process Apple Notes inbox.
+                      <span className="block text-xs text-muted-foreground">Commitment, project, parked idea, or reference only.</span>
+                    </span>
                   </label>
                 </CardContent>
               </Card>
@@ -676,10 +715,13 @@ function WeeklyGuide({
           </ul>
         </div>
         <div className="rounded-xl border p-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Calendar Prep</p>
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Weekly Prep</p>
           <ul className="mt-1 space-y-1">
             <li>[{calendarPrep.cchcsImported ? "x" : " "}] Import CCHCS calendar to Google Calendar</li>
             <li>[{calendarPrep.kidsEventsAdded ? "x" : " "}] Add kids events for the week to Google Calendar</li>
+            <li>[{calendarPrep.flaggedCchcsEmailsChecked ? "x" : " "}] Check flagged CCHCS emails</li>
+            <li>[{calendarPrep.starredGmailChecked ? "x" : " "}] Check starred Gmail</li>
+            <li>[{calendarPrep.appleNotesInboxProcessed ? "x" : " "}] Process Apple Notes inbox</li>
           </ul>
         </div>
         <div className="rounded-xl border p-3">
