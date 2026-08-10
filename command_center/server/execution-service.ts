@@ -602,9 +602,7 @@ export async function getTimeBlockPlannerData(
     scheduledTasks: sortedTasks.filter((task) =>
       isScheduledOnSelectedDay(task)
     ),
-    unscheduledTasks: sortedTasks.filter(
-      (task) => !isScheduledOnSelectedDay(task) && !isParkingLotTask(task)
-    )
+    unscheduledTasks: sortedTasks.filter((task) => !isScheduledOnSelectedDay(task))
   };
 }
 

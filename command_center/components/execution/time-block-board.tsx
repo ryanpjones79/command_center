@@ -1478,9 +1478,9 @@ export function TimeBlockBoard({
             />
           </section>
 
-          <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto">
+          <aside className="space-y-3 xl:sticky xl:top-28 xl:max-h-[calc(100vh-8rem)]">
             <section
-              className="rounded-2xl border bg-card p-4 shadow-sm"
+              className="flex max-h-[calc(100vh-8rem)] flex-col rounded-2xl border bg-card p-4 shadow-sm"
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
@@ -1501,7 +1501,7 @@ export function TimeBlockBoard({
                 Drop a scheduled task here to move it back to the queue.
               </p>
               {availableWorkControls}
-              <div className="mt-4 space-y-2.5">
+              <div className="mt-4 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
                 {visibleUnscheduledTasks.length === 0 && (
                   <div className="rounded-2xl border border-dashed bg-muted/25 p-4 text-sm leading-6 text-muted-foreground">
                     {localUnscheduledTasks.length === 0
