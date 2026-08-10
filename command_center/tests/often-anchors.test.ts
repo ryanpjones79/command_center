@@ -18,9 +18,11 @@ describe("Often Anchors", () => {
     expect(board).toContain('id: "walking"');
     expect(board).toContain('id: "workout"');
     expect(board).toContain('id: "golf-practice"');
+    expect(board).toContain("minutes: 60");
     expect(actions).toContain("walking:");
     expect(actions).toContain("workout:");
     expect(actions).toContain('"golf-practice":');
+    expect(actions).toContain("minutes: 60");
     expect(actions).not.toContain('recurrenceFrequency: "DAILY"');
   });
 });

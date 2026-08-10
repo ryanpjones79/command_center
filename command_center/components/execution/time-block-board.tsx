@@ -221,7 +221,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
     helper: ["Health anchor.", "Walk if there is a clean opening."],
     id: "walking",
     kind: "anchor",
-    minutes: 30,
+    minutes: 60,
     title: "Walking"
   },
   {
@@ -229,7 +229,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
     helper: ["Health anchor.", "Training matters, but it should fit the real day."],
     id: "workout",
     kind: "anchor",
-    minutes: 45,
+    minutes: 60,
     title: "Workout"
   },
   {
@@ -237,7 +237,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
     helper: ["Practice anchor.", "Keep touch without making it fake urgency."],
     id: "golf-practice",
     kind: "anchor",
-    minutes: 30,
+    minutes: 60,
     title: "Golf Practice"
   }
 ];

@@ -49,8 +49,8 @@ const ryanOsBlockTemplates: Record<string, RyanOsBlockTemplate> = {
   walking: {
     blockType: "Personal",
     domainSlug: "health",
-    estimatedDuration: "UNDER_30_MIN",
-    minutes: 30,
+    estimatedDuration: "THIRTY_TO_SIXTY_MIN",
+    minutes: 60,
     note: "Often anchor. Walk if there is a clean opening; skip without guilt if the day is full.",
     priority: "MEDIUM",
     title: "Walking"
@@ -59,7 +59,7 @@ const ryanOsBlockTemplates: Record<string, RyanOsBlockTemplate> = {
     blockType: "Personal",
     domainSlug: "health",
     estimatedDuration: "THIRTY_TO_SIXTY_MIN",
-    minutes: 45,
+    minutes: 60,
     note: "Often anchor. Training matters, but it should fit the real day.",
     priority: "MEDIUM",
     title: "Workout"
@@ -67,8 +67,8 @@ const ryanOsBlockTemplates: Record<string, RyanOsBlockTemplate> = {
   "golf-practice": {
     blockType: "Personal",
     domainSlug: "golf",
-    estimatedDuration: "UNDER_30_MIN",
-    minutes: 30,
+    estimatedDuration: "THIRTY_TO_SIXTY_MIN",
+    minutes: 60,
     note: "Often anchor. Keep touch without letting practice become fake urgency.",
     priority: "MEDIUM",
     title: "Golf Practice"
