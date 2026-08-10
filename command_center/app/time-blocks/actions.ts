@@ -45,6 +45,33 @@ const ryanOsBlockTemplates: Record<string, RyanOsBlockTemplate> = {
     note: "Hierarchy: ship sold items; offers/relist; list from backlog; source only if backlog <10.",
     priority: "MEDIUM",
     title: "Rykas — max 45 minutes"
+  },
+  walking: {
+    blockType: "Personal",
+    domainSlug: "health",
+    estimatedDuration: "UNDER_30_MIN",
+    minutes: 30,
+    note: "Often anchor. Walk if there is a clean opening; skip without guilt if the day is full.",
+    priority: "MEDIUM",
+    title: "Walking"
+  },
+  workout: {
+    blockType: "Personal",
+    domainSlug: "health",
+    estimatedDuration: "THIRTY_TO_SIXTY_MIN",
+    minutes: 45,
+    note: "Often anchor. Training matters, but it should fit the real day.",
+    priority: "MEDIUM",
+    title: "Workout"
+  },
+  "golf-practice": {
+    blockType: "Personal",
+    domainSlug: "golf",
+    estimatedDuration: "UNDER_30_MIN",
+    minutes: 30,
+    note: "Often anchor. Keep touch without letting practice become fake urgency.",
+    priority: "MEDIUM",
+    title: "Golf Practice"
   }
 };
 

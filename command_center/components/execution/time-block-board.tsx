@@ -122,9 +122,10 @@ type TimeBlockBoardProps = {
 };
 
 type RyanOsBlockTemplate = {
-  blockType: "CCHCS" | "Pipeline" | "Rykas";
+  blockType: string;
   helper: string[];
   id: string;
+  kind: "required" | "anchor";
   minutes: number;
   title: string;
 };
@@ -182,6 +183,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
       "Use a real work block, not residue."
     ],
     id: "cchcs",
+    kind: "required",
     minutes: 90,
     title: "CCHCS"
   },
@@ -196,6 +198,7 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
       "Metric = conversations, not impressions"
     ],
     id: "pipeline",
+    kind: "required",
     minutes: 30,
     title: "Pipeline — 30 minutes"
   },
@@ -209,10 +212,38 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
       "Source only if backlog <10"
     ],
     id: "rykas",
+    kind: "required",
     minutes: 45,
     title: "Rykas — max 45 minutes"
+  },
+  {
+    blockType: "Personal",
+    helper: ["Health anchor.", "Walk if there is a clean opening."],
+    id: "walking",
+    kind: "anchor",
+    minutes: 30,
+    title: "Walking"
+  },
+  {
+    blockType: "Personal",
+    helper: ["Health anchor.", "Training matters, but it should fit the real day."],
+    id: "workout",
+    kind: "anchor",
+    minutes: 45,
+    title: "Workout"
+  },
+  {
+    blockType: "Personal",
+    helper: ["Practice anchor.", "Keep touch without making it fake urgency."],
+    id: "golf-practice",
+    kind: "anchor",
+    minutes: 30,
+    title: "Golf Practice"
   }
 ];
+const oftenAnchorTemplates = ryanOsBlockTemplates.filter(
+  (template) => template.kind === "anchor"
+);
 
 function getZonedDateParts(value: Date, timeZone = defaultTimeZone) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -1072,6 +1103,77 @@ export function TimeBlockBoard({
     </div>
   );
 
+  const oftenAnchorsPanel = (
+    <div className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/[0.06] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-200/80">
+            Often Anchors
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Try to fit these often. Not daily debt.
+          </p>
+        </div>
+        <span className="rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground">
+          Optional
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {oftenAnchorTemplates.map((template) => {
+          const pendingTemplateId = `template:${template.id}`;
+          const openSlots = findOpenSlotsForMinutes(template.minutes, 2);
+          return (
+            <div
+              className="cursor-grab rounded-xl border border-border/70 bg-background/70 p-3 outline-none transition hover:border-primary/40 focus:ring-2 focus:ring-primary/25 active:cursor-grabbing"
+              draggable
+              key={template.id}
+              onDragStart={(event) => {
+                setDraggedTaskId(pendingTemplateId);
+                event.dataTransfer.setData("text/plain", pendingTemplateId);
+              }}
+              role="group"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold">{template.title}</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {template.minutes} min · {template.helper[0]}
+                  </p>
+                </div>
+                <span className="rounded-full border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  Anchor
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {openSlots.length === 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    No clean opening today.
+                  </span>
+                )}
+                {openSlots.map((slot, index) => (
+                  <button
+                    className={
+                      index === 0
+                        ? "rounded-full bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-slate-950"
+                        : "rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs font-medium"
+                    }
+                    disabled={isPending || pendingTaskId === pendingTemplateId}
+                    key={slot.toISOString()}
+                    onClick={() => scheduleRyanOsBlock(template.id, slot)}
+                    type="button"
+                  >
+                    {index === 0 ? "Next " : ""}
+                    {formatClock(slot, timeZone)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   const mobileTaskQueue = (
     <section className="rounded-[1.75rem] border border-emerald-300/20 bg-slate-950/95 p-4 text-white shadow-[0_18px_70px_rgba(2,6,23,0.36)] lg:hidden">
       <div className="flex items-center justify-between gap-3">
@@ -1086,6 +1188,7 @@ export function TimeBlockBoard({
         </span>
       </div>
       {availableWorkControls}
+      {oftenAnchorsPanel}
       <div className="mt-3 max-h-[58vh] space-y-2 overflow-y-auto pr-1">
         {visibleUnscheduledTasks.length === 0 && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4 text-sm text-slate-300">
@@ -1501,6 +1604,7 @@ export function TimeBlockBoard({
                 Drop a scheduled task here to move it back to the queue.
               </p>
               {availableWorkControls}
+              {oftenAnchorsPanel}
               <div className="mt-4 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
                 {visibleUnscheduledTasks.length === 0 && (
                   <div className="rounded-2xl border border-dashed bg-muted/25 p-4 text-sm leading-6 text-muted-foreground">
