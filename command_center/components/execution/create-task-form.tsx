@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useActionState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { createExecutionTaskAction } from "@/app/execution-actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,12 +59,26 @@ export function CreateTaskForm({
   });
   const defaultDomainId =
     domains.find((domain) => domain.name.toLowerCase() === "work")?.id ?? domains[0]?.id ?? "";
+  const [selectedDomainId, setSelectedDomainId] = useState(defaultDomainId);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const filteredProjects = useMemo(
+    () => projects.filter((project) => project.domainId === selectedDomainId),
+    [projects, selectedDomainId]
+  );
 
   return (
     <form action={formAction} className="space-y-4">
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Area">
-          <select className={selectClass} defaultValue={defaultDomainId} name="domainId">
+          <select
+            className={selectClass}
+            name="domainId"
+            onChange={(event) => {
+              setSelectedDomainId(event.target.value);
+              setSelectedProjectId("");
+            }}
+            value={selectedDomainId}
+          >
             {domains.map((domain) => (
               <option key={domain.id} value={domain.id}>
                 {domain.name}
@@ -73,14 +87,22 @@ export function CreateTaskForm({
           </select>
         </Field>
         <Field label="Project">
-          <select className={selectClass} defaultValue="" name="projectId">
+          <select
+            className={selectClass}
+            name="projectId"
+            onChange={(event) => setSelectedProjectId(event.target.value)}
+            value={selectedProjectId}
+          >
             <option value="">No project</option>
-            {projects.map((project) => (
+            {filteredProjects.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.name}
               </option>
             ))}
           </select>
+          <span className="text-[11px] leading-snug text-muted-foreground">
+            Projects are filtered to the selected area.
+          </span>
         </Field>
       </div>
       <Field label="Task name">
