@@ -14,6 +14,11 @@ type GridTask = {
   title: string;
 };
 
+type PositionedCalendarEvent = GridCalendarEvent & {
+  column: number;
+  columnCount: number;
+};
+
 type TimeBlockGridProps = {
   clearTask: (taskId: string) => void;
   date: Date;
@@ -38,6 +43,60 @@ type TimeBlockGridProps = {
   timeZone: string;
 };
 
+function layoutCalendarEvents(events: GridCalendarEvent[]): PositionedCalendarEvent[] {
+  const sorted = [...events].sort((left, right) => {
+    const startDelta = left.start.getTime() - right.start.getTime();
+    if (startDelta !== 0) return startDelta;
+    return right.end.getTime() - left.end.getTime();
+  });
+  const positioned: PositionedCalendarEvent[] = [];
+  let group: GridCalendarEvent[] = [];
+  let groupEnd: Date | null = null;
+
+  const flushGroup = () => {
+    if (group.length === 0) return;
+
+    const columns: Date[] = [];
+    const groupPositions = group.map((event) => {
+      const column = columns.findIndex((columnEnd) => columnEnd <= event.start);
+      const resolvedColumn = column === -1 ? columns.length : column;
+      columns[resolvedColumn] = event.end;
+      return { event, column: resolvedColumn };
+    });
+
+    positioned.push(
+      ...groupPositions.map(({ event, column }) => ({
+        ...event,
+        column,
+        columnCount: columns.length
+      }))
+    );
+    group = [];
+    groupEnd = null;
+  };
+
+  for (const event of sorted) {
+    if (!groupEnd || event.start >= groupEnd) {
+      flushGroup();
+      group = [event];
+      groupEnd = event.end;
+      continue;
+    }
+
+    group.push(event);
+    if (event.end > groupEnd) {
+      groupEnd = event.end;
+    }
+  }
+
+  flushGroup();
+  return positioned.sort((left, right) => {
+    const startDelta = left.start.getTime() - right.start.getTime();
+    if (startDelta !== 0) return startDelta;
+    return left.column - right.column;
+  });
+}
+
 export function TimeBlockGrid({
   clearTask,
   date,
@@ -61,6 +120,8 @@ export function TimeBlockGrid({
   timedEvents,
   timeZone
 }: TimeBlockGridProps) {
+  const positionedEvents = layoutCalendarEvents(timedEvents);
+
   return (
     <div className="min-h-[560px] overflow-auto rounded-xl xl:min-h-0">
       <div className="grid min-w-[720px] grid-cols-[72px_minmax(0,1fr)]">
@@ -123,18 +184,22 @@ export function TimeBlockGrid({
             );
           })}
 
-          {timedEvents.map((event) => {
+          {positionedEvents.map((event) => {
             const top = Math.max(
               0,
               minutesFromStart(event.start, timeZone) * pixelsPerMinute
             );
             const height =
               durationMinutes(event.start, event.end) * pixelsPerMinute;
+            const laneWidth = 48 / event.columnCount;
+            const left = `calc(0.75rem + ${event.column * laneWidth}%)`;
+            const width = `calc(${laneWidth}% - 0.25rem)`;
             return (
               <div
-                className="absolute left-3 right-[52%] z-10 overflow-hidden rounded-lg border border-amber-400/70 bg-amber-300/90 p-2 text-amber-950 shadow-sm"
+                className="absolute z-10 overflow-hidden rounded-lg border border-amber-400/70 bg-amber-300/90 p-2 text-amber-950 shadow-sm"
                 key={event.id}
-                style={{ top, height }}
+                style={{ top, height, left, width }}
+                title={`${event.summary} ${formatClock(event.start, timeZone)}-${formatClock(event.end, timeZone)}`}
               >
                 <p className="truncate text-xs font-semibold">
                   {event.summary}
