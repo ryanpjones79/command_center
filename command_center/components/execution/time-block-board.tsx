@@ -239,6 +239,14 @@ const ryanOsBlockTemplates: RyanOsBlockTemplate[] = [
     kind: "anchor",
     minutes: 60,
     title: "Golf Practice"
+  },
+  {
+    blockType: "Personal",
+    helper: ["Quiet anchor.", "Sit for a few minutes when there is a clean opening."],
+    id: "meditation",
+    kind: "anchor",
+    minutes: 15,
+    title: "Meditation"
   }
 ];
 const oftenAnchorTemplates = ryanOsBlockTemplates.filter(

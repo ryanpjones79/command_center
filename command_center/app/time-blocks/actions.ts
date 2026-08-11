@@ -72,6 +72,15 @@ const ryanOsBlockTemplates: Record<string, RyanOsBlockTemplate> = {
     note: "Often anchor. Keep touch without letting practice become fake urgency.",
     priority: "MEDIUM",
     title: "Golf Practice"
+  },
+  meditation: {
+    blockType: "Personal",
+    domainSlug: "health",
+    estimatedDuration: "UNDER_30_MIN",
+    minutes: 15,
+    note: "Often anchor. Sit for a few minutes when there is a clean opening.",
+    priority: "MEDIUM",
+    title: "Meditation"
   }
 };
 
