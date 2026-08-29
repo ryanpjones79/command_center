@@ -103,7 +103,7 @@ export async function ensureInitialAgentProjects(userId: string, db: PrismaClien
         userId,
         projectId: project.id,
         profile: profile.profile,
-        enabled: true,
+        enabled: process.env.NODE_ENV === "production" ? process.env.AGENT_PROJECTS_DEFAULT_ENABLED === "true" : true,
         objective: profile.objective,
         primaryKpi: profile.primaryKpi,
         currentBottleneck: profile.currentBottleneck,

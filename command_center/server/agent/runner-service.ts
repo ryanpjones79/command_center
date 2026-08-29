@@ -22,15 +22,17 @@ export const runnerResultSchema = z.object({
 export type RunnerResult = z.infer<typeof runnerResultSchema>;
 
 export async function claimRunnerWork(runner: AgentRunner, input: { capabilities: string[]; version: string }, db: PrismaClient = prisma, now = new Date()) {
-  if (process.env.FEATURE_RUNNER_EXECUTION === "false") return null;
+  if (process.env.FEATURE_RUNNER_EXECUTION !== "true") return null;
   const capabilities = input.capabilities.map(assertPhase2Capability);
   await db.agentWorkItem.updateMany({ where: { userId: runner.userId, state: { in: ["PLANNING", "RUNNING"] }, leaseExpiresAt: { lt: now } },
     data: { state: "RETRY", claimToken: null, leaseExpiresAt: null, heartbeatAt: null, nextEligibleRunAt: now, blocker: "Expired runner lease recovered; retry is eligible." } });
   await db.agentRunner.update({ where: { id: runner.id }, data: { status: "ONLINE", version: input.version, capabilities: JSON.stringify(capabilities), lastHeartbeatAt: now } });
   const candidates = await db.agentWorkItem.findMany({
     where: { userId: runner.userId, state: { in: ["QUEUED", "RETRY"] }, requiredCapability: { in: capabilities },
-      OR: [{ nextEligibleRunAt: null }, { nextEligibleRunAt: { lte: now } }],
-      project: { agentConfig: { is: { enabled: true, pausedAt: null, operatingMode: "LIVE_INTERNAL" } } } },
+      AND: [{ OR: [{ nextEligibleRunAt: null }, { nextEligibleRunAt: { lte: now } }] },
+        { OR: [{ dependsOnWorkItemId: null }, { dependsOnWorkItem: { is: { integrationStatus: "INTEGRATED" } } }] }],
+      project: { agentConfig: { is: { enabled: true, pausedAt: null, operatingMode: "LIVE_INTERNAL" } } },
+    },
     include: { project: { include: { agentConfig: true } } }, orderBy: [{ priority: "desc" }, { createdAt: "asc" }], take: 20
   });
   for (const item of candidates) {
@@ -95,6 +97,7 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
     externalThreadId: result.externalThreadId, externalRunId: result.externalRunId, repositoryIdentifier: result.branch ?? item.repositoryIdentifier,
     blocker: nextState === "RETRY" || nextState === "FAILED" ? result.qaFeedback ?? result.summary : null,
     nextEligibleRunAt: nextState === "RETRY" ? now : null, claimToken: null, leaseExpiresAt: null, heartbeatAt: null,
+    integrationStatus: nextState === "READY_FOR_REVIEW" ? "PENDING_REVIEW" : item.integrationStatus,
     completedAt: ["FAILED", "READY_FOR_REVIEW"].includes(nextState) ? now : null } });
   await db.agentRunner.update({ where: { id: runner.id }, data: { currentWorkItemId: null, lastHeartbeatAt: now,
     lastSuccessfulRunAt: nextState === "READY_FOR_REVIEW" ? now : runner.lastSuccessfulRunAt,

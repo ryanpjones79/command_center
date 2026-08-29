@@ -8,10 +8,13 @@ import { claimRunnerWork, heartbeatRunnerWork, submitRunnerResult } from "@/serv
 import { pmOutputSchema } from "@/server/agent/model-agents";
 import { createOwnerDecision, resolveOwnerDecision } from "@/server/agent/work-service";
 import { runAgentOrchestrationCycle, type OrchestrationServices } from "@/server/agent/orchestration-service";
+import { collectProjectEvidence, executeProjectTool } from "@/server/agent/project-tools";
+import { markAgentWorkIntegrated } from "@/server/agent/integration-service";
 
 const databasePath = path.join(process.cwd(), `.agent-hq-phase2-${process.pid}.db`);
 let db: PrismaClient; let userId: string; let projectId: string; let runner: Awaited<ReturnType<PrismaClient["agentRunner"]["create"]>>;
 beforeAll(async () => {
+  process.env.FEATURE_RUNNER_EXECUTION = "true";
   closeSync(openSync(databasePath, "w")); const prismaCli = path.join(process.cwd(), "node_modules", "prisma", "build", "index.js");
   execFileSync(process.execPath, [prismaCli, "db", "push", "--skip-generate", "--schema", path.join(process.cwd(), "prisma", "schema.prisma")], { env: { ...process.env, DATABASE_URL: `file:${databasePath.replaceAll("\\", "/")}` }, stdio: "pipe" });
   db = new PrismaClient({ datasources: { db: { url: `file:${databasePath.replaceAll("\\", "/")}` } } });
@@ -103,5 +106,33 @@ describe("safe planning outcomes", () => {
     const services: OrchestrationServices = { projectManager: { async chooseNextWork() { return { disposition: "WAIT", title: "No work", objective: "Wait", expectedValue: "Avoid waste", acceptanceCriteria: "No item", agentRole: "PM", actionCategory: "RESEARCH_READ_ONLY", priority: "LOW", maxAttempts: 1, plannedBottleneck: "No valuable action now" }; } }, worker: { async execute() { throw new Error("unused"); } }, verifier: { async verify() { throw new Error("unused"); } } };
     const result = await runAgentOrchestrationCycle(new Date(Date.now() + 1000), { userId, projectIds: [project.id], db, services });
     expect(result.projects[0]?.outcome).toBe("WAITING"); expect(await db.agentWorkItem.count({ where: { projectId: project.id } })).toBe(0);
+  });
+});
+
+describe("integration dependencies and project truth tools", () => {
+  it("allows independent work, blocks dependent work, and releases it after integration", async () => {
+    await db.agentWorkItem.updateMany({ where: { projectId, state: { in: ["QUEUED", "RETRY"] } }, data: { state: "PARKED" } });
+    const base = await db.agentWorkItem.create({ data: { userId, projectId, idempotencyKey: "review-base", title: "Verified base", objective: "Base", expectedValue: "Code", acceptanceCriteria: "Verified", agentRole: "CODE_WORKER", actionCategory: "REVERSIBLE_REPOSITORY_WORK", requiredCapability: "CODEX_IMPLEMENTATION", workspaceIdentifier: "test-repo", state: "READY_FOR_REVIEW", integrationStatus: "PENDING_REVIEW" } });
+    const dependent = await db.agentWorkItem.create({ data: { userId, projectId, idempotencyKey: "dependent", title: "Dependent work", objective: "Requires base", expectedValue: "Follow-on", acceptanceCriteria: "Uses integrated base", agentRole: "CODE_WORKER", actionCategory: "REVERSIBLE_REPOSITORY_WORK", requiredCapability: "CODEX_IMPLEMENTATION", workspaceIdentifier: "test-repo", dependsOnWorkItemId: base.id } });
+    const independent = await db.agentWorkItem.create({ data: { userId, projectId, idempotencyKey: "independent", title: "Independent work", objective: "Independent", expectedValue: "Parallel movement", acceptanceCriteria: "No dependency", agentRole: "CODE_WORKER", actionCategory: "REVERSIBLE_REPOSITORY_WORK", requiredCapability: "CODEX_IMPLEMENTATION", workspaceIdentifier: "test-repo", priority: "HIGH" } });
+    const first = await claimRunnerWork(runner, { capabilities: ["CODEX_IMPLEMENTATION"], version: "test" }, db); expect(first?.workItemId).toBe(independent.id);
+    await db.agentWorkItem.update({ where: { id: independent.id }, data: { state: "PARKED", claimToken: null, leaseExpiresAt: null } });
+    expect(await claimRunnerWork(runner, { capabilities: ["CODEX_IMPLEMENTATION"], version: "test" }, db)).toBeNull();
+    await markAgentWorkIntegrated(userId, base.id, "abc123", db);
+    expect((await claimRunnerWork(runner, { capabilities: ["CODEX_IMPLEMENTATION"], version: "test" }, db))?.workItemId).toBe(dependent.id);
+  });
+  it("validates registered project tools, outputs, policy, and call limits", async () => {
+    await db.agentProjectConfig.update({ where: { projectId }, data: { profile: "SIGNALCARE_GM" } });
+    await db.queueItem.create({ data: { userId, title: "Research Acme", lane: "signalcare", recipient: "Acme Dental", nextAction: "Verify fit" } });
+    const signal = await executeProjectTool({ userId, projectId, profile: "SIGNALCARE_GM" }, "signalcare.pipeline.snapshot", {}, db) as { prospects: unknown[] }; expect(signal.prospects).toHaveLength(1);
+    await expect(executeProjectTool({ userId, projectId, profile: "SIGNALCARE_GM" }, "unknown.sql", { sql: "DROP TABLE" }, db)).rejects.toThrow("DENY");
+    await expect(executeProjectTool({ userId, projectId, profile: "SIGNALCARE_GM" }, "signalcare.pipeline.snapshot", { sql: "SELECT *" }, db)).rejects.toThrow();
+    await expect(collectProjectEvidence({ userId, projectId, profile: "SIGNALCARE_GM" }, ["signalcare.pipeline.snapshot", "signalcare.pipeline.snapshot"], db, 1)).rejects.toThrow("limit");
+    await db.agentProjectConfig.update({ where: { projectId }, data: { profile: "RYKAS_GM" } });
+    await db.rykasDay.create({ data: { userId, date: new Date(), backlogAfter: 12, listedCount: 2 } });
+    const rykas = await executeProjectTool({ userId, projectId, profile: "RYKAS_GM" }, "rykas.operations.snapshot", {}, db) as { sourcingAllowed: boolean }; expect(rykas.sourcingAllowed).toBe(false);
+    await db.agentProjectConfig.update({ where: { projectId }, data: { profile: "CCHCS_PM" } });
+    await expect(executeProjectTool({ userId, projectId, profile: "CCHCS_PM" }, "signalcare.pipeline.snapshot", {}, db)).rejects.toThrow("eligible");
+    expect(await db.agentEvent.count({ where: { projectId, type: { in: ["PROJECT_TOOL_EXECUTED", "WORK_INTEGRATED"] } } })).toBeGreaterThanOrEqual(3);
   });
 });

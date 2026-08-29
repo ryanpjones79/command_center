@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) {
     return unauthorized();
   }
-  if (process.env.FEATURE_AGENT_ORCHESTRATION === "false") {
+  if (process.env.FEATURE_AGENT_ORCHESTRATION !== "true") {
     return NextResponse.json({ ok: true, disabled: true });
   }
 

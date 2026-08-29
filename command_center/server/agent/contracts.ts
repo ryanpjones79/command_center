@@ -63,6 +63,7 @@ export type AgentWorkPlan = {
   sandboxPolicy?: "READ_ONLY" | "WORKSPACE_WRITE";
   networkPolicy?: "OFF" | "ALLOWLIST";
   operationalContext?: string;
+  dependsOnWorkItemId?: string;
   ownerDecisionAfterQa?: OwnerDecisionPlan;
 };
 
@@ -78,6 +79,7 @@ export type ProjectManagerContext = {
   escalationPolicy: string;
   existingWorkTitles: string[];
   operatingMode?: string;
+  toolEvidence?: Array<{ toolId: string; summary: string; output: unknown }>;
 };
 
 export interface ProjectManagerAgent {

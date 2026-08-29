@@ -343,6 +343,7 @@ model AgentWorkItem {
   userId               String
   projectId            String
   parentWorkItemId     String?
+  dependsOnWorkItemId  String?
   idempotencyKey       String
   title                String
   objective            String
@@ -354,6 +355,9 @@ model AgentWorkItem {
   sandboxPolicy        String               @default("READ_ONLY")
   networkPolicy        String               @default("OFF")
   operationalContext   String?
+  integrationStatus    String               @default("NOT_REQUIRED")
+  integratedCommitSha  String?
+  integratedAt         DateTime?
   priority             ExecutionPriority    @default(MEDIUM)
   state                AgentWorkState       @default(QUEUED)
   attemptCount         Int                  @default(0)
@@ -379,6 +383,8 @@ model AgentWorkItem {
   project              ExecutionProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   parentWorkItem       AgentWorkItem?       @relation("AgentWorkTree", fields: [parentWorkItemId], references: [id], onDelete: SetNull)
   childWorkItems       AgentWorkItem[]      @relation("AgentWorkTree")
+  dependsOnWorkItem    AgentWorkItem?       @relation("AgentWorkDependency", fields: [dependsOnWorkItemId], references: [id], onDelete: SetNull)
+  dependentWorkItems   AgentWorkItem[]      @relation("AgentWorkDependency")
   runs                 AgentRun[]
   decisions            AgentDecision[]
   events               AgentEvent[]
@@ -388,6 +394,7 @@ model AgentWorkItem {
   @@index([userId, state, nextEligibleRunAt])
   @@index([projectId, state, priority])
   @@index([parentWorkItemId])
+  @@index([dependsOnWorkItemId])
   @@index([leaseExpiresAt])
 }
 

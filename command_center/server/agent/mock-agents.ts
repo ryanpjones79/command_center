@@ -119,6 +119,17 @@ const plansByProfile: Record<string, AgentWorkPlan> = {
 
 export class DeterministicProjectManagerAgent implements ProjectManagerAgent {
   async chooseNextWork(context: Parameters<ProjectManagerAgent["chooseNextWork"]>[0]) {
+    if (context.operatingMode === "LIVE_INTERNAL" && context.toolEvidence?.length) {
+      const output = context.toolEvidence[0]?.output as Record<string, unknown>;
+      if (context.profile === "SIGNALCARE_GM") {
+        const prospects = (output.prospects as Array<{ name: string; evidence: string | null; stale: boolean }> | undefined) ?? [];
+        if (!prospects.length) return { ...plansByProfile.SIGNALCARE_GM, disposition: "WAIT" as const, plannedBottleneck: "No qualified prospect is currently recorded; PM will not invent pipeline work." };
+        const target = prospects.find((p) => !p.evidence || p.stale) ?? prospects[0]!;
+        return { ...plansByProfile.SIGNALCARE_GM, title: `Resolve qualification evidence for ${target.name}`, objective: `Resolve the highest-value missing or stale acquisition evidence for ${target.name} without sending outreach.`, ownerDecisionAfterQa: undefined };
+      }
+      if (context.profile === "RYKAS_GM" && output.sourcingAllowed === false) return { ...plansByProfile.RYKAS_GM, title: "Resolve the Rykas listing backlog before sourcing", objective: "Identify and resolve the highest-value listing or inventory-flow blocker.", actionCategory: "RESEARCH_READ_ONLY" as const, ownerDecisionAfterQa: undefined };
+      if (context.profile === "CCHCS_PM" && (Number(output.overdueCount) > 0 || Number(output.waitingCount) > 0)) return { ...plansByProfile.CCHCS_PM, title: "Reconcile overdue and waiting CCHCS commitments", objective: "Produce a PHI-free prioritized follow-up plan for current stalled commitments.", ownerDecisionAfterQa: undefined };
+    }
     return (
       plansByProfile[context.profile] ?? {
         title: `Review the current bottleneck for ${context.projectName}`,

@@ -16,6 +16,7 @@ import {
   DeterministicQaVerifier
 } from "@/server/agent/mock-agents";
 import { ModelProjectManagerAgent } from "@/server/agent/model-agents";
+import { collectProjectEvidence, defaultToolsForProfile } from "@/server/agent/project-tools";
 import { createOwnerDecision, transitionAgentWorkItem } from "@/server/agent/work-service";
 
 const reviewIntervalMs = 15 * 60 * 1000;
@@ -139,6 +140,7 @@ async function processClaimedProject(
     orderBy: [{ priority: "desc" }, { createdAt: "asc" }]
   });
 
+  const toolEvidence = await collectProjectEvidence({ userId: config.userId, projectId: config.projectId, profile: config.profile }, defaultToolsForProfile(config.profile), db);
   const plan = await services.projectManager.chooseNextWork({
     profile: config.profile,
     projectId: config.projectId,
@@ -150,6 +152,7 @@ async function processClaimedProject(
     autonomyPolicy: config.autonomyPolicy,
     escalationPolicy: config.escalationPolicy,
     operatingMode: config.operatingMode,
+    toolEvidence,
     existingWorkTitles: await db.agentWorkItem
       .findMany({ where: { projectId: config.projectId }, select: { title: true }, take: 20 })
       .then((items) => items.map((item) => item.title))
@@ -184,6 +187,7 @@ async function processClaimedProject(
         sandboxPolicy: plan.sandboxPolicy ?? (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK" ? "WORKSPACE_WRITE" : "READ_ONLY"),
         networkPolicy: plan.networkPolicy ?? "OFF",
         operationalContext: plan.operationalContext,
+        dependsOnWorkItemId: plan.dependsOnWorkItemId,
         priority: plan.priority,
         maxAttempts: plan.maxAttempts,
         workspaceIdentifier: config.workspaceIdentifier

@@ -1,0 +1,10 @@
+PRAGMA defer_foreign_keys=ON;
+PRAGMA foreign_keys=OFF;
+ALTER TABLE "AgentWorkItem" ADD COLUMN "dependsOnWorkItemId" TEXT REFERENCES "AgentWorkItem"("id") ON DELETE SET NULL;
+ALTER TABLE "AgentWorkItem" ADD COLUMN "integrationStatus" TEXT NOT NULL DEFAULT 'NOT_REQUIRED';
+ALTER TABLE "AgentWorkItem" ADD COLUMN "integratedCommitSha" TEXT;
+ALTER TABLE "AgentWorkItem" ADD COLUMN "integratedAt" DATETIME;
+CREATE INDEX "AgentWorkItem_dependsOnWorkItemId_idx" ON "AgentWorkItem"("dependsOnWorkItemId");
+UPDATE "AgentProjectConfig" SET "enabled" = false, "pausedAt" = COALESCE("pausedAt", CURRENT_TIMESTAMP), "operatingMode" = 'SIMULATION';
+PRAGMA foreign_keys=ON;
+PRAGMA defer_foreign_keys=OFF;
