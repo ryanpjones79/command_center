@@ -12,6 +12,12 @@ import {
   vi
 } from "vitest";
 import { SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
+import {
+  evaluateSignalCareProspectQuality,
+  hasUnresolvedOutreachPlaceholder,
+  isDirectSignalCareFitSignal,
+  isSignalCareBuyerPersonaAligned
+} from "@/lib/signalcare-prospect-quality";
 import { markAgentWorkIntegrated } from "@/server/agent/integration-service";
 import {
   ModelProjectManagerAgent,
@@ -33,6 +39,7 @@ import {
   normalizeProspectDomain,
   OpenAiSignalCareResearchClient,
   recoverPrematureSignalCareOutreachDecisions,
+  recoverSignalCareOwnerPassContinuation,
   recoverFailedSignalCareProspectResearch,
   reclassifySignalCareProspectResearch,
   retainCitedSignalCareQualification,
@@ -78,14 +85,34 @@ function candidate(
   const source = `https://${domain}/locations`;
   return {
     organizationName: `Example Dental Group ${index}`,
+    canonicalOrganizationName: `Example Dental Group ${index}`,
     officialWebsite: `https://${domain}`,
     domain,
+    knownAliases: [],
+    customerType: "DIRECT_PROSPECT",
+    parentOrganization: null,
+    buyingAutonomy: "VERIFIED",
+    buyingAutonomyEvidence: [
+      {
+        fact: `Example Dental Group ${index} is independently operated.`,
+        sourceUrls: [source]
+      }
+    ],
+    entityIdentityConfidence: "HIGH",
+    organizationScale: "SMALL_MID_MARKET",
+    realisticContractingPathEvidence: [],
     organizationType: "Multi-location dental organization",
     locationCount: index + 2,
     geography: "United States",
     verifiedPublicFacts: [
       {
         fact: `The official locations page lists ${index + 2} locations.`,
+        sourceUrls: [source]
+      }
+    ],
+    verifiedFitEvidence: [
+      {
+        fact: `The official site lists ${index + 2} locations with centralized scheduling.`,
         sourceUrls: [source]
       }
     ],
@@ -96,6 +123,7 @@ function candidate(
     suggestedEntryOffer: "DENTAL_REVENUE_LEAKAGE_DIAGNOSTIC",
     evidenceConfidence: "HIGH",
     sourceUrls: [source],
+    sourceQuality: [{ sourceUrl: source, quality: "PRIMARY" }],
     recommendedNextAction:
       "Verify the operating contact and prepare an outreach package.",
     ...overrides
@@ -118,15 +146,45 @@ function qualification(
   overrides: Partial<SignalCareQualification> = {}
 ): SignalCareQualification {
   const source = "https://existing-dental.example/locations";
+  const leadershipSource = "https://existing-dental.example/leadership";
   return {
     organizationName,
+    canonicalOrganizationName: organizationName,
+    officialDomain: "existing-dental.example",
+    knownAliases: [],
+    customerType: "DIRECT_PROSPECT",
+    parentOrganization: null,
+    buyingAutonomy: "VERIFIED",
+    buyingAutonomyEvidence: [
+      {
+        fact: `${organizationName} is independently operated.`,
+        sourceUrls: [leadershipSource]
+      }
+    ],
+    entityIdentityConfidence: "HIGH",
+    organizationScale: "SMALL_MID_MARKET",
+    realisticContractingPathEvidence: [],
     likelyStakeholderRole: "Operations leader",
+    likelyBuyerRole: "Director of Operations",
+    buyerRoleEvidence: [
+      {
+        fact: `Taylor Smith is Director of Operations at ${organizationName}.`,
+        sourceUrls: [leadershipSource]
+      }
+    ],
+    targetContactName: "Taylor Smith",
+    targetContactRole: "Director of Operations",
+    targetContactSourceUrl: leadershipSource,
     verifiedPublicFacts: [
-      { fact: "The official site lists four locations.", sourceUrls: [source] }
+      { fact: "The official site lists four locations.", sourceUrls: [source] },
+      {
+        fact: `The official leadership page identifies Taylor Smith at ${organizationName}.`,
+        sourceUrls: [leadershipSource]
+      }
     ],
     verifiedFitEvidence: [
       {
-        fact: "The official services page lists multi-site scheduling services.",
+        fact: "The official site shows multiple locations with centralized scheduling.",
         sourceUrls: [source]
       }
     ],
@@ -135,11 +193,15 @@ function qualification(
     recommendedEntryOffer: "DENTAL_REVENUE_LEAKAGE_DIAGNOSTIC",
     conversationAngle: "Compare scheduling visibility across locations.",
     draftOutreachLanguage:
-      "Would a short conversation about multi-location scheduling visibility be useful?",
+      `Taylor, would a short conversation about ${organizationName}'s multi-location scheduling visibility be useful?`,
     evidenceAgainstPursuit: "No public evidence confirms an urgent problem.",
     confidence: "HIGH",
     recommendation: "ADVANCE",
-    sourceUrls: [source],
+    sourceUrls: [source, leadershipSource],
+    sourceQuality: [
+      { sourceUrl: source, quality: "PRIMARY" },
+      { sourceUrl: leadershipSource, quality: "PRIMARY" }
+    ],
     qualificationSummary:
       "Public evidence supports an internal outreach-ready package.",
     nextResearchStep: null,
@@ -474,6 +536,146 @@ describe("SignalCare hosted public-web research", () => {
     ).toBe(false);
   });
 
+  it("rejects weak customer-fit discovery candidates before they enter the pipeline", () => {
+    const technologyVendor = candidate(1, {
+      customerType: "TECHNOLOGY_VENDOR",
+      signalCareFit: "A speculative integration partnership may exist."
+    });
+    const genericHealthcare = candidate(2, {
+      verifiedFitEvidence: [
+        {
+          fact: "The organization provides healthcare, uses AI, and cares about patient outcomes.",
+          sourceUrls: candidate(2).sourceUrls
+        }
+      ]
+    });
+    const weakBase = candidate(3);
+    const weakDirectory =
+      "https://directory.example.com/example-dental-group-3/technology";
+    const weakItEstimate = candidate(3, {
+      suggestedEntryOffer: "ANALYTICS_REPORTING_MODERNIZATION",
+      verifiedFitEvidence: [
+        {
+          fact: "A scraped directory estimates Power BI and annual IT spend.",
+          sourceUrls: [weakDirectory]
+        }
+      ],
+      sourceUrls: [...weakBase.sourceUrls, weakDirectory],
+      sourceQuality: [
+        ...weakBase.sourceQuality,
+        { sourceUrl: weakDirectory, quality: "WEAK" }
+      ]
+    });
+    const giantEnterprise = candidate(4, {
+      organizationScale: "LARGE_ENTERPRISE",
+      realisticContractingPathEvidence: []
+    });
+    const inputs = [
+      technologyVendor,
+      genericHealthcare,
+      weakItEstimate,
+      giantEnterprise
+    ];
+    const result = retainCitedSignalCareEvidence(
+      { candidates: inputs, searchSummary: "Quality-gate test." },
+      inputs.flatMap((item) => item.sourceUrls.map(providerSource))
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.diagnostics.candidatesRejectedQualityGate).toBe(4);
+  });
+
+  it("excludes unrelated same-name sources from entity provenance", () => {
+    const official = "https://captioncare.com/about";
+    const unrelated = "https://care.org/reports/healthcare-access";
+    const genericCaptions = "https://captions.example.com/company";
+    const captionCare = candidate(1, {
+      organizationName: "Caption Care",
+      canonicalOrganizationName: "Caption Care",
+      officialWebsite: "https://captioncare.com",
+      domain: "captioncare.com",
+      knownAliases: ["CaptionCare"],
+      buyingAutonomyEvidence: [
+        {
+          fact: "Caption Care's official site describes its operating organization.",
+          sourceUrls: [official]
+        }
+      ],
+      verifiedPublicFacts: [
+        {
+          fact: "Caption Care describes its organization on its official site.",
+          sourceUrls: [official]
+        },
+        {
+          fact: "An unrelated CARE organization reports global activity.",
+          sourceUrls: [unrelated]
+        },
+        {
+          fact: "A generic captions business exists.",
+          sourceUrls: [genericCaptions]
+        }
+      ],
+      verifiedFitEvidence: [
+        {
+          fact: "Caption Care's official site describes multiple healthcare locations with operational reporting.",
+          sourceUrls: [official]
+        }
+      ],
+      suggestedEntryOffer:
+        "HEALTHCARE_OPERATIONAL_VISIBILITY_WORKFLOW_DIAGNOSTIC",
+      sourceUrls: [official, unrelated, genericCaptions],
+      sourceQuality: [
+        { sourceUrl: official, quality: "PRIMARY" },
+        { sourceUrl: unrelated, quality: "SECONDARY" },
+        { sourceUrl: genericCaptions, quality: "SECONDARY" }
+      ]
+    });
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [captionCare], searchSummary: "Exact entity only." },
+      [
+        providerSource(official),
+        providerSource(unrelated),
+        providerSource(genericCaptions)
+      ]
+    );
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.sourceUrls).toEqual([official]);
+    expect(result.candidates[0]?.verifiedPublicFacts).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain("care.org");
+    expect(JSON.stringify(result)).not.toContain("captions.example.com");
+  });
+
+  it("cannot validate Caption Care with an unrelated care.org result", () => {
+    const officialRoot = "https://captioncare.com";
+    const unrelated = "https://care.org/reports/operations";
+    const captionCare = candidate(1, {
+      organizationName: "Caption Care",
+      canonicalOrganizationName: "Caption Care",
+      officialWebsite: officialRoot,
+      domain: "captioncare.com",
+      knownAliases: [],
+      verifiedPublicFacts: [
+        { fact: "Unrelated CARE material.", sourceUrls: [unrelated] }
+      ],
+      verifiedFitEvidence: [
+        {
+          fact: "The unrelated organization discusses operational reporting.",
+          sourceUrls: [unrelated]
+        }
+      ],
+      buyingAutonomyEvidence: [],
+      sourceUrls: [unrelated],
+      sourceQuality: [{ sourceUrl: unrelated, quality: "SECONDARY" }]
+    });
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [captionCare], searchSummary: "Ambiguous entity." },
+      [providerSource(officialRoot), providerSource(unrelated)]
+    );
+
+    expect(result.candidates).toEqual([]);
+  });
+
   it("matches exact provider URLs and persists the provider-returned URL", () => {
     const modelCandidate = candidate(1);
     const providerUrl = modelCandidate.sourceUrls[0];
@@ -519,7 +721,7 @@ describe("SignalCare hosted public-web research", () => {
     );
 
     expect(result.candidates).toEqual([]);
-    expect(result.diagnostics.factsRejectedNoProviderSource).toBe(1);
+    expect(result.diagnostics.factsRejectedNoProviderSource).toBeGreaterThanOrEqual(1);
   });
 
   it("normalizes fragments, www, and HTTP/HTTPS without lowercasing paths", () => {
@@ -667,6 +869,7 @@ describe("SignalCare hosted public-web research", () => {
       candidatesAccepted: 0,
       candidatesRejectedLowConfidence: 1,
       candidatesRejectedNoProviderSource: 2,
+      candidatesRejectedQualityGate: 0,
       factsRejectedNoProviderSource: 4
     };
     const client: SignalCareResearchClient = {
@@ -735,6 +938,8 @@ describe("SignalCare hosted public-web research", () => {
     const first = candidate(1);
     const duplicate = candidate(2, {
       organizationName: "A different rendering of the same organization",
+      canonicalOrganizationName:
+        "A different rendering of the same organization",
       officialWebsite: first.officialWebsite,
       domain: first.domain,
       sourceUrls: first.sourceUrls,
@@ -1538,6 +1743,149 @@ describe("SignalCare hosted public-web research", () => {
     ).toThrow("inadequate provider provenance");
   });
 
+  it("removes unrelated entity sources from qualification provenance", () => {
+    const packageData = qualification("Existing Dental");
+    const unrelated = "https://care.org/reports/operations";
+    const retained = retainCitedSignalCareQualification(
+      {
+        ...packageData,
+        verifiedPublicFacts: [
+          ...packageData.verifiedPublicFacts,
+          { fact: "Unrelated CARE organization fact.", sourceUrls: [unrelated] }
+        ],
+        sourceUrls: [...packageData.sourceUrls, unrelated],
+        sourceQuality: [
+          ...packageData.sourceQuality,
+          { sourceUrl: unrelated, quality: "SECONDARY" }
+        ]
+      },
+      [...packageData.sourceUrls, unrelated].map(providerSource)
+    );
+
+    expect(retained.sourceUrls).toEqual(packageData.sourceUrls);
+    expect(retained.verifiedPublicFacts).toHaveLength(
+      packageData.verifiedPublicFacts.length
+    );
+    expect(JSON.stringify(retained)).not.toContain("care.org");
+  });
+
+  it("applies deterministic subsidiary, buyer, draft, and confidence quality gates", () => {
+    const strong = qualification("Strong Dental Group");
+    expect(evaluateSignalCareProspectQuality(strong)).toMatchObject({
+      outcome: "ADVANCE",
+      confidence: "HIGH"
+    });
+
+    const singleSource = strong.sourceUrls[0]!;
+    expect(
+      evaluateSignalCareProspectQuality({
+        ...strong,
+        verifiedPublicFacts: [strong.verifiedPublicFacts[0]!],
+        buyingAutonomyEvidence: [
+          {
+            fact: "Strong Dental Group is independently operated.",
+            sourceUrls: [singleSource]
+          }
+        ],
+        buyerRoleEvidence: [
+          {
+            fact:
+              "Taylor Smith is Director of Operations at Strong Dental Group.",
+            sourceUrls: [singleSource]
+          }
+        ],
+        targetContactSourceUrl: singleSource,
+        sourceUrls: [singleSource],
+        sourceQuality: [{ sourceUrl: singleSource, quality: "PRIMARY" }]
+      }).confidence
+    ).toBe("MEDIUM");
+
+    const integratedSubsidiary = evaluateSignalCareProspectQuality({
+      ...qualification("Caption Care"),
+      customerType: "SUBSIDIARY_OR_BUSINESS_UNIT",
+      parentOrganization: "GE HealthCare",
+      buyingAutonomy: "UNLIKELY",
+      buyingAutonomyEvidence: [],
+      evidenceAgainstPursuit:
+        "Caption Care is integrated into GE HealthCare and no independent buying path is verified."
+    });
+    expect(integratedSubsidiary).toMatchObject({
+      outcome: "PASS",
+      confidence: "LOW"
+    });
+
+    const missingContact = evaluateSignalCareProspectQuality({
+      ...strong,
+      targetContactName: null,
+      targetContactRole: null,
+      targetContactSourceUrl: null,
+      buyerRoleEvidence: []
+    });
+    expect(missingContact.outcome).toBe("NEED_MORE_RESEARCH");
+    expect(missingContact.confidence).toBe("MEDIUM");
+
+    const placeholder = evaluateSignalCareProspectQuality({
+      ...strong,
+      draftOutreachLanguage:
+        "Hi [Recipient's Name], could we discuss scheduling visibility?"
+    });
+    expect(placeholder.outcome).toBe("NEED_MORE_RESEARCH");
+    expect(
+      hasUnresolvedOutreachPlaceholder(
+        "Hi [Recipient's Name], could we discuss scheduling visibility?"
+      )
+    ).toBe(true);
+  });
+
+  it("requires offer-specific direct fit and offer-specific buyer personas", () => {
+    expect(
+      isDirectSignalCareFitSignal(
+        "HEALTHCARE_OPERATIONAL_VISIBILITY_WORKFLOW_DIAGNOSTIC",
+        "The organization provides healthcare, uses AI, and cares about outcomes."
+      )
+    ).toBe(false);
+    expect(
+      isDirectSignalCareFitSignal(
+        "HEALTHCARE_OPERATIONAL_VISIBILITY_WORKFLOW_DIAGNOSTIC",
+        "The provider operates multiple locations with centralized referral scheduling."
+      )
+    ).toBe(true);
+    expect(
+      isSignalCareBuyerPersonaAligned(
+        "DENTAL_REVENUE_LEAKAGE_DIAGNOSTIC",
+        "Chief Financial Officer"
+      )
+    ).toBe(true);
+    expect(
+      isSignalCareBuyerPersonaAligned(
+        "ANALYTICS_REPORTING_MODERNIZATION",
+        "Chief Financial Officer"
+      )
+    ).toBe(false);
+
+    const genericOnly = evaluateSignalCareProspectQuality({
+      ...qualification("Generic Health Group"),
+      recommendedEntryOffer:
+        "HEALTHCARE_OPERATIONAL_VISIBILITY_WORKFLOW_DIAGNOSTIC",
+      verifiedFitEvidence: [
+        {
+          fact: "The organization provides healthcare and uses AI.",
+          sourceUrls: ["https://existing-dental.example/locations"]
+        }
+      ]
+    });
+    expect(genericOnly.outcome).toBe("NEED_MORE_RESEARCH");
+  });
+
+  it("does not let a technology vendor advance for partnership potential", () => {
+    expect(
+      evaluateSignalCareProspectQuality({
+        ...qualification("Platform Vendor"),
+        customerType: "TECHNOLOGY_VENDOR"
+      }).outcome
+    ).toBe("PASS");
+  });
+
   it.each([
     ["ADVANCE", "HIGH", "outreach_ready"],
     ["PASS", "MEDIUM", "passed"]
@@ -1620,6 +1968,143 @@ describe("SignalCare hosted public-web research", () => {
       );
     }
   );
+
+  it("keeps a GE-owned Caption Care-style subsidiary out of outreach_ready", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Requalify Caption Care",
+        lane: "signalcare",
+        recipient: "Caption Care",
+        status: "queued",
+        nextAction: "Verify customer fit and buying autonomy."
+      }
+    });
+    await db.pipelineAction.create({
+      data: {
+        userId,
+        date: new Date(),
+        type: "prospect_research",
+        withWhom: "Caption Care",
+        note: JSON.stringify({
+          domain: "existing-dental.example",
+          officialDomain: "existing-dental.example"
+        })
+      }
+    });
+    const work = await createWork("caption-care-quality-gate", signalProjectId, {
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Caption Care"
+      })
+    });
+    const captionCare = qualification("Caption Care", {
+      customerType: "SUBSIDIARY_OR_BUSINESS_UNIT",
+      parentOrganization: "GE HealthCare",
+      buyingAutonomy: "UNLIKELY",
+      buyingAutonomyEvidence: [],
+      evidenceAgainstPursuit:
+        "The organization is integrated into GE HealthCare and has no verified independent buying path.",
+      recommendation: "ADVANCE"
+    });
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      {
+        discover: vi.fn(),
+        qualify: vi.fn().mockResolvedValue({
+          qualification: captionCare,
+          providerSourceUrls: captionCare.sourceUrls
+        })
+      },
+      db
+    );
+
+    expect(result.pipelineStatus).toBe("passed");
+    expect(
+      await db.queueItem.findFirstOrThrow({
+        where: { userId, recipient: "Caption Care" }
+      })
+    ).toMatchObject({ status: "passed" });
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(
+      await db.pipelineAction.count({
+        where: { userId, type: { in: ["email", "sms", "outreach_sent"] } }
+      })
+    ).toBe(0);
+  });
+
+  it.each([
+    [
+      "missing named contact",
+      {
+        targetContactName: null,
+        targetContactRole: null,
+        targetContactSourceUrl: null,
+        buyerRoleEvidence: []
+      }
+    ],
+    [
+      "placeholder draft",
+      {
+        draftOutreachLanguage:
+          "Hi [Recipient's Name], can we discuss scheduling visibility?"
+      }
+    ]
+  ] as const)("keeps a prospect qualified when it has a %s", async (_label, overrides) => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Qualify Existing Dental",
+        lane: "signalcare",
+        recipient: "Existing Dental",
+        status: "queued",
+        nextAction: "Complete the outreach package."
+      }
+    });
+    await db.pipelineAction.create({
+      data: {
+        userId,
+        date: new Date(),
+        type: "prospect_research",
+        withWhom: "Existing Dental",
+        note: JSON.stringify({ domain: "existing-dental.example" })
+      }
+    });
+    const work = await createWork(`quality-gap-${_label}`, signalProjectId, {
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Existing Dental"
+      })
+    });
+    const packageData = qualification(
+      "Existing Dental",
+      overrides as Partial<SignalCareQualification>
+    );
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      {
+        discover: vi.fn(),
+        qualify: vi.fn().mockResolvedValue({
+          qualification: packageData,
+          providerSourceUrls: packageData.sourceUrls
+        })
+      },
+      db
+    );
+
+    expect(result.pipelineStatus).toBe("qualified");
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+  });
 
   it("turns an outreach-ready prospect into NEED RYAN without communicating externally", async () => {
     await createReadyProspect();
@@ -1729,10 +2214,41 @@ describe("SignalCare hosted public-web research", () => {
       await db.agentWorkItem.findUniqueOrThrow({
         where: { id: result.projects[0]!.workItemId! }
       })
-    ).toMatchObject({ state: "QUEUED" });
+    ).toMatchObject({
+      state: "QUEUED",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "ALLOWLIST"
+    });
+    expect(
+      JSON.parse(
+        (
+          await db.agentWorkItem.findUniqueOrThrow({
+            where: { id: result.projects[0]!.workItemId! }
+          })
+        ).operationalContext ?? "{}"
+      )
+    ).toMatchObject({
+      researchMode: "QUALIFY_EXISTING_PROSPECT",
+      targetProspect: "Existing Dental"
+    });
     expect(
       await db.agentActionRequest.findFirstOrThrow({ where: { userId } })
     ).toMatchObject({ state: "PROPOSED", decisionId: null });
+    expect(
+      await db.queueItem.findFirstOrThrow({
+        where: { userId, recipient: "Existing Dental" }
+      })
+    ).toMatchObject({
+      status: "queued",
+      nextAction:
+        "Resolve the owner-requested evidence gap for this exact prospect."
+    });
+    expect(
+      await db.agentProjectConfig.findUniqueOrThrow({
+        where: { projectId: signalProjectId }
+      })
+    ).toMatchObject({ nextAgentReviewAt: expect.any(Date) });
   });
 
   it("does not create NEED RYAN when ownerNeeded is false", async () => {
@@ -2129,6 +2645,99 @@ describe("SignalCare hosted public-web research", () => {
     expect(
       await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
     ).toMatchObject({ state: "PARKED" });
+    expect(
+      await db.queueItem.findFirstOrThrow({
+        where: { userId, recipient: "Existing Dental" }
+      })
+    ).toMatchObject({
+      status: "passed",
+      nextAction: "Passed by owner; no outreach authorized or performed."
+    });
+    expect(
+      await db.agentProjectConfig.findUniqueOrThrow({
+        where: { projectId: signalProjectId }
+      })
+    ).toMatchObject({ nextAgentReviewAt: expect.any(Date) });
+    expect(
+      await db.pipelineAction.count({
+        where: { userId, type: { in: ["email", "sms", "outreach_sent"] } }
+      })
+    ).toBe(0);
+  });
+
+  it("recovers an already-resolved owner PASS exactly once", async () => {
+    const now = new Date("2026-08-29T20:30:00.000Z");
+    const { queueItem } = await createReadyProspect("Caption Care");
+    const work = await createWork("legacy-caption-pass");
+    await db.agentWorkItem.update({
+      where: { id: work.id },
+      data: { state: "PARKED", completedAt: new Date() }
+    });
+    const decision = await db.agentDecision.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        originatingWorkItemId: work.id,
+        idempotencyKey: "legacy-caption-pass-decision",
+        category: "SEND_EMAIL_OR_MESSAGE",
+        question: "Approve first outreach to Caption Care?",
+        context: "Legacy resolved decision.",
+        recommendedChoice: "APPROVE",
+        availableChoices: JSON.stringify([
+          "APPROVE",
+          "NEEDS_MORE_RESEARCH",
+          "PASS"
+        ]),
+        risk: "External representation.",
+        status: "RESOLVED",
+        selectedChoice: "PASS",
+        resultingAction: "Work parked by owner decision.",
+        resolvedAt: new Date("2026-08-29T20:00:00.000Z")
+      }
+    });
+    await db.agentActionRequest.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        decisionId: decision.id,
+        idempotencyKey: "legacy-caption-pass-action",
+        actionFingerprint: "legacy-caption-pass-fingerprint",
+        category: "SEND_EMAIL_OR_MESSAGE",
+        capability: "SEND_EMAIL_OR_MESSAGE",
+        state: "CANCELLED",
+        boundedPayload: JSON.stringify({
+          targetEntity: {
+            type: "SIGNALCARE_PROSPECT",
+            name: "Caption Care"
+          },
+          externalOutreachPerformed: false
+        }),
+        authorizationBounds: JSON.stringify({ oneTime: true }),
+        cancelledAt: new Date("2026-08-29T20:00:00.000Z")
+      }
+    });
+    await db.agentProjectConfig.update({
+      where: { projectId: signalProjectId },
+      data: { nextAgentReviewAt: new Date("2026-09-10T00:00:00.000Z") }
+    });
+
+    expect(
+      await recoverSignalCareOwnerPassContinuation(userId, db, now)
+    ).toEqual([signalProjectId]);
+    expect(
+      await recoverSignalCareOwnerPassContinuation(userId, db, now)
+    ).toEqual([]);
+    expect(
+      await db.queueItem.findUniqueOrThrow({ where: { id: queueItem.id } })
+    ).toMatchObject({ status: "passed" });
+    expect(
+      (
+        await db.agentProjectConfig.findUniqueOrThrow({
+          where: { projectId: signalProjectId }
+        })
+      ).nextAgentReviewAt?.toISOString()
+    ).toBe(now.toISOString());
   });
 
   it("rejects invented SignalCare offers and monitoring-platform positioning", () => {

@@ -1,5 +1,6 @@
 import type { AgentWorkState, PrismaClient } from "@prisma/client";
 import { createHash } from "node:crypto";
+import { SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
 import { assertAgentWorkTransition } from "@/lib/agent-state-machine";
 import { evaluateAgentPolicy, type AgentActionCategory } from "@/lib/agent-policy";
 import { prisma } from "@/lib/prisma";
@@ -210,6 +211,19 @@ export async function resolveOwnerDecision(
   );
   if (!canonicalChoice) throw new Error("Selected choice is not available for this decision.");
   const nextState = resolutionState(canonicalChoice);
+  const signalCareConfig =
+    decision.category === "SEND_EMAIL_OR_MESSAGE"
+      ? await db.agentProjectConfig.findFirst({
+          where: {
+            userId,
+            projectId: decision.projectId,
+            profile: "SIGNALCARE_GM"
+          }
+        })
+      : null;
+  const signalCareTarget = signalCareConfig
+    ? parseSignalCareDecisionTarget(decision.actionRequest?.boundedPayload)
+    : null;
 
   if (decision.actionRequest?.expiresAt && decision.actionRequest.expiresAt <= new Date()) {
     await db.agentActionRequest.update({
@@ -223,14 +237,8 @@ export async function resolveOwnerDecision(
     nextState === "AWAITING_EXECUTION" &&
     decision.category === "SEND_EMAIL_OR_MESSAGE"
   ) {
-    const config = await db.agentProjectConfig.findUnique({
-      where: { projectId: decision.projectId }
-    });
-    if (config?.profile === "SIGNALCARE_GM") {
-      const target = parseSignalCareDecisionTarget(
-        decision.actionRequest?.boundedPayload
-      );
-      if (!target) {
+    if (signalCareConfig) {
+      if (!signalCareTarget) {
         throw new Error(
           "SignalCare outreach authorization has no typed target prospect."
         );
@@ -238,7 +246,7 @@ export async function resolveOwnerDecision(
       const readiness = await evaluateSignalCareOutreachReadiness(
         userId,
         decision.projectId,
-        target,
+        signalCareTarget,
         db
       );
       if (!readiness.ready) {
@@ -282,6 +290,109 @@ export async function resolveOwnerDecision(
       blocker: null,
       nextEligibleRunAt: nextState === "QUEUED" ? new Date() : null
     }, db);
+  }
+
+  if (signalCareConfig && signalCareTarget) {
+    const queueItems = await db.queueItem.findMany({
+      where: { userId, lane: { in: ["signalcare", "pipeline"] } }
+    });
+    const targetQueueItem = queueItems.find(
+      (item) =>
+        item.recipient.trim().toLowerCase() ===
+        signalCareTarget.name.trim().toLowerCase()
+    );
+    if (targetQueueItem && canonicalChoice === "PASS") {
+      await db.queueItem.update({
+        where: { id: targetQueueItem.id },
+        data: {
+          status: "passed",
+          nextAction: "Passed by owner; no outreach authorized or performed.",
+          resolvedAt: new Date()
+        }
+      });
+    }
+    if (targetQueueItem && canonicalChoice === "NEEDS_MORE_RESEARCH") {
+      await db.queueItem.update({
+        where: { id: targetQueueItem.id },
+        data: {
+          status: "queued",
+          nextAction:
+            "Resolve the owner-requested evidence gap for this exact prospect.",
+          resolvedAt: null
+        }
+      });
+      if (decision.originatingWorkItemId) {
+        await db.agentWorkItem.updateMany({
+          where: {
+            id: decision.originatingWorkItemId,
+            userId,
+            state: "QUEUED"
+          },
+          data: {
+            title: `Resolve evidence gaps for ${signalCareTarget.name}`,
+            objective: `Perform bounded public qualification follow-up for ${signalCareTarget.name}.`,
+            actionCategory: "RESEARCH_READ_ONLY",
+            requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+            sandboxPolicy: "READ_ONLY",
+            networkPolicy: "ALLOWLIST",
+            operationalContext: JSON.stringify({
+              researchMode: "QUALIFY_EXISTING_PROSPECT",
+              targetProspect: signalCareTarget.name,
+              instructions:
+                "Resolve only the evidence gap requested by the owner; do not send outreach."
+            }),
+            nextEligibleRunAt: new Date()
+          }
+        });
+      }
+    }
+    if (canonicalChoice === "NEEDS_MORE_RESEARCH") {
+      await db.agentProjectConfig.update({
+        where: { id: signalCareConfig.id },
+        data: { nextAgentReviewAt: new Date() }
+      });
+    } else if (canonicalChoice === "PASS") {
+      const [actionableProspects, activeWork, pendingDecisions] =
+        await Promise.all([
+          db.queueItem.count({
+            where: {
+              userId,
+              lane: { in: ["signalcare", "pipeline"] },
+              status: { notIn: ["done", "killed", "passed"] }
+            }
+          }),
+          db.agentWorkItem.count({
+            where: {
+              userId,
+              projectId: decision.projectId,
+              state: {
+                in: [
+                  "QUEUED",
+                  "PLANNING",
+                  "RUNNING",
+                  "VERIFYING",
+                  "RETRY",
+                  "NEEDS_RYAN",
+                  "AWAITING_EXECUTION"
+                ]
+              }
+            }
+          }),
+          db.agentDecision.count({
+            where: {
+              userId,
+              projectId: decision.projectId,
+              status: "PENDING"
+            }
+          })
+        ]);
+      if (actionableProspects === 0 && activeWork === 0 && pendingDecisions === 0) {
+        await db.agentProjectConfig.update({
+          where: { id: signalCareConfig.id },
+          data: { nextAgentReviewAt: new Date() }
+        });
+      }
+    }
   }
 
   await recordAgentEvent(

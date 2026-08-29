@@ -4,6 +4,7 @@ import { runAgentOrchestrationCycle } from "@/server/agent/orchestration-service
 import { ensureInitialAgentProjects } from "@/server/agent/setup-service";
 import {
   recoverPrematureSignalCareOutreachDecisions,
+  recoverSignalCareOwnerPassContinuation,
   scheduleSignalCareQualificationReviewOnce
 } from "@/server/agent/signalcare-research-service";
 
@@ -24,6 +25,7 @@ export async function GET(request: Request) {
   for (const user of users) {
     await ensureInitialAgentProjects(user.id);
     await recoverPrematureSignalCareOutreachDecisions(user.id);
+    await recoverSignalCareOwnerPassContinuation(user.id);
     await scheduleSignalCareQualificationReviewOnce(user.id);
   }
   const result = await runAgentOrchestrationCycle(new Date());

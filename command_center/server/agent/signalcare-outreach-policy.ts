@@ -1,5 +1,9 @@
 import type { PrismaClient } from "@prisma/client";
 import { signalCareApprovedOfferSchema } from "@/lib/signalcare-commercial-profile";
+import {
+  evaluateSignalCareProspectQuality,
+  signalCareProspectQualityInputSchema
+} from "@/lib/signalcare-prospect-quality";
 import { prisma } from "@/lib/prisma";
 
 export const signalCareOutreachDecisionChoices = [
@@ -175,6 +179,22 @@ export async function evaluateSignalCareOutreachReadiness(
   }
   if (qualification?.externalOutreachPerformed !== false) {
     reasons.push("Qualification does not affirm that no outreach occurred.");
+  }
+  const qualityInput = signalCareProspectQualityInputSchema.safeParse(
+    qualification
+  );
+  if (!qualityInput.success) {
+    reasons.push("Prospect-quality evidence is incomplete or malformed.");
+  } else {
+    const quality = evaluateSignalCareProspectQuality(qualityInput.data);
+    if (quality.outcome !== "ADVANCE") {
+      reasons.push(
+        `Prospect quality gate did not ADVANCE: ${quality.reasons.join(" ")}`
+      );
+    }
+    if (!["MEDIUM", "HIGH"].includes(quality.confidence)) {
+      reasons.push("Prospect-quality confidence is not MEDIUM or HIGH.");
+    }
   }
 
   return {

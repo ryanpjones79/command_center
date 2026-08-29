@@ -14,6 +14,16 @@ import {
   signalCareCommercialProfileInstructions
 } from "@/lib/signalcare-commercial-profile";
 import {
+  evaluateSignalCareProspectQuality,
+  isDirectSignalCareFitSignal,
+  isSignalCareSourceRelevantToEntity,
+  signalCareBuyingAutonomySchema,
+  signalCareCustomerTypeSchema,
+  signalCareEntityIdentityConfidenceSchema,
+  signalCareOrganizationScaleSchema,
+  signalCareSourceAssessmentSchema
+} from "@/lib/signalcare-prospect-quality";
+import {
   evaluateSignalCareOutreachReadiness,
   parseSignalCareDecisionTarget
 } from "@/server/agent/signalcare-outreach-policy";
@@ -92,21 +102,72 @@ export function parseSignalCareResearchContext(
 export const signalCareResearchCandidateSchema = z
   .object({
     organizationName: z.string().min(1).max(300),
+    canonicalOrganizationName: z.string().min(1).max(300),
     officialWebsite: sourceUrlSchema,
     domain: z.string().min(3).max(255),
+    knownAliases: z.array(z.string().min(2).max(300)).max(10),
+    customerType: signalCareCustomerTypeSchema,
+    parentOrganization: z.string().min(1).max(300).nullable(),
+    buyingAutonomy: signalCareBuyingAutonomySchema,
+    buyingAutonomyEvidence: z.array(verifiedFactSchema).max(5),
+    entityIdentityConfidence: signalCareEntityIdentityConfidenceSchema,
+    organizationScale: signalCareOrganizationScaleSchema,
+    realisticContractingPathEvidence: z.array(verifiedFactSchema).max(5),
     organizationType: z.string().min(1).max(300),
     locationCount: z.number().int().positive().max(10000).nullable(),
     geography: z.string().min(1).max(500),
     verifiedPublicFacts: z.array(verifiedFactSchema).min(1).max(10),
+    verifiedFitEvidence: z.array(verifiedFactSchema).min(1).max(8),
     signalCareFit: z.string().min(1).max(1500),
     hypothesis: z.string().max(1000).nullable(),
     suggestedEntryOffer: signalCareApprovedOfferSchema,
     evidenceConfidence: z.enum(["HIGH", "MEDIUM", "LOW"]),
     sourceUrls: z.array(sourceUrlSchema).min(1).max(10),
+    sourceQuality: z.array(signalCareSourceAssessmentSchema).min(1).max(15),
     recommendedNextAction: z.string().min(1).max(1000)
   })
   .strict()
   .superRefine((value, context) => {
+    if (
+      value.organizationName.trim().toLowerCase() !==
+      value.canonicalOrganizationName.trim().toLowerCase()
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["canonicalOrganizationName"],
+        message: "Candidate organization must match its canonical identity."
+      });
+    }
+    if (
+      normalizeProspectDomain(value.officialWebsite) !==
+      normalizeProspectDomain(value.domain)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["domain"],
+        message: "Candidate official website and domain must identify the same entity."
+      });
+    }
+    if (
+      value.customerType === "SUBSIDIARY_OR_BUSINESS_UNIT" &&
+      !value.parentOrganization
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["parentOrganization"],
+        message: "Subsidiary or business-unit candidates require a parent organization."
+      });
+    }
+    if (
+      value.parentOrganization &&
+      value.customerType !== "SUBSIDIARY_OR_BUSINESS_UNIT"
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["customerType"],
+        message: "A candidate with a parent must be classified as a subsidiary or business unit."
+      });
+    }
     if (
       containsProhibitedSignalCarePositioning([
         value.signalCareFit,
@@ -135,7 +196,22 @@ export const signalCareResearchResultSchema = z
 export const signalCareQualificationSchema = z
   .object({
     organizationName: z.string().min(1).max(300),
+    canonicalOrganizationName: z.string().min(1).max(300),
+    officialDomain: z.string().min(3).max(255),
+    knownAliases: z.array(z.string().min(2).max(300)).max(10),
+    customerType: signalCareCustomerTypeSchema,
+    parentOrganization: z.string().min(1).max(300).nullable(),
+    buyingAutonomy: signalCareBuyingAutonomySchema,
+    buyingAutonomyEvidence: z.array(verifiedFactSchema).max(5),
+    entityIdentityConfidence: signalCareEntityIdentityConfidenceSchema,
+    organizationScale: signalCareOrganizationScaleSchema,
+    realisticContractingPathEvidence: z.array(verifiedFactSchema).max(5),
     likelyStakeholderRole: z.string().min(1).max(500),
+    likelyBuyerRole: z.string().min(1).max(500),
+    buyerRoleEvidence: z.array(verifiedFactSchema).max(5),
+    targetContactName: z.string().min(1).max(300).nullable(),
+    targetContactRole: z.string().min(1).max(300).nullable(),
+    targetContactSourceUrl: sourceUrlSchema.nullable(),
     verifiedPublicFacts: z.array(verifiedFactSchema).min(1).max(12),
     verifiedFitEvidence: z.array(verifiedFactSchema).min(1).max(8),
     hypothesis: z.string().min(1).max(1500),
@@ -146,11 +222,42 @@ export const signalCareQualificationSchema = z
     confidence: z.enum(["HIGH", "MEDIUM", "LOW"]),
     recommendation: z.enum(["ADVANCE", "NEED_MORE_RESEARCH", "PASS"]),
     sourceUrls: z.array(sourceUrlSchema).min(1).max(15),
+    sourceQuality: z.array(signalCareSourceAssessmentSchema).min(1).max(20),
     qualificationSummary: z.string().min(1).max(3000),
     nextResearchStep: z.string().max(1000).nullable()
   })
   .strict()
   .superRefine((value, context) => {
+    if (
+      value.organizationName.trim().toLowerCase() !==
+      value.canonicalOrganizationName.trim().toLowerCase()
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["canonicalOrganizationName"],
+        message: "Qualification organization must match its canonical identity."
+      });
+    }
+    if (
+      value.customerType === "SUBSIDIARY_OR_BUSINESS_UNIT" &&
+      !value.parentOrganization
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["parentOrganization"],
+        message: "Subsidiary or business-unit qualifications require a parent organization."
+      });
+    }
+    if (
+      value.parentOrganization &&
+      value.customerType !== "SUBSIDIARY_OR_BUSINESS_UNIT"
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["customerType"],
+        message: "A qualification with a parent must be classified as a subsidiary or business unit."
+      });
+    }
     if (
       containsProhibitedSignalCarePositioning([
         value.hypothesis,
@@ -199,6 +306,7 @@ export type SignalCareResearchDiagnostics = {
   candidatesAccepted: number;
   candidatesRejectedLowConfidence: number;
   candidatesRejectedNoProviderSource: number;
+  candidatesRejectedQualityGate: number;
   factsRejectedNoProviderSource: number;
 };
 
@@ -222,28 +330,89 @@ export interface SignalCareResearchClient {
   }): Promise<SignalCareQualificationResult>;
 }
 
+const factJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["fact", "sourceUrls"],
+  properties: {
+    fact: { type: "string" },
+    sourceUrls: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: { type: "string" }
+    }
+  }
+} as const;
+
 const candidateJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: [
     "organizationName",
+    "canonicalOrganizationName",
     "officialWebsite",
     "domain",
+    "knownAliases",
+    "customerType",
+    "parentOrganization",
+    "buyingAutonomy",
+    "buyingAutonomyEvidence",
+    "entityIdentityConfidence",
+    "organizationScale",
+    "realisticContractingPathEvidence",
     "organizationType",
     "locationCount",
     "geography",
     "verifiedPublicFacts",
+    "verifiedFitEvidence",
     "signalCareFit",
     "hypothesis",
     "suggestedEntryOffer",
     "evidenceConfidence",
     "sourceUrls",
+    "sourceQuality",
     "recommendedNextAction"
   ],
   properties: {
     organizationName: { type: "string" },
+    canonicalOrganizationName: { type: "string" },
     officialWebsite: { type: "string" },
     domain: { type: "string" },
+    knownAliases: { type: "array", maxItems: 10, items: { type: "string" } },
+    customerType: {
+      type: "string",
+      enum: [
+        "DIRECT_PROSPECT",
+        "SUBSIDIARY_OR_BUSINESS_UNIT",
+        "TECHNOLOGY_VENDOR",
+        "CONSULTING_VENDOR",
+        "UNKNOWN"
+      ]
+    },
+    parentOrganization: { type: ["string", "null"] },
+    buyingAutonomy: {
+      type: "string",
+      enum: ["VERIFIED", "PLAUSIBLE", "UNKNOWN", "UNLIKELY"]
+    },
+    buyingAutonomyEvidence: {
+      type: "array",
+      maxItems: 5,
+      items: factJsonSchema
+    },
+    entityIdentityConfidence: {
+      type: "string",
+      enum: ["HIGH", "MEDIUM", "LOW"]
+    },
+    organizationScale: {
+      type: "string",
+      enum: ["SMALL_MID_MARKET", "LARGE_ENTERPRISE", "UNKNOWN"]
+    },
+    realisticContractingPathEvidence: {
+      type: "array",
+      maxItems: 5,
+      items: factJsonSchema
+    },
     organizationType: { type: "string" },
     locationCount: { type: ["integer", "null"], minimum: 1 },
     geography: { type: "string" },
@@ -266,6 +435,12 @@ const candidateJsonSchema = {
         }
       }
     },
+    verifiedFitEvidence: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: factJsonSchema
+    },
     signalCareFit: { type: "string" },
     hypothesis: { type: ["string", "null"] },
     suggestedEntryOffer: {
@@ -278,6 +453,23 @@ const candidateJsonSchema = {
       minItems: 1,
       maxItems: 10,
       items: { type: "string" }
+    },
+    sourceQuality: {
+      type: "array",
+      minItems: 1,
+      maxItems: 15,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["sourceUrl", "quality"],
+        properties: {
+          sourceUrl: { type: "string" },
+          quality: {
+            type: "string",
+            enum: ["PRIMARY", "SECONDARY", "WEAK"]
+          }
+        }
+      }
     },
     recommendedNextAction: { type: "string" }
   }
@@ -297,27 +489,27 @@ const researchJsonSchema = {
   }
 } as const;
 
-const factJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["fact", "sourceUrls"],
-  properties: {
-    fact: { type: "string" },
-    sourceUrls: {
-      type: "array",
-      minItems: 1,
-      maxItems: 5,
-      items: { type: "string" }
-    }
-  }
-} as const;
-
 const qualificationJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: [
     "organizationName",
+    "canonicalOrganizationName",
+    "officialDomain",
+    "knownAliases",
+    "customerType",
+    "parentOrganization",
+    "buyingAutonomy",
+    "buyingAutonomyEvidence",
+    "entityIdentityConfidence",
+    "organizationScale",
+    "realisticContractingPathEvidence",
     "likelyStakeholderRole",
+    "likelyBuyerRole",
+    "buyerRoleEvidence",
+    "targetContactName",
+    "targetContactRole",
+    "targetContactSourceUrl",
     "verifiedPublicFacts",
     "verifiedFitEvidence",
     "hypothesis",
@@ -328,12 +520,46 @@ const qualificationJsonSchema = {
     "confidence",
     "recommendation",
     "sourceUrls",
+    "sourceQuality",
     "qualificationSummary",
     "nextResearchStep"
   ],
   properties: {
     organizationName: { type: "string" },
+    canonicalOrganizationName: { type: "string" },
+    officialDomain: { type: "string" },
+    knownAliases: { type: "array", maxItems: 10, items: { type: "string" } },
+    customerType: {
+      type: "string",
+      enum: [
+        "DIRECT_PROSPECT",
+        "SUBSIDIARY_OR_BUSINESS_UNIT",
+        "TECHNOLOGY_VENDOR",
+        "CONSULTING_VENDOR",
+        "UNKNOWN"
+      ]
+    },
+    parentOrganization: { type: ["string", "null"] },
+    buyingAutonomy: {
+      type: "string",
+      enum: ["VERIFIED", "PLAUSIBLE", "UNKNOWN", "UNLIKELY"]
+    },
+    buyingAutonomyEvidence: { type: "array", maxItems: 5, items: factJsonSchema },
+    entityIdentityConfidence: {
+      type: "string",
+      enum: ["HIGH", "MEDIUM", "LOW"]
+    },
+    organizationScale: {
+      type: "string",
+      enum: ["SMALL_MID_MARKET", "LARGE_ENTERPRISE", "UNKNOWN"]
+    },
+    realisticContractingPathEvidence: { type: "array", maxItems: 5, items: factJsonSchema },
     likelyStakeholderRole: { type: "string" },
+    likelyBuyerRole: { type: "string" },
+    buyerRoleEvidence: { type: "array", maxItems: 5, items: factJsonSchema },
+    targetContactName: { type: ["string", "null"] },
+    targetContactRole: { type: ["string", "null"] },
+    targetContactSourceUrl: { type: ["string", "null"] },
     verifiedPublicFacts: {
       type: "array",
       minItems: 1,
@@ -364,6 +590,23 @@ const qualificationJsonSchema = {
       minItems: 1,
       maxItems: 15,
       items: { type: "string" }
+    },
+    sourceQuality: {
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["sourceUrl", "quality"],
+        properties: {
+          sourceUrl: { type: "string" },
+          quality: {
+            type: "string",
+            enum: ["PRIMARY", "SECONDARY", "WEAK"]
+          }
+        }
+      }
     },
     qualificationSummary: { type: "string" },
     nextResearchStep: { type: ["string", "null"] }
@@ -513,6 +756,60 @@ function uniqueProviderUrls(sources: SignalCareProviderSource[]) {
   return Array.from(new Set(sources.map((source) => source.providerUrl)));
 }
 
+type SignalCareEntityIdentity = {
+  canonicalOrganizationName: string;
+  officialDomain: string;
+  knownAliases: string[];
+};
+
+function relevantProviderMatches(
+  urls: string[],
+  provenance: Map<string, SignalCareProviderSource>,
+  identity: SignalCareEntityIdentity
+) {
+  return urls.flatMap((url) => {
+    const match = matchProviderSource(url, provenance);
+    return match &&
+      isSignalCareSourceRelevantToEntity({
+        sourceUrl: match.providerUrl,
+        ...identity
+      })
+      ? [match]
+      : [];
+  });
+}
+
+function retainSourceQuality(
+  assessments: Array<{
+    sourceUrl: string;
+    quality: "PRIMARY" | "SECONDARY" | "WEAK";
+  }>,
+  provenance: Map<string, SignalCareProviderSource>,
+  identity: SignalCareEntityIdentity
+) {
+  return assessments.flatMap((assessment) => {
+    const [match] = relevantProviderMatches(
+      [assessment.sourceUrl],
+      provenance,
+      identity
+    );
+    if (!match) return [];
+    const officialDomain = normalizeProspectDomain(identity.officialDomain);
+    return [
+      {
+        sourceUrl: match.providerUrl,
+        quality:
+          (match.hostname === officialDomain ||
+            match.hostname.endsWith(`.${officialDomain}`))
+            ? ("PRIMARY" as const)
+            : assessment.quality === "WEAK"
+              ? ("WEAK" as const)
+              : ("SECONDARY" as const)
+      }
+    ];
+  });
+}
+
 export function retainCitedSignalCareEvidence(
   result: SignalCareResearchResult,
   providerSources: SignalCareProviderSource[]
@@ -524,28 +821,44 @@ export function retainCitedSignalCareEvidence(
     candidatesAccepted: 0,
     candidatesRejectedLowConfidence: 0,
     candidatesRejectedNoProviderSource: 0,
+    candidatesRejectedQualityGate: 0,
     factsRejectedNoProviderSource: 0
   };
   const candidates = result.candidates.flatMap((candidate) => {
+    const identity = {
+      canonicalOrganizationName: candidate.canonicalOrganizationName,
+      officialDomain: candidate.domain,
+      knownAliases: candidate.knownAliases
+    };
     const citedSources = uniqueProviderUrls(
-      candidate.sourceUrls.flatMap((url) => {
-        const match = matchProviderSource(url, provenance);
-        return match ? [match] : [];
-      })
+      relevantProviderMatches(candidate.sourceUrls, provenance, identity)
     );
-    const verifiedPublicFacts = candidate.verifiedPublicFacts.flatMap(
-      (fact) => {
-        const sourceUrls = uniqueProviderUrls(
-          fact.sourceUrls.flatMap((url) => {
-            const match = matchProviderSource(url, provenance);
-            return match ? [match] : [];
-          })
-        );
-        if (sourceUrls.length === 0) {
-          diagnostics.factsRejectedNoProviderSource += 1;
-        }
-        return sourceUrls.length > 0 ? [{ ...fact, sourceUrls }] : [];
-      }
+    const retainCandidateFacts = (facts: typeof candidate.verifiedPublicFacts) =>
+      facts.flatMap((fact) => {
+          const sourceUrls = uniqueProviderUrls(
+            relevantProviderMatches(fact.sourceUrls, provenance, identity)
+          );
+          if (sourceUrls.length === 0) {
+            diagnostics.factsRejectedNoProviderSource += 1;
+          }
+          return sourceUrls.length > 0 ? [{ ...fact, sourceUrls }] : [];
+        });
+    const verifiedPublicFacts = retainCandidateFacts(
+      candidate.verifiedPublicFacts
+    );
+    const verifiedFitEvidence = retainCandidateFacts(
+      candidate.verifiedFitEvidence
+    );
+    const buyingAutonomyEvidence = retainCandidateFacts(
+      candidate.buyingAutonomyEvidence
+    );
+    const realisticContractingPathEvidence = retainCandidateFacts(
+      candidate.realisticContractingPathEvidence
+    );
+    const sourceQuality = retainSourceQuality(
+      candidate.sourceQuality,
+      provenance,
+      identity
     );
     if (candidate.evidenceConfidence === "LOW") {
       diagnostics.candidatesRejectedLowConfidence += 1;
@@ -565,13 +878,64 @@ export function retainCitedSignalCareEvidence(
     if (
       !officialWebsiteVerified ||
       citedSources.length === 0 ||
-      verifiedPublicFacts.length === 0
+      verifiedPublicFacts.length === 0 ||
+      sourceQuality.length === 0
     ) {
       diagnostics.candidatesRejectedNoProviderSource += 1;
       return [];
     }
+    const directFit = verifiedFitEvidence.some(
+      (fact) =>
+        fact.sourceUrls.some(
+          (url) => {
+            const quality = sourceQuality.find(
+              (entry) => entry.sourceUrl === url
+            )?.quality;
+            return quality === "PRIMARY" || quality === "SECONDARY";
+          }
+        ) && isDirectSignalCareFitSignal(candidate.suggestedEntryOffer, fact.fact)
+    );
+    const plausibleCustomer =
+      candidate.customerType === "DIRECT_PROSPECT" ||
+      (candidate.customerType === "SUBSIDIARY_OR_BUSINESS_UNIT" &&
+        ["VERIFIED", "PLAUSIBLE"].includes(candidate.buyingAutonomy));
+    const credibleAutonomyEvidence = buyingAutonomyEvidence.some((fact) =>
+      fact.sourceUrls.some((url) =>
+        ["PRIMARY", "SECONDARY"].includes(
+          sourceQuality.find((entry) => entry.sourceUrl === url)?.quality ?? ""
+        )
+      )
+    );
+    const credibleContractingPath = realisticContractingPathEvidence.some(
+      (fact) =>
+        fact.sourceUrls.some((url) =>
+          ["PRIMARY", "SECONDARY"].includes(
+            sourceQuality.find((entry) => entry.sourceUrl === url)?.quality ?? ""
+          )
+        )
+    );
+    if (
+      !plausibleCustomer ||
+      candidate.entityIdentityConfidence === "LOW" ||
+      !credibleAutonomyEvidence ||
+      (candidate.organizationScale === "LARGE_ENTERPRISE" &&
+        (candidate.buyingAutonomy !== "VERIFIED" ||
+          !credibleContractingPath)) ||
+      !directFit
+    ) {
+      diagnostics.candidatesRejectedQualityGate += 1;
+      return [];
+    }
     diagnostics.candidatesAccepted += 1;
-    return [{ ...candidate, sourceUrls: citedSources, verifiedPublicFacts }];
+    return [{
+      ...candidate,
+      sourceUrls: citedSources,
+      sourceQuality,
+      verifiedPublicFacts,
+      verifiedFitEvidence,
+      buyingAutonomyEvidence,
+      realisticContractingPathEvidence
+    }];
   });
   return {
     ...signalCareResearchResultSchema.parse({
@@ -584,14 +948,12 @@ export function retainCitedSignalCareEvidence(
 
 function retainCitedFacts(
   facts: Array<{ fact: string; sourceUrls: string[] }>,
-  provenance: Map<string, SignalCareProviderSource>
+  provenance: Map<string, SignalCareProviderSource>,
+  identity: SignalCareEntityIdentity
 ) {
   return facts.flatMap((fact) => {
     const sourceUrls = uniqueProviderUrls(
-      fact.sourceUrls.flatMap((url) => {
-        const match = matchProviderSource(url, provenance);
-        return match ? [match] : [];
-      })
+      relevantProviderMatches(fact.sourceUrls, provenance, identity)
     );
     return sourceUrls.length > 0 ? [{ ...fact, sourceUrls }] : [];
   });
@@ -602,20 +964,51 @@ export function retainCitedSignalCareQualification(
   providerSources: SignalCareProviderSource[]
 ) {
   const provenance = providerSourceIndex(providerSources);
+  const identity = {
+    canonicalOrganizationName: result.canonicalOrganizationName,
+    officialDomain: result.officialDomain,
+    knownAliases: result.knownAliases
+  };
   const sourceUrls = uniqueProviderUrls(
-    result.sourceUrls.flatMap((url) => {
-      const match = matchProviderSource(url, provenance);
-      return match ? [match] : [];
-    })
+    relevantProviderMatches(result.sourceUrls, provenance, identity)
   );
   const verifiedPublicFacts = retainCitedFacts(
     result.verifiedPublicFacts,
-    provenance
+    provenance,
+    identity
   );
   const verifiedFitEvidence = retainCitedFacts(
     result.verifiedFitEvidence,
-    provenance
+    provenance,
+    identity
   );
+  const buyingAutonomyEvidence = retainCitedFacts(
+    result.buyingAutonomyEvidence,
+    provenance,
+    identity
+  );
+  const buyerRoleEvidence = retainCitedFacts(
+    result.buyerRoleEvidence,
+    provenance,
+    identity
+  );
+  const realisticContractingPathEvidence = retainCitedFacts(
+    result.realisticContractingPathEvidence,
+    provenance,
+    identity
+  );
+  const sourceQuality = retainSourceQuality(
+    result.sourceQuality,
+    provenance,
+    identity
+  );
+  const targetContactSourceUrl = result.targetContactSourceUrl
+    ? relevantProviderMatches(
+        [result.targetContactSourceUrl],
+        provenance,
+        identity
+      )[0]?.providerUrl ?? null
+    : null;
   if (
     sourceUrls.length === 0 ||
     verifiedPublicFacts.length === 0 ||
@@ -625,11 +1018,26 @@ export function retainCitedSignalCareQualification(
       `SignalCare qualification returned inadequate provider provenance. providerSourceCount=${providerSources.length}, verifiedFactsAccepted=${verifiedPublicFacts.length}, fitEvidenceAccepted=${verifiedFitEvidence.length}.`
     );
   }
-  return signalCareQualificationSchema.parse({
+  const cited = signalCareQualificationSchema.parse({
     ...result,
     sourceUrls,
+    sourceQuality,
+    targetContactSourceUrl,
     verifiedPublicFacts,
-    verifiedFitEvidence
+    verifiedFitEvidence,
+    buyingAutonomyEvidence,
+    buyerRoleEvidence,
+    realisticContractingPathEvidence
+  });
+  const quality = evaluateSignalCareProspectQuality(cited);
+  return signalCareQualificationSchema.parse({
+    ...cited,
+    confidence: quality.confidence,
+    recommendation: quality.outcome,
+    nextResearchStep:
+      quality.outcome === "NEED_MORE_RESEARCH"
+        ? cited.nextResearchStep ?? quality.reasons.join(" ")
+        : cited.nextResearchStep
   });
 }
 
@@ -669,7 +1077,7 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
             content: [
               {
                 type: "input_text",
-                text: `Find a small evidence-backed SignalCare prospect shortlist using public web sources only. Return only MEDIUM or HIGH-confidence candidates, and do not include a candidate merely to reach the requested count. Every verified fact must be grounded in public web-search evidence, and each source URL must identify the actual page used for that fact. Prefer official organization, locations, providers, careers, and credible business pages. Clearly separate VERIFIED FACTS from HYPOTHESES. Never claim revenue leakage or operational problems without public evidence. Do not contact anyone, submit forms, change pricing, make commitments, or propose more candidates than requested. Exclude organizations already supplied. Prefer plausible customers rather than speculative partners. ${signalCareCommercialProfileInstructions()} Return operational evidence only.`
+                text: `Find a small evidence-backed SignalCare prospect shortlist using public web sources only. Prioritize multi-location dental groups and DSOs first, then independent or mid-market provider groups and multi-location outpatient organizations. Avoid Fortune-scale enterprises, integrated subsidiaries, major technology vendors, and speculative partnerships unless credible public evidence establishes independent buying autonomy, a specific approved-offer problem, and a realistic contracting path. Return only candidates that pass the initial customer-fit gate; do not include a candidate merely to reach the requested count. Lock each entity to its canonical name, official domain, aliases, parent when relevant, customer type, identity confidence, and sourced buying-autonomy evidence. Every candidate must have at least one direct sourced fit signal for exactly one approved offer; generic healthcare, AI, growth, patient-outcome, or customer-count facts are insufficient. Classify sources as PRIMARY, SECONDARY, or WEAK. Third-party sources must visibly identify the exact target; exclude similarly named entities and ambiguous directories. Every verified fact must be grounded in public web-search evidence, and each source URL must identify the actual page used for that fact. Prefer official organization, locations, providers, careers, leadership, and credible business pages. Clearly separate VERIFIED FACTS from HYPOTHESES. Never claim revenue leakage or operational problems without public evidence. Do not contact anyone, submit forms, change pricing, make commitments, or propose more candidates than requested. Exclude organizations already supplied. ${signalCareCommercialProfileInstructions()} Return operational evidence only.`
               }
             ]
           },
@@ -743,7 +1151,7 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
             content: [
               {
                 type: "input_text",
-                text: `Qualify exactly one existing SignalCare prospect using public web evidence only. Read the supplied existing public evidence first, then resolve the highest-value gaps: organization size and footprint, services and operational complexity, public growth signals, likely stakeholder ROLE (never private personal information), public scheduling/reporting/operations signals, best-fit approved SignalCare offer, precise conversation hypothesis, reasons to pursue, and evidence against pursuing. Clearly separate VERIFIED FACTS from HYPOTHESES. Every verified and fit fact must cite the actual public page used. Prefer official organization pages. Internal draft outreach language is allowed, but do not send messages, contact anyone, submit forms, modify external systems, make commitments, or claim revenue leakage or operational problems without evidence. ${signalCareCommercialProfileInstructions()} Treat a technology vendor or speculative partnership as PASS unless public evidence shows the organization plausibly needs and could buy an approved service. Choose ADVANCE only when the evidence supports an outreach-ready internal package; otherwise choose NEED_MORE_RESEARCH or PASS.`
+                text: `Qualify exactly one existing SignalCare prospect using public web evidence only. Read the supplied existing evidence first and preserve its canonical name and official-domain identity. Classify customer type, parent organization, entity identity confidence, and buying autonomy using sourced facts; a subsidiary website alone never proves independent buying authority. Resolve direct approved-offer fit, size and footprint, services and operational complexity, scheduling/referral/reporting signals, a realistic contracting path, and evidence against pursuit. Generic healthcare, AI, growth, patient-outcome, customer-count, or estimated IT-spend facts are supporting context only and cannot establish direct fit. Identify the offer-specific likely buyer role and an actual named public professional contact with exact role and source URL. CFO is not the default Analytics / Reporting Modernization buyer. Clearly separate VERIFIED FACTS from HYPOTHESES and classify sources as PRIMARY, SECONDARY, or WEAK. Third-party sources must clearly identify the exact target entity; exclude similarly named organizations. Every verified, fit, autonomy, and buyer fact must cite the actual public page used. Internal final draft language is allowed, but it must name the verified target and contain no placeholders. Do not send messages, contact anyone, submit forms, modify external systems, make commitments, or claim revenue leakage or operational problems without evidence. ${signalCareCommercialProfileInstructions()} Treat technology/consulting vendors, speculative partnerships, structurally unsuitable integrated subsidiaries, and candidates without a realistic buying path as PASS. Choose ADVANCE only when every outreach-readiness quality gate is satisfied; otherwise choose NEED_MORE_RESEARCH for a resolvable gap or PASS for a weak prospect.`
               }
             ]
           },
@@ -941,6 +1349,7 @@ function emptyResearchDiagnostics(): SignalCareResearchDiagnostics {
     candidatesAccepted: 0,
     candidatesRejectedLowConfidence: 0,
     candidatesRejectedNoProviderSource: 0,
+    candidatesRejectedQualityGate: 0,
     factsRejectedNoProviderSource: 0
   };
 }
@@ -1285,6 +1694,124 @@ export async function scheduleSignalCareQualificationReviewOnce(
   return scheduled;
 }
 
+const ownerPassContinuationVersion = "signalcare-owner-pass-continuation-v1";
+
+export async function recoverSignalCareOwnerPassContinuation(
+  userId: string,
+  db: PrismaClient = prisma,
+  now = new Date()
+) {
+  const configs = await db.agentProjectConfig.findMany({
+    where: {
+      userId,
+      profile: "SIGNALCARE_GM",
+      enabled: true,
+      pausedAt: null
+    },
+    select: { projectId: true }
+  });
+  if (configs.length === 0) return [];
+  const decisions = await db.agentDecision.findMany({
+    where: {
+      userId,
+      projectId: { in: configs.map((config) => config.projectId) },
+      category: "SEND_EMAIL_OR_MESSAGE",
+      status: "RESOLVED",
+      selectedChoice: "PASS"
+    },
+    include: { actionRequest: true }
+  });
+  const scheduled: string[] = [];
+  for (const decision of decisions) {
+    const idempotencyKey = `${ownerPassContinuationVersion}:${decision.id}`;
+    if (await db.agentEvent.findUnique({ where: { idempotencyKey } })) continue;
+    const target = parseSignalCareDecisionTarget(
+      decision.actionRequest?.boundedPayload
+    );
+    if (!target) continue;
+    const queueItems = await db.queueItem.findMany({
+      where: { userId, lane: { in: ["signalcare", "pipeline"] } }
+    });
+    const targetQueueItem = queueItems.find(
+      (item) =>
+        item.recipient.trim().toLowerCase() === target.name.toLowerCase()
+    );
+    if (targetQueueItem && targetQueueItem.status !== "passed") {
+      await db.queueItem.update({
+        where: { id: targetQueueItem.id },
+        data: {
+          status: "passed",
+          nextAction: "Passed by owner; no outreach authorized or performed.",
+          resolvedAt: decision.resolvedAt ?? now
+        }
+      });
+    }
+    const [actionableProspects, activeWork, pendingDecisions] =
+      await Promise.all([
+        db.queueItem.count({
+          where: {
+            userId,
+            lane: { in: ["signalcare", "pipeline"] },
+            status: { notIn: ["done", "killed", "passed"] }
+          }
+        }),
+        db.agentWorkItem.count({
+          where: {
+            userId,
+            projectId: decision.projectId,
+            state: {
+              in: [
+                "QUEUED",
+                "PLANNING",
+                "RUNNING",
+                "VERIFYING",
+                "RETRY",
+                "NEEDS_RYAN",
+                "AWAITING_EXECUTION"
+              ]
+            }
+          }
+        }),
+        db.agentDecision.count({
+          where: {
+            userId,
+            projectId: decision.projectId,
+            status: "PENDING"
+          }
+        })
+      ]);
+    if (actionableProspects > 0 || activeWork > 0 || pendingDecisions > 0) {
+      continue;
+    }
+    await db.$transaction([
+      db.agentProjectConfig.update({
+        where: { projectId: decision.projectId },
+        data: { nextAgentReviewAt: now }
+      }),
+      db.agentEvent.upsert({
+        where: { idempotencyKey },
+        update: {},
+        create: {
+          userId,
+          projectId: decision.projectId,
+          decisionId: decision.id,
+          idempotencyKey,
+          type: "PM_REVIEW_SCHEDULED",
+          summary:
+            "SignalCare owner PASS left no actionable prospects; customer acquisition was scheduled to continue.",
+          metadata: JSON.stringify({
+            recoveryVersion: ownerPassContinuationVersion,
+            targetProspect: target.name,
+            externalOutreachPerformed: false
+          })
+        }
+      })
+    ]);
+    scheduled.push(decision.projectId);
+  }
+  return scheduled;
+}
+
 async function persistCandidates(
   userId: string,
   candidates: SignalCareResearchCandidate[],
@@ -1336,14 +1863,26 @@ async function persistCandidates(
           domain: domainKey,
           officialWebsite: candidate.officialWebsite,
           organizationType: candidate.organizationType,
+          canonicalOrganizationName: candidate.canonicalOrganizationName,
+          knownAliases: candidate.knownAliases,
+          customerType: candidate.customerType,
+          parentOrganization: candidate.parentOrganization,
+          buyingAutonomy: candidate.buyingAutonomy,
+          buyingAutonomyEvidence: candidate.buyingAutonomyEvidence,
+          entityIdentityConfidence: candidate.entityIdentityConfidence,
+          organizationScale: candidate.organizationScale,
+          realisticContractingPathEvidence:
+            candidate.realisticContractingPathEvidence,
           locationCount: candidate.locationCount,
           geography: candidate.geography,
           verifiedFacts: candidate.verifiedPublicFacts,
+          verifiedFitEvidence: candidate.verifiedFitEvidence,
           signalCareFit: candidate.signalCareFit,
           hypothesis: candidate.hypothesis,
           suggestedEntryOffer: candidate.suggestedEntryOffer,
           evidenceConfidence: candidate.evidenceConfidence,
           sourceUrls: candidate.sourceUrls,
+          sourceQuality: candidate.sourceQuality,
           recommendedNextAction: candidate.recommendedNextAction
         })
       }
@@ -1371,10 +1910,11 @@ function qualificationPipelineState(
   qualification: SignalCareQualification,
   providerSourceUrls: string[]
 ) {
-  if (qualification.recommendation === "PASS") return "passed" as const;
+  const quality = evaluateSignalCareProspectQuality(qualification);
+  if (quality.outcome === "PASS") return "passed" as const;
   if (
-    qualification.recommendation === "ADVANCE" &&
-    qualification.confidence !== "LOW" &&
+    quality.outcome === "ADVANCE" &&
+    quality.confidence !== "LOW" &&
     qualification.conversationAngle &&
     qualification.draftOutreachLanguage &&
     qualification.verifiedFitEvidence.length > 0 &&
@@ -1622,6 +2162,20 @@ export async function executeSignalCareHostedResearch(
           "SignalCare qualification returned a different organization than the existing target."
         );
       }
+      const existingIdentityDomain =
+        typeof existingEvidenceAction?.note === "string"
+          ? parseOperationalEvidence(existingEvidenceAction.note).officialDomain ??
+            parseOperationalEvidence(existingEvidenceAction.note).domain
+          : null;
+      if (
+        typeof existingIdentityDomain === "string" &&
+        normalizeProspectDomain(existingIdentityDomain) !==
+          normalizeProspectDomain(qualification.officialDomain)
+      ) {
+        throw new Error(
+          "SignalCare qualification changed the prospect's locked official domain."
+        );
+      }
       failureStage = "qualification_persistence";
       const progression = await persistQualification(
         {
@@ -1644,6 +2198,7 @@ export async function executeSignalCareHostedResearch(
             pipelineStatus: progression.status,
             verifiedPublicFacts: qualification.verifiedPublicFacts,
             verifiedFitEvidence: qualification.verifiedFitEvidence,
+            prospectQuality: evaluateSignalCareProspectQuality(qualification),
             sourceUrls: qualification.sourceUrls,
             providerSourceUrls,
             providerBackedPublicSources: true,
@@ -1774,6 +2329,7 @@ export async function executeSignalCareHostedResearch(
         (candidate) => candidate.evidenceConfidence === "LOW"
       ).length,
       candidatesRejectedNoProviderSource: 0,
+      candidatesRejectedQualityGate: 0,
       factsRejectedNoProviderSource: 0
     };
     if (
