@@ -13,13 +13,17 @@ type ToolDefinition = { id: string; profiles: string[]; classification: "READ" |
   execute: (context: ToolContext, input: unknown, db: PrismaClient) => Promise<unknown> };
 
 const emptyInput = z.object({}).strict();
+const signalCarePassedProspect = z.object({
+  name: z.string(),
+  domain: z.string().nullable()
+});
 const signalOutput = z.object({ prospects: z.array(z.object({ name: z.string(), stage: z.string(), evidence: z.string().nullable(),
   domain: z.string().nullable(), verifiedFacts: z.array(z.object({ fact: z.string(), sourceUrls: z.array(z.string().url()) })),
   sourceUrls: z.array(z.string().url()), evidenceConfidence: z.string().nullable(), nextAction: z.string().nullable(), stale: z.boolean(),
   hasProspectResearch: z.boolean(), hasProspectQualification: z.boolean(), qualificationRecommendation: z.string().nullable(),
   approvedEntryOffer: signalCareApprovedOfferSchema.nullable(), likelyStakeholderRole: z.string().nullable(), conversationAngle: z.string().nullable(),
   hasInternalDraft: z.boolean(), providerBackedProvenance: z.boolean(), externalOutreachPerformed: z.boolean().nullable(),
-  outreachReadinessComplete: z.boolean() })), openOwnerDecisions: z.number() });
+  outreachReadinessComplete: z.boolean() })), passedProspects: z.array(signalCarePassedProspect), openOwnerDecisions: z.number() });
 const truthStatus = z.enum(["READY", "PENDING", "BLOCKED", "DISABLED"]);
 const rykasEnvelope = z.object({ status: truthStatus, result: rykasTruthResultSchema.nullable(), workItemId: z.string().nullable(), blockers: z.array(z.string()).max(50) });
 const rykasOutput = z.object({ backlog: z.number(), toShip: z.string().nullable(), listedToday: z.number(), sourcingAllowed: z.boolean(), blockers: z.array(z.string()), truthStatus, observedAt: z.string().datetime().nullable(), authoritativeSource: z.string().nullable(), sourceUpdatedAt: z.string().datetime().nullable(), stale: z.boolean().nullable(), realTruth: rykasTruthResultSchema.nullable(), readWorkItemId: z.string().nullable() });
@@ -29,9 +33,18 @@ export const projectToolRegistry: Record<string, ToolDefinition> = {
   "signalcare.pipeline.snapshot": { id: "signalcare.pipeline.snapshot", profiles: ["SIGNALCARE_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: emptyInput, output: signalOutput,
     async execute(context, _input, db) { const [actions, queue, decisions] = await Promise.all([
       db.pipelineAction.findMany({ where: { userId: context.userId }, orderBy: { date: "desc" }, take: 50 }),
-      db.queueItem.findMany({ where: { userId: context.userId, lane: { in: ["signalcare", "pipeline"] }, status: { not: "done" } }, orderBy: { createdAt: "asc" }, take: 50 }),
+      db.queueItem.findMany({ where: { userId: context.userId, lane: { in: ["signalcare", "pipeline"] } }, orderBy: { createdAt: "asc" }, take: 50 }),
       db.agentDecision.count({ where: { userId: context.userId, projectId: context.projectId, status: "PENDING" } })]);
-      const now = Date.now(); return { prospects: queue.map((item) => { const matching = actions.filter((a) => a.withWhom?.toLowerCase() === item.recipient.toLowerCase());
+      const terminalStatuses = new Set(["passed", "done", "killed"]);
+      const actionableQueue = queue.filter((item) => !terminalStatuses.has(item.status.trim().toLowerCase()));
+      const passedProspects = queue.filter((item) => item.status.trim().toLowerCase() === "passed").map((item) => {
+        const matching = actions.filter((action) => action.withWhom?.trim().toLowerCase() === item.recipient.trim().toLowerCase());
+        const evidence = matching.find((action) => action.type === "prospect_qualification") ?? matching.find((action) => action.type === "prospect_research");
+        let provenance: Record<string, unknown> = {}; try { provenance = evidence?.note ? JSON.parse(evidence.note) as Record<string, unknown> : {}; } catch { provenance = {}; }
+        const domain = provenance.officialDomain ?? provenance.domain;
+        return { name: item.recipient, domain: typeof domain === "string" ? domain : null };
+      });
+      const now = Date.now(); return { prospects: actionableQueue.map((item) => { const matching = actions.filter((a) => a.withWhom?.toLowerCase() === item.recipient.toLowerCase());
         const research = matching.find((action) => action.type === "prospect_research");
         const qualification = matching.find((action) => action.type === "prospect_qualification");
         const evidence = qualification ?? research;
@@ -54,7 +67,7 @@ export const projectToolRegistry: Record<string, ToolDefinition> = {
           hasInternalDraft, providerBackedProvenance, externalOutreachPerformed,
           outreachReadinessComplete: item.status === "outreach_ready" && Boolean(qualification) && provenance.recommendation === "ADVANCE" &&
             verifiedFacts.length > 0 && sourceUrls.length > 0 && providerBackedProvenance && Boolean(likelyStakeholderRole?.trim()) &&
-            approvedEntryOffer.success && Boolean(conversationAngle?.trim()) && hasInternalDraft && ["MEDIUM", "HIGH"].includes(String(provenance.confidence)) && externalOutreachPerformed === false }; }), openOwnerDecisions: decisions }; } },
+            approvedEntryOffer.success && Boolean(conversationAngle?.trim()) && hasInternalDraft && ["MEDIUM", "HIGH"].includes(String(provenance.confidence)) && externalOutreachPerformed === false }; }), passedProspects, openOwnerDecisions: decisions }; } },
   "rykas.operations.snapshot": { id: "rykas.operations.snapshot", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: emptyInput, output: rykasOutput,
     async execute(context, _input, db) { const [day, tasks, truth] = await Promise.all([db.rykasDay.findFirst({ where: { userId: context.userId }, orderBy: { date: "desc" } }), db.executionTask.findMany({ where: { userId: context.userId, domain: { slug: "rykas" }, status: { notIn: ["DONE", "DROPPED"] } }, take: 50 }), getOrQueueRykasTruth(context, { version: 1, operation: "OPERATIONS_SNAPSHOT", input: { limit: 10 } }, db)]); const backlog = day?.backlogAfter ?? 0; const localBlockers = tasks.filter((t) => t.isBlocked || t.waitingOn).map((t) => `${t.title}${t.waitingOn ? ` — waiting on ${t.waitingOn}` : ""}`); return { backlog, toShip: day?.toShip ?? null, listedToday: day?.listedCount ?? 0, sourcingAllowed: backlog < 10, blockers: [...localBlockers, ...truth.blockers].slice(0, 50), truthStatus: truth.status, observedAt: truth.result?.observedAt ?? null, authoritativeSource: truth.result?.authoritativeSource ?? null, sourceUpdatedAt: truth.result?.sourceUpdatedAt ?? null, stale: truth.result?.stale ?? null, realTruth: truth.result, readWorkItemId: truth.workItemId }; } },
   "rykas.sourcing.opportunities": { id: "rykas.sourcing.opportunities", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: z.object({ view: rykasViewSchema.default("TOP"), limit: z.number().int().min(1).max(25).default(10) }).strict(), output: rykasEnvelope,

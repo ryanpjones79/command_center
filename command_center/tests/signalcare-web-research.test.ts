@@ -2784,4 +2784,266 @@ describe("SignalCare hosted public-web research", () => {
       externalOutreachPerformed: false
     });
   });
+
+  it("keeps passed prospects out of the actionable snapshot while preserving compact history", async () => {
+    const { queueItem, action } = await createReadyProspect("Caption Care");
+    await db.queueItem.update({
+      where: { id: queueItem.id },
+      data: {
+        status: "PaSsEd",
+        nextAction: "Passed by owner; no outreach authorized or performed."
+      }
+    });
+
+    const snapshot = (await executeProjectTool(
+      { userId, projectId: signalProjectId, profile: "SIGNALCARE_GM" },
+      "signalcare.pipeline.snapshot",
+      {},
+      db
+    )) as {
+      prospects: Array<{ name: string }>;
+      passedProspects: Array<{ name: string; domain: string | null }>;
+    };
+
+    expect(snapshot.prospects).toEqual([]);
+    expect(snapshot.passedProspects).toEqual([
+      { name: "Caption Care", domain: "existing-dental.example" }
+    ]);
+    expect(
+      await db.pipelineAction.findUniqueOrThrow({ where: { id: action.id } })
+    ).toMatchObject({ type: "prospect_qualification", withWhom: "Caption Care" });
+  });
+
+  it("passes terminal organizations and domains to discovery exclusions and cannot rediscover them", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Caption Care",
+        lane: "signalcare",
+        recipient: "Caption Care",
+        status: "PASSED",
+        nextAction: "Passed by owner."
+      }
+    });
+    await db.pipelineAction.create({
+      data: {
+        userId,
+        date: new Date(),
+        type: "prospect_research",
+        withWhom: "Caption Care",
+        note: JSON.stringify({
+          domain: "caption-care.example",
+          sourceUrls: ["https://caption-care.example/about"]
+        })
+      }
+    });
+    const work = await createWork("discover-after-passed-prospect");
+    const discover = vi.fn();
+    const client = fakeResearchClient(
+      [
+        candidate(1, {
+          organizationName: "Caption Care",
+          canonicalOrganizationName: "Caption Care",
+          officialWebsite: "https://caption-care.example",
+          domain: "caption-care.example"
+        })
+      ],
+      discover
+    );
+
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      client,
+      db
+    );
+
+    expect(result).toMatchObject({ outcome: "COMPLETED", created: [] });
+    expect(discover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingOrganizations: ["Caption Care"],
+        existingDomains: expect.arrayContaining(["caption-care.example"])
+      })
+    );
+    expect(await db.queueItem.count({ where: { userId } })).toBe(1);
+    expect(
+      await db.queueItem.findFirstOrThrow({ where: { userId } })
+    ).toMatchObject({ recipient: "Caption Care", status: "PASSED" });
+  });
+
+  it("parks qualification work that targets a passed prospect without calling the provider", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Caption Care",
+        lane: "signalcare",
+        recipient: "Caption Care",
+        status: "passed",
+        nextAction: "Passed by owner."
+      }
+    });
+    const work = await createWork("passed-prospect-qualification", signalProjectId, {
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Caption Care"
+      })
+    });
+    const qualify = vi.fn();
+
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      { discover: vi.fn(), qualify },
+      db
+    );
+
+    expect(result).toMatchObject({
+      outcome: "PARKED",
+      qualifiedProspect: "Caption Care",
+      pipelineStatus: "passed"
+    });
+    expect(qualify).not.toHaveBeenCalled();
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "PARKED" });
+    expect(await db.pipelineAction.count({ where: { userId } })).toBe(0);
+    expect(
+      (
+        await db.agentProjectConfig.findUniqueOrThrow({
+          where: { projectId: signalProjectId }
+        })
+      ).nextAgentReviewAt
+    ).toBeInstanceOf(Date);
+  });
+
+  it("suppresses passed qualification or outreach proposals and resumes bounded discovery", async () => {
+    const toolEvidence = [
+      {
+        toolId: "signalcare.pipeline.snapshot",
+        summary: "Current pipeline",
+        output: {
+          prospects: [],
+          passedProspects: [
+            { name: "Caption Care", domain: "caption-care.example" }
+          ],
+          openOwnerDecisions: 0
+        }
+      }
+    ];
+    const context = {
+      profile: "SIGNALCARE_GM",
+      projectId: signalProjectId,
+      projectName: "SignalCare",
+      objective: "Generate profitable customer engagements.",
+      primaryKpi: null,
+      currentBottleneck: null,
+      instructions: "Advance acquisition.",
+      autonomyPolicy: "Internal work only.",
+      escalationPolicy: "External outreach needs Ryan.",
+      existingWorkTitles: [],
+      toolEvidence
+    };
+    const qualificationPlan = await new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          researchMode: "QUALIFY_EXISTING_PROSPECT",
+          targetProspect: "Caption Care"
+        })
+      )
+    ).chooseNextWork(context);
+    const outreachPlan = await new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          ownerNeeded: true,
+          ownerDecision: {
+            category: "SEND_EMAIL_OR_MESSAGE",
+            question: "Approve first outreach to Caption Care?",
+            context: "Previously passed prospect.",
+            recommendedChoice: "APPROVE",
+            availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+            expectedUpside: "Potential conversation.",
+            risk: "External representation.",
+            targetEntity: {
+              type: "SIGNALCARE_PROSPECT",
+              name: "Caption Care"
+            }
+          }
+        })
+      )
+    ).chooseNextWork(context);
+
+    expect(qualificationPlan).toMatchObject({
+      disposition: "CREATE_WORK",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      researchMode: "DISCOVER_PROSPECTS",
+      targetProspect: null,
+      ownerNeeded: false
+    });
+    expect(outreachPlan).toMatchObject({
+      disposition: "CREATE_WORK",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      researchMode: "DISCOVER_PROSPECTS",
+      targetProspect: null,
+      ownerNeeded: false,
+      ownerDecision: null
+    });
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+    expect(
+      await db.pipelineAction.count({
+        where: { userId, type: { in: ["email", "sms", "outreach_sent"] } }
+      })
+    ).toBe(0);
+  });
+
+  it("rejects an owner decision for a passed prospect without creating authorization state", async () => {
+    const { queueItem } = await createReadyProspect("Caption Care");
+    await db.queueItem.update({
+      where: { id: queueItem.id },
+      data: { status: "passed" }
+    });
+    const work = await createWork("passed-prospect-owner-decision");
+    await db.agentWorkItem.update({
+      where: { id: work.id },
+      data: { state: "PLANNING" }
+    });
+
+    await expect(
+      createOwnerDecision(
+        {
+          userId,
+          projectId: signalProjectId,
+          workItemId: work.id,
+          idempotencyKey: "passed-prospect-owner-decision-request",
+          profile: "SIGNALCARE_GM",
+          plan: {
+            category: "SEND_EMAIL_OR_MESSAGE",
+            question: "Approve first outreach to Caption Care?",
+            context: "Passed prospect.",
+            recommendedChoice: "APPROVE",
+            availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+            expectedUpside: "Potential conversation.",
+            risk: "External representation.",
+            targetEntity: {
+              type: "SIGNALCARE_PROSPECT",
+              name: "Caption Care"
+            }
+          }
+        },
+        db
+      )
+    ).rejects.toThrow("passed by the owner and is terminal");
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+  });
 });

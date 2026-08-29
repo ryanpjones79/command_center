@@ -1694,7 +1694,7 @@ export async function scheduleSignalCareQualificationReviewOnce(
   return scheduled;
 }
 
-const ownerPassContinuationVersion = "signalcare-owner-pass-continuation-v1";
+const ownerPassContinuationVersion = "signalcare-owner-pass-continuation-v2";
 
 export async function recoverSignalCareOwnerPassContinuation(
   userId: string,
@@ -1746,14 +1746,14 @@ export async function recoverSignalCareOwnerPassContinuation(
         }
       });
     }
-    const [actionableProspects, activeWork, pendingDecisions] =
+    const [pipelineItems, activeWork, pendingDecisions] =
       await Promise.all([
-        db.queueItem.count({
+        db.queueItem.findMany({
           where: {
             userId,
-            lane: { in: ["signalcare", "pipeline"] },
-            status: { notIn: ["done", "killed", "passed"] }
-          }
+            lane: { in: ["signalcare", "pipeline"] }
+          },
+          select: { status: true }
         }),
         db.agentWorkItem.count({
           where: {
@@ -1780,6 +1780,12 @@ export async function recoverSignalCareOwnerPassContinuation(
           }
         })
       ]);
+    const actionableProspects = pipelineItems.filter(
+      (item) =>
+        !["done", "killed", "passed"].includes(
+          item.status.trim().toLowerCase()
+        )
+    ).length;
     if (actionableProspects > 0 || activeWork > 0 || pendingDecisions > 0) {
       continue;
     }
@@ -1823,7 +1829,10 @@ async function persistCandidates(
       where: { userId, lane: { in: ["signalcare", "pipeline"] } }
     }),
     db.pipelineAction.findMany({
-      where: { userId, type: "prospect_research" }
+      where: {
+        userId,
+        type: { in: ["prospect_research", "prospect_qualification"] }
+      }
     })
   ]);
   const names = new Set(
@@ -1831,7 +1840,12 @@ async function persistCandidates(
   );
   const domains = new Set(
     actions.flatMap((action) => {
-      const domain = parseEvidenceDomain(action.note);
+      const evidence = parseOperationalEvidence(action.note);
+      const rawDomain = evidence.officialDomain ?? evidence.domain;
+      const domain =
+        typeof rawDomain === "string"
+          ? normalizeProspectDomain(rawDomain)
+          : parseEvidenceDomain(action.note);
       return domain ? [domain] : [];
     })
   );
@@ -2041,6 +2055,58 @@ export async function executeSignalCareHostedResearch(
   const researchContext = parseSignalCareResearchContext(
     work.operationalContext
   );
+  if (researchContext.researchMode === "QUALIFY_EXISTING_PROSPECT") {
+    const targetQueueItem = (
+      await db.queueItem.findMany({
+        where: {
+          userId: input.userId,
+          lane: { in: ["signalcare", "pipeline"] }
+        }
+      })
+    ).find(
+      (item) =>
+        item.recipient.trim().toLowerCase() ===
+        researchContext.targetProspect.trim().toLowerCase()
+    );
+    if (targetQueueItem?.status.trim().toLowerCase() === "passed") {
+      await transitionAgentWorkItem(
+        input.userId,
+        work.id,
+        "PARKED",
+        {
+          blocker: "Target prospect was passed by the owner and is terminal."
+        },
+        db
+      );
+      await db.agentProjectConfig.update({
+        where: { projectId: input.projectId },
+        data: { nextAgentReviewAt: now }
+      });
+      await recordAgentEvent(
+        {
+          userId: input.userId,
+          projectId: input.projectId,
+          workItemId: work.id,
+          idempotencyKey: `signalcare-passed-qualification-suppressed:${work.id}`,
+          type: "WORK_PARKED",
+          summary: `${targetQueueItem.recipient} was passed by the owner; qualification was suppressed and acquisition remains due to continue.`,
+          metadata: {
+            targetProspect: targetQueueItem.recipient,
+            externalOutreachPerformed: false
+          }
+        },
+        db
+      );
+      return {
+        outcome: "PARKED" as const,
+        created: [],
+        qualifiedProspect: targetQueueItem.recipient,
+        pipelineStatus: "passed" as const,
+        skippedBecauseProspectsExist: false,
+        error: "Passed prospects are terminal and cannot be qualified."
+      };
+    }
+  }
 
   work = await transitionAgentWorkItem(
     input.userId,
@@ -2101,13 +2167,18 @@ export async function executeSignalCareHostedResearch(
   let researchDiagnostics = emptyResearchDiagnostics();
   let failureStage = "provider_request";
   try {
-    const existingQueue = await db.queueItem.findMany({
+    const allQueue = await db.queueItem.findMany({
       where: {
         userId: input.userId,
-        lane: { in: ["signalcare", "pipeline"] },
-        status: { notIn: ["done", "killed", "passed"] }
+        lane: { in: ["signalcare", "pipeline"] }
       }
     });
+    const existingQueue = allQueue.filter(
+      (item) =>
+        !["done", "killed", "passed"].includes(
+          item.status.trim().toLowerCase()
+        )
+    );
     const existingActions = await db.pipelineAction.findMany({
       where: { userId: input.userId },
       orderBy: { date: "desc" }
@@ -2297,8 +2368,13 @@ export async function executeSignalCareHostedResearch(
       };
     }
     const existingDomains = existingActions.flatMap((action) => {
-      if (action.type !== "prospect_research") return [];
-      const domain = parseEvidenceDomain(action.note);
+      if (!["prospect_research", "prospect_qualification"].includes(action.type)) return [];
+      const evidence = parseOperationalEvidence(action.note);
+      const rawDomain = evidence.officialDomain ?? evidence.domain;
+      const domain =
+        typeof rawDomain === "string"
+          ? normalizeProspectDomain(rawDomain)
+          : parseEvidenceDomain(action.note);
       return domain ? [domain] : [];
     });
     const maxProspects = getSignalCareResearchLimit();
@@ -2311,7 +2387,7 @@ export async function executeSignalCareHostedResearch(
           }
         : await client.discover({
             objective: input.objective,
-            existingOrganizations: existingQueue.map((item) => item.recipient),
+            existingOrganizations: allQueue.map((item) => item.recipient),
             existingDomains,
             maxProspects
           });

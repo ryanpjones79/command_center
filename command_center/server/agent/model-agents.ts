@@ -400,7 +400,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       name: "pm_project_review",
       validator: pmOutputSchema,
       schema: pmJsonSchema,
-      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. For RYKAS_GM, Rykas owns economics: use only realTruth values, treat null as UNKNOWN, and never derive landed cost, profit, ROI, margin, max/ideal cost, score, or quantity. Prioritize purchase-decision-ready profitable candidates, then high-value missing evidence, inventory/listing flow, and stale tied-up capital. Stale evidence requires refresh/research, never BUY. BUY is authorization only and cannot purchase. RYKAS_OPERATIONS_READ is RYKAS_GM-only and operationalContext must be exactly one versioned predefined JSON request; it cannot contain SQL, shell, URLs, or paths. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When a prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
+      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. For RYKAS_GM, Rykas owns economics: use only realTruth values, treat null as UNKNOWN, and never derive landed cost, profit, ROI, margin, max/ideal cost, score, or quantity. Prioritize purchase-decision-ready profitable candidates, then high-value missing evidence, inventory/listing flow, and stale tied-up capital. Stale evidence requires refresh/research, never BUY. BUY is authorization only and cannot purchase. RYKAS_OPERATIONS_READ is RYKAS_GM-only and operationalContext must be exactly one versioned predefined JSON request; it cannot contain SQL, shell, URLs, or paths. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. SignalCare passed prospects are terminal audit history: never qualify them, propose outreach to them, or resurrect them unless Ryan explicitly reopens them. When signalcare.pipeline.snapshot has zero actionable prospects, normally continue customer acquisition with bounded DISCOVER_PROSPECTS while honoring passedProspects as permanent discovery exclusions. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When an actionable prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
       payload: context
     });
     const ownerEscalation = result.ownerNeeded && result.ownerDecision !== null;
@@ -425,11 +425,83 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
     const signalCareSnapshot = context.toolEvidence?.find(
       (evidence) => evidence.toolId === "signalcare.pipeline.snapshot"
     )?.output as
-      | { prospects?: Array<{ name: string; stage: string }> }
+      | {
+          prospects?: Array<{ name: string; stage: string }>;
+          passedProspects?: Array<{ name: string; domain: string | null }>;
+        }
       | undefined;
     const actionableProspects = (signalCareSnapshot?.prospects ?? []).filter(
       (prospect) => prospect.stage.toLowerCase() !== "passed"
     );
+    const passedProspects = signalCareSnapshot?.passedProspects ?? [];
+    const proposedSignalCareTarget = ownerEscalation
+      ? result.ownerDecision?.targetEntity?.name ?? null
+      : targetProspect;
+    const targetsPassedProspect =
+      context.profile === "SIGNALCARE_GM" &&
+      typeof proposedSignalCareTarget === "string" &&
+      passedProspects.some(
+        (prospect) =>
+          prospect.name.trim().toLowerCase() ===
+          proposedSignalCareTarget.trim().toLowerCase()
+      ) &&
+      ((ownerEscalation &&
+        result.ownerDecision?.category === "SEND_EMAIL_OR_MESSAGE") ||
+        (!ownerEscalation &&
+          result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
+          researchMode === "QUALIFY_EXISTING_PROSPECT"));
+    if (targetsPassedProspect && actionableProspects.length === 0) {
+      return {
+        disposition: "CREATE_WORK" as const,
+        title: "Discover the next evidence-backed SignalCare prospects",
+        objective:
+          "Identify new plausible customers after the prior prospect was passed by the owner.",
+        expectedValue:
+          "Continue customer acquisition without resurrecting a terminal prospect.",
+        acceptanceCriteria:
+          "At most the configured number of source-backed candidates enter the actionable pipeline; passed organizations remain excluded; no external communication occurs.",
+        agentRole: "SIGNALCARE_RESEARCHER",
+        actionCategory: "RESEARCH_READ_ONLY" as const,
+        priority: "HIGH" as const,
+        maxAttempts: Math.max(1, Math.min(3, result.maxAttempts)),
+        plannedBottleneck: "No actionable SignalCare prospects remain.",
+        requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+        sandboxPolicy: "READ_ONLY" as const,
+        networkPolicy: "ALLOWLIST" as const,
+        operationalContext:
+          "Run bounded discovery and exclude all passed organizations and domains from the snapshot.",
+        evidence: result.evidence,
+        nextReviewMinutes: result.nextReviewMinutes,
+        ownerNeeded: false,
+        ownerDecision: null,
+        researchMode: "DISCOVER_PROSPECTS" as const,
+        targetProspect: null
+      };
+    }
+    if (targetsPassedProspect) {
+      return {
+        disposition: "WAIT" as const,
+        title: "Do not resurrect a passed SignalCare prospect",
+        objective: "Keep owner PASS terminal while other actionable prospects remain available.",
+        expectedValue: "Preserve owner intent and acquisition focus.",
+        acceptanceCriteria: "No work, decision, action request, or communication is created for the passed prospect.",
+        agentRole: "SIGNALCARE_GM",
+        actionCategory: "RESEARCH_READ_ONLY" as const,
+        priority: "MEDIUM" as const,
+        maxAttempts: 1,
+        plannedBottleneck: result.currentBottleneck,
+        requiredCapability: "REPOSITORY_READ",
+        sandboxPolicy: "READ_ONLY" as const,
+        networkPolicy: "OFF" as const,
+        operationalContext: "Passed prospect proposal deterministically suppressed.",
+        evidence: result.evidence,
+        nextReviewMinutes: result.nextReviewMinutes,
+        ownerNeeded: false,
+        ownerDecision: null,
+        researchMode: null,
+        targetProspect: null
+      };
+    }
     if (
       !ownerEscalation &&
       result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&

@@ -99,6 +99,9 @@ export async function evaluateSignalCareOutreachReadiness(
   const qualification = parseRecord(action?.note);
   const reasons: string[] = [];
   if (!queueItem) reasons.push("Target prospect does not exist in QueueItem.");
+  if (queueItem?.status.trim().toLowerCase() === "passed") {
+    reasons.push("Target prospect was passed by the owner and is terminal.");
+  }
   if (queueItem?.status !== "outreach_ready") {
     reasons.push("Target prospect is not outreach_ready.");
   }

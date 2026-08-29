@@ -548,7 +548,12 @@ async function processClaimedProject(
       await releaseProjectClaim(config.id, leaseToken, now, {
         health: research.outcome === "FAILED" ? "BLOCKED" : "NEEDS_ATTENTION",
         currentBottleneck: plan.plannedBottleneck,
-        nextAgentReviewAt: research.outcome === "RETRY" ? addMs(now, retryDelayMs) : addMs(now, reviewIntervalMs)
+        nextAgentReviewAt:
+          research.outcome === "PARKED"
+            ? now
+            : research.outcome === "RETRY"
+              ? addMs(now, retryDelayMs)
+              : addMs(now, reviewIntervalMs)
       }, db);
       return { ...baseResult, outcome: research.outcome, workItemId: workItem.id,
         detail: research.error ?? "Hosted SignalCare research did not complete." };
