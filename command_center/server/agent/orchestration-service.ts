@@ -21,6 +21,7 @@ import { collectProjectEvidence, defaultToolsForProfile } from "@/server/agent/p
 import {
   executeSignalCareHostedResearch,
   OpenAiSignalCareResearchClient,
+  recoverFailedSignalCareProspectResearch,
   reclassifySignalCareProspectResearch,
   signalCareWebResearchEnabled,
   type SignalCareResearchClient
@@ -147,6 +148,7 @@ async function processClaimedProject(
   );
 
   await reclassifySignalCareProspectResearch(config, db);
+  await recoverFailedSignalCareProspectResearch(config, db);
 
   const eligibleExisting = await db.agentWorkItem.findFirst({
     where: {

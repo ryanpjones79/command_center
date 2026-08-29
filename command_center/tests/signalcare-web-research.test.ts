@@ -18,13 +18,18 @@ import { runAgentOrchestrationCycle } from "@/server/agent/orchestration-service
 import { executeProjectTool } from "@/server/agent/project-tools";
 import { claimRunnerWork } from "@/server/agent/runner-service";
 import {
+  canonicalizeSignalCareSourceUrl,
   executeSignalCareHostedResearch,
   getSignalCareResearchLimit,
+  normalizeProspectDomain,
   OpenAiSignalCareResearchClient,
+  recoverFailedSignalCareProspectResearch,
   reclassifySignalCareProspectResearch,
+  retainCitedSignalCareEvidence,
   signalCareResearchCandidateSchema,
   type SignalCareResearchCandidate,
-  type SignalCareResearchClient
+  type SignalCareResearchClient,
+  type SignalCareProviderSource
 } from "@/server/agent/signalcare-research-service";
 
 const databasePath = path.join(
@@ -89,6 +94,14 @@ function fakeResearchClient(
     searchSummary: "Bounded public research completed with official sources."
   });
   return { discover };
+}
+
+function providerSource(url: string): SignalCareProviderSource {
+  return {
+    canonicalUrl: canonicalizeSignalCareSourceUrl(url),
+    hostname: normalizeProspectDomain(url),
+    providerUrl: url
+  };
 }
 
 function waitingServices(
@@ -313,9 +326,126 @@ describe("SignalCare hosted public-web research", () => {
     ).toBe(false);
   });
 
-  it("uses Responses API web_search and retains only provider-cited sources", async () => {
+  it("matches exact provider URLs and persists the provider-returned URL", () => {
+    const modelCandidate = candidate(1);
+    const providerUrl = modelCandidate.sourceUrls[0];
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [modelCandidate], searchSummary: "Exact source." },
+      [providerSource(providerUrl)]
+    );
+
+    expect(result.candidates[0]?.sourceUrls).toEqual([providerUrl]);
+    expect(result.candidates[0]?.verifiedPublicFacts[0]?.sourceUrls).toEqual([
+      providerUrl
+    ]);
+    expect(result.diagnostics.candidatesAccepted).toBe(1);
+  });
+
+  it("matches clean model URLs to provider URLs with tracking parameters", () => {
+    const modelCandidate = candidate(1);
+    const providerUrl = `${modelCandidate.sourceUrls[0]}?utm_source=chatgpt.com&fbclid=abc&gclid=def`;
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [modelCandidate], searchSummary: "Tracked source." },
+      [providerSource(providerUrl)]
+    );
+
+    expect(result.candidates[0]?.sourceUrls).toEqual([providerUrl]);
+    expect(result.candidates[0]?.verifiedPublicFacts[0]?.sourceUrls).toEqual([
+      providerUrl
+    ]);
+  });
+
+  it("keeps meaningful query parameters significant", () => {
+    const modelCandidate = candidate(1, {
+      sourceUrls: ["https://example-dental-1.com/locations?state=NC"],
+      verifiedPublicFacts: [
+        {
+          fact: "The locations page lists North Carolina offices.",
+          sourceUrls: ["https://example-dental-1.com/locations?state=NC"]
+        }
+      ]
+    });
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [modelCandidate], searchSummary: "Meaningful query." },
+      [providerSource("https://example-dental-1.com/locations?state=SC")]
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.diagnostics.factsRejectedNoProviderSource).toBe(1);
+  });
+
+  it("normalizes fragments, www, and HTTP/HTTPS without lowercasing paths", () => {
+    expect(
+      canonicalizeSignalCareSourceUrl(
+        "http://www.Example-Dental-1.com/Locations/#team"
+      )
+    ).toBe("example-dental-1.com/Locations");
+    expect(
+      canonicalizeSignalCareSourceUrl("https://example-dental-1.com/Locations")
+    ).toBe("example-dental-1.com/Locations");
+    expect(
+      canonicalizeSignalCareSourceUrl("https://example-dental-1.com/locations")
+    ).not.toBe("example-dental-1.com/Locations");
+  });
+
+  it("does not validate third-party facts by same-domain matching", () => {
+    const modelCandidate = candidate(1, {
+      sourceUrls: ["https://directory.example.org/profile/dental-one"],
+      verifiedPublicFacts: [
+        {
+          fact: "A third-party directory lists the organization.",
+          sourceUrls: ["https://directory.example.org/profile/dental-one"]
+        }
+      ]
+    });
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [modelCandidate], searchSummary: "Directory source." },
+      [
+        providerSource("https://example-dental-1.com/locations"),
+        providerSource("https://directory.example.org/profile/dental-two")
+      ]
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.diagnostics.factsRejectedNoProviderSource).toBe(1);
+  });
+
+  it("validates an official root website against a sourced official page", () => {
+    const modelCandidate = candidate(1);
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [modelCandidate], searchSummary: "Official page." },
+      [providerSource("https://www.example-dental-1.com/locations#offices")]
+    );
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.officialWebsite).toBe(
+      "https://example-dental-1.com"
+    );
+  });
+
+  it("rejects fabricated and low-confidence candidates", () => {
+    const fabricated = candidate(1);
+    const lowConfidence = candidate(2, { evidenceConfidence: "LOW" });
+    const result = retainCitedSignalCareEvidence(
+      {
+        candidates: [fabricated, lowConfidence],
+        searchSummary: "Fail-closed candidates."
+      },
+      [providerSource(lowConfidence.sourceUrls[0])]
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.diagnostics).toMatchObject({
+      candidatesRejectedLowConfidence: 1,
+      candidatesRejectedNoProviderSource: 1
+    });
+  });
+
+  it("uses all Responses web-search provenance locations", async () => {
     const cited = candidate(1);
-    const fabricated = candidate(2);
+    const citedFromResults = candidate(2);
+    const citedFromAnnotation = candidate(3);
+    const fabricated = candidate(4);
     const fetcher = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -325,7 +455,8 @@ describe("SignalCare hosted public-web research", () => {
               status: "completed",
               action: {
                 sources: cited.sourceUrls.map((url) => ({ url }))
-              }
+              },
+              results: citedFromResults.sourceUrls.map((url) => ({ url }))
             },
             {
               type: "message",
@@ -333,10 +464,15 @@ describe("SignalCare hosted public-web research", () => {
                 {
                   type: "output_text",
                   text: JSON.stringify({
-                    candidates: [cited, fabricated],
+                    candidates: [
+                      cited,
+                      citedFromResults,
+                      citedFromAnnotation,
+                      fabricated
+                    ],
                     searchSummary: "Official sources checked."
                   }),
-                  annotations: cited.sourceUrls.map((url) => ({
+                  annotations: citedFromAnnotation.sourceUrls.map((url) => ({
                     type: "url_citation",
                     url
                   }))
@@ -360,7 +496,9 @@ describe("SignalCare hosted public-web research", () => {
     });
 
     expect(result.candidates.map((item) => item.organizationName)).toEqual([
-      cited.organizationName
+      cited.organizationName,
+      citedFromResults.organizationName,
+      citedFromAnnotation.organizationName
     ]);
     const request = JSON.parse(
       (fetcher.mock.calls[0]?.[1] as RequestInit).body as string
@@ -369,7 +507,49 @@ describe("SignalCare hosted public-web research", () => {
       model: "test-research-model",
       tools: [{ type: "web_search", search_context_size: "medium" }],
       tool_choice: "required",
-      include: ["web_search_call.action.sources"]
+      include: ["web_search_call.action.sources", "web_search_call.results"]
+    });
+  });
+
+  it("records validation counts when no candidate has adequate provenance", async () => {
+    const work = await createWork("zero-candidate-diagnostics");
+    const diagnostics = {
+      rawCandidateCount: 3,
+      providerSourceCount: 2,
+      candidatesAccepted: 0,
+      candidatesRejectedLowConfidence: 1,
+      candidatesRejectedNoProviderSource: 2,
+      factsRejectedNoProviderSource: 4
+    };
+    const client: SignalCareResearchClient = {
+      async discover() {
+        return {
+          candidates: [],
+          searchSummary: "No candidate passed provenance checks.",
+          diagnostics
+        };
+      }
+    };
+
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      client,
+      db
+    );
+
+    expect(result.outcome).toBe("RETRY");
+    expect(result.error).toContain("rawCandidateCount=3");
+    const run = await db.agentRun.findFirstOrThrow({
+      where: { workItemId: work.id, runType: "HOSTED_WEB_RESEARCH" }
+    });
+    expect(JSON.parse(run.evidence ?? "{}")).toEqual({
+      failureStage: "evidence_validation",
+      validationDiagnostics: diagnostics
     });
   });
 
@@ -507,6 +687,125 @@ describe("SignalCare hosted public-web research", () => {
     expect(updated.requiredCapability).toBe(SIGNALCARE_WEB_RESEARCH_CAPABILITY);
     expect(updated.workspaceIdentifier).toBeNull();
     expect(updated.networkPolicy).toBe("ALLOWLIST");
+  });
+
+  it("creates one bounded replacement for the prior provenance failure", async () => {
+    const failed = await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "failed-prior-provenance",
+        title:
+          "Build an evidence-backed qualified prospect shortlist for SignalCare",
+        objective: "Discover qualified prospects from public evidence.",
+        expectedValue: "Create acquisition opportunities.",
+        acceptanceCriteria: "Persist only evidence-backed candidates.",
+        agentRole: "SIGNALCARE_RESEARCHER",
+        actionCategory: "RESEARCH_READ_ONLY",
+        requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+        sandboxPolicy: "READ_ONLY",
+        networkPolicy: "ALLOWLIST",
+        state: "FAILED",
+        attemptCount: 2,
+        maxAttempts: 2,
+        blocker:
+          "Hosted research returned no candidates with adequate cited evidence."
+      }
+    });
+    const config = await db.agentProjectConfig.findUniqueOrThrow({
+      where: { projectId: signalProjectId }
+    });
+
+    const recovered = await recoverFailedSignalCareProspectResearch(config, db);
+    expect(recovered).toHaveLength(1);
+    const replacement = await db.agentWorkItem.findUniqueOrThrow({
+      where: { id: recovered[0] }
+    });
+    expect(replacement).toMatchObject({
+      parentWorkItemId: failed.id,
+      state: "QUEUED",
+      attemptCount: 0,
+      maxAttempts: 1,
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY
+    });
+
+    expect(await recoverFailedSignalCareProspectResearch(config, db)).toEqual(
+      []
+    );
+    expect(
+      await db.agentWorkItem.count({ where: { projectId: signalProjectId } })
+    ).toBe(2);
+  });
+
+  it("does not revive arbitrary failed work", async () => {
+    await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "unrelated-failed-work",
+        title: "Unrelated repository task",
+        objective: "Do something unrelated.",
+        expectedValue: "Unrelated value.",
+        acceptanceCriteria: "Unrelated result.",
+        agentRole: "CODE_WORKER",
+        actionCategory: "REVERSIBLE_REPOSITORY_WORK",
+        requiredCapability: "CODEX_IMPLEMENTATION",
+        state: "FAILED",
+        blocker:
+          "Hosted research returned no candidates with adequate cited evidence."
+      }
+    });
+    const config = await db.agentProjectConfig.findUniqueOrThrow({
+      where: { projectId: signalProjectId }
+    });
+
+    expect(await recoverFailedSignalCareProspectResearch(config, db)).toEqual(
+      []
+    );
+    expect(
+      await db.agentWorkItem.count({ where: { projectId: signalProjectId } })
+    ).toBe(1);
+  });
+
+  it("does not recover failed discovery after a prospect was persisted", async () => {
+    await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "failed-with-persisted-prospect",
+        title:
+          "Build an evidence-backed qualified prospect shortlist for SignalCare",
+        objective: "Discover qualified prospects from public evidence.",
+        expectedValue: "Create acquisition opportunities.",
+        acceptanceCriteria: "Persist only evidence-backed candidates.",
+        agentRole: "SIGNALCARE_RESEARCHER",
+        actionCategory: "RESEARCH_READ_ONLY",
+        requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+        state: "FAILED",
+        blocker:
+          "Hosted research returned no candidates with adequate cited evidence."
+      }
+    });
+    const prior = candidate(1);
+    await db.pipelineAction.create({
+      data: {
+        userId,
+        date: new Date(),
+        type: "prospect_research",
+        withWhom: prior.organizationName,
+        note: JSON.stringify({ domain: prior.domain })
+      }
+    });
+    const config = await db.agentProjectConfig.findUniqueOrThrow({
+      where: { projectId: signalProjectId }
+    });
+
+    expect(await recoverFailedSignalCareProspectResearch(config, db)).toEqual(
+      []
+    );
+    expect(
+      await db.agentWorkItem.count({ where: { projectId: signalProjectId } })
+    ).toBe(1);
   });
 
   it("executes existing hosted work before a PM WAIT can strand or duplicate it", async () => {

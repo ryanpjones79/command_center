@@ -55,13 +55,26 @@ export type SignalCareResearchResult = z.infer<
   typeof signalCareResearchResultSchema
 >;
 
+export type SignalCareResearchDiagnostics = {
+  rawCandidateCount: number;
+  providerSourceCount: number;
+  candidatesAccepted: number;
+  candidatesRejectedLowConfidence: number;
+  candidatesRejectedNoProviderSource: number;
+  factsRejectedNoProviderSource: number;
+};
+
+export type SignalCareResearchDiscoveryResult = SignalCareResearchResult & {
+  diagnostics?: SignalCareResearchDiagnostics;
+};
+
 export interface SignalCareResearchClient {
   discover(input: {
     objective: string;
     existingOrganizations: string[];
     existingDomains: string[];
     maxProspects: number;
-  }): Promise<SignalCareResearchResult>;
+  }): Promise<SignalCareResearchDiscoveryResult>;
 }
 
 const candidateJsonSchema = {
@@ -150,10 +163,55 @@ function responseText(response: Record<string, unknown>) {
   );
 }
 
-function normalizeUrl(value: string) {
+const trackingQueryParameters = new Set([
+  "_hsenc",
+  "_hsmi",
+  "dclid",
+  "fbclid",
+  "gad_campaignid",
+  "gad_source",
+  "gbraid",
+  "gclid",
+  "igshid",
+  "li_fat_id",
+  "mc_cid",
+  "mc_eid",
+  "msclkid",
+  "oly_anon_id",
+  "oly_enc_id",
+  "rb_clickid",
+  "srsltid",
+  "ttclid",
+  "twclid",
+  "wbraid",
+  "wickedid",
+  "yclid"
+]);
+
+export function canonicalizeSignalCareSourceUrl(value: string) {
   const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("SignalCare provenance must use HTTP or HTTPS.");
+  }
+  const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+  const query = Array.from(url.searchParams.entries())
+    .filter(([key]) => {
+      const normalizedKey = key.toLowerCase();
+      return (
+        !normalizedKey.startsWith("utm_") &&
+        !trackingQueryParameters.has(normalizedKey)
+      );
+    })
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+      leftKey === rightKey
+        ? leftValue.localeCompare(rightValue)
+        : leftKey.localeCompare(rightKey)
+    );
+  const search = new URLSearchParams(query).toString();
+  const pathname = url.pathname.replace(/\/+$/, "");
+  const port = url.port ? `:${url.port}` : "";
   url.hash = "";
-  return url.toString().replace(/\/$/, "").toLowerCase();
+  return `${hostname}${port}${pathname}${search ? `?${search}` : ""}`;
 }
 
 export function normalizeProspectDomain(value: string) {
@@ -161,8 +219,14 @@ export function normalizeProspectDomain(value: string) {
   return new URL(withProtocol).hostname.toLowerCase().replace(/^www\./, "");
 }
 
+export type SignalCareProviderSource = {
+  canonicalUrl: string;
+  hostname: string;
+  providerUrl: string;
+};
+
 function responseSourceUrls(response: Record<string, unknown>) {
-  const urls = new Set<string>();
+  const urls = new Map<string, SignalCareProviderSource>();
   const visit = (value: unknown) => {
     if (Array.isArray(value)) {
       value.forEach(visit);
@@ -173,7 +237,15 @@ function responseSourceUrls(response: Record<string, unknown>) {
     for (const key of ["url", "source_url", "source_website_url"]) {
       if (typeof record[key] === "string") {
         try {
-          urls.add(normalizeUrl(record[key]));
+          const providerUrl = record[key];
+          const canonicalUrl = canonicalizeSignalCareSourceUrl(providerUrl);
+          if (!urls.has(canonicalUrl)) {
+            urls.set(canonicalUrl, {
+              canonicalUrl,
+              hostname: normalizeProspectDomain(providerUrl),
+              providerUrl
+            });
+          }
         } catch {
           // Invalid provider provenance is ignored and can never validate a candidate.
         }
@@ -181,39 +253,112 @@ function responseSourceUrls(response: Record<string, unknown>) {
     }
     Object.values(record).forEach(visit);
   };
-  visit(response.output);
-  return urls;
+  const output = Array.isArray(response.output) ? response.output : [];
+  for (const item of output as Array<Record<string, unknown>>) {
+    if (item.type === "web_search_call") {
+      const action =
+        item.action && typeof item.action === "object"
+          ? (item.action as Record<string, unknown>)
+          : {};
+      visit(action.sources);
+      visit(item.results);
+    }
+    if (item.type === "message") {
+      const content = Array.isArray(item.content) ? item.content : [];
+      for (const part of content as Array<Record<string, unknown>>) {
+        visit(part.annotations);
+      }
+    }
+  }
+  return Array.from(urls.values());
 }
 
-function retainCitedEvidence(
-  result: SignalCareResearchResult,
-  provenance: Set<string>
+function providerSourceIndex(provenance: SignalCareProviderSource[]) {
+  return new Map(provenance.map((source) => [source.canonicalUrl, source]));
+}
+
+function matchProviderSource(
+  value: string,
+  provenance: Map<string, SignalCareProviderSource>
 ) {
+  try {
+    return provenance.get(canonicalizeSignalCareSourceUrl(value)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function uniqueProviderUrls(sources: SignalCareProviderSource[]) {
+  return Array.from(new Set(sources.map((source) => source.providerUrl)));
+}
+
+export function retainCitedSignalCareEvidence(
+  result: SignalCareResearchResult,
+  providerSources: SignalCareProviderSource[]
+) {
+  const provenance = providerSourceIndex(providerSources);
+  const diagnostics: SignalCareResearchDiagnostics = {
+    rawCandidateCount: result.candidates.length,
+    providerSourceCount: providerSources.length,
+    candidatesAccepted: 0,
+    candidatesRejectedLowConfidence: 0,
+    candidatesRejectedNoProviderSource: 0,
+    factsRejectedNoProviderSource: 0
+  };
   const candidates = result.candidates.flatMap((candidate) => {
-    const citedSources = candidate.sourceUrls.filter((url) =>
-      provenance.has(normalizeUrl(url))
+    const citedSources = uniqueProviderUrls(
+      candidate.sourceUrls.flatMap((url) => {
+        const match = matchProviderSource(url, provenance);
+        return match ? [match] : [];
+      })
     );
     const verifiedPublicFacts = candidate.verifiedPublicFacts.flatMap(
       (fact) => {
-        const sourceUrls = fact.sourceUrls.filter((url) =>
-          provenance.has(normalizeUrl(url))
+        const sourceUrls = uniqueProviderUrls(
+          fact.sourceUrls.flatMap((url) => {
+            const match = matchProviderSource(url, provenance);
+            return match ? [match] : [];
+          })
         );
+        if (sourceUrls.length === 0) {
+          diagnostics.factsRejectedNoProviderSource += 1;
+        }
         return sourceUrls.length > 0 ? [{ ...fact, sourceUrls }] : [];
       }
     );
+    if (candidate.evidenceConfidence === "LOW") {
+      diagnostics.candidatesRejectedLowConfidence += 1;
+      return [];
+    }
+    let officialWebsiteVerified = false;
+    try {
+      const officialHostname = normalizeProspectDomain(
+        candidate.officialWebsite
+      );
+      officialWebsiteVerified = providerSources.some(
+        (source) => source.hostname === officialHostname
+      );
+    } catch {
+      officialWebsiteVerified = false;
+    }
     if (
-      candidate.evidenceConfidence === "LOW" ||
+      !officialWebsiteVerified ||
       citedSources.length === 0 ||
       verifiedPublicFacts.length === 0
     ) {
+      diagnostics.candidatesRejectedNoProviderSource += 1;
       return [];
     }
+    diagnostics.candidatesAccepted += 1;
     return [{ ...candidate, sourceUrls: citedSources, verifiedPublicFacts }];
   });
-  return signalCareResearchResultSchema.parse({
-    candidates,
-    searchSummary: result.searchSummary
-  });
+  return {
+    ...signalCareResearchResultSchema.parse({
+      candidates,
+      searchSummary: result.searchSummary
+    }),
+    diagnostics
+  };
 }
 
 export class OpenAiSignalCareResearchClient implements SignalCareResearchClient {
@@ -245,14 +390,14 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
         model: this.model,
         tools: [{ type: "web_search", search_context_size: "medium" }],
         tool_choice: "required",
-        include: ["web_search_call.action.sources"],
+        include: ["web_search_call.action.sources", "web_search_call.results"],
         input: [
           {
             role: "system",
             content: [
               {
                 type: "input_text",
-                text: "Find a small evidence-backed SignalCare prospect shortlist using public web sources only. Prefer official organization, locations, providers, careers, and credible business pages. Clearly separate VERIFIED FACTS from HYPOTHESES. Never claim revenue leakage or operational problems without public evidence. Do not contact anyone, submit forms, change pricing, make commitments, or propose more candidates than requested. Exclude organizations already supplied. Return operational evidence only."
+                text: "Find a small evidence-backed SignalCare prospect shortlist using public web sources only. Return only MEDIUM or HIGH-confidence candidates, and do not include a candidate merely to reach the requested count. Every verified fact must be grounded in public web-search evidence, and each source URL must identify the actual page used for that fact. Prefer official organization, locations, providers, careers, and credible business pages. Clearly separate VERIFIED FACTS from HYPOTHESES. Never claim revenue leakage or operational problems without public evidence. Do not contact anyone, submit forms, change pricing, make commitments, or propose more candidates than requested. Exclude organizations already supplied. Return operational evidence only."
               }
             ]
           },
@@ -282,10 +427,18 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
       );
     }
     const raw = (await response.json()) as Record<string, unknown>;
-    const parsed = signalCareResearchResultSchema.parse(
-      JSON.parse(responseText(raw))
-    );
-    return retainCitedEvidence(parsed, responseSourceUrls(raw));
+    let parsed: SignalCareResearchResult;
+    try {
+      parsed = signalCareResearchResultSchema.parse(
+        JSON.parse(responseText(raw))
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `SignalCare research model-output validation failed: ${detail}`
+      );
+    }
+    return retainCitedSignalCareEvidence(parsed, responseSourceUrls(raw));
   }
 }
 
@@ -309,14 +462,9 @@ type LegacyResearchWork = Pick<
   "id" | "title" | "objective" | "requiredCapability" | "state"
 >;
 
-export function isLegacySignalCareProspectResearch(
-  work: LegacyResearchWork,
-  profile: string | null | undefined
+function isSignalCareProspectShortlistDescription(
+  work: Pick<AgentWorkItem, "title" | "objective">
 ) {
-  if (profile !== "SIGNALCARE_GM") return false;
-  if (!["QUEUED", "RETRY"].includes(work.state)) return false;
-  if (work.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY)
-    return false;
   const description = `${work.title} ${work.objective}`.toLowerCase();
   return (
     work.title.trim().toLowerCase() ===
@@ -325,6 +473,17 @@ export function isLegacySignalCareProspectResearch(
       description.includes("prospect") &&
       description.includes("shortlist"))
   );
+}
+
+export function isLegacySignalCareProspectResearch(
+  work: LegacyResearchWork,
+  profile: string | null | undefined
+) {
+  if (profile !== "SIGNALCARE_GM") return false;
+  if (!["QUEUED", "RETRY"].includes(work.state)) return false;
+  if (work.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY)
+    return false;
+  return isSignalCareProspectShortlistDescription(work);
 }
 
 export async function reclassifySignalCareProspectResearch(
@@ -405,6 +564,151 @@ function isUsefulExistingProspect(item: {
       nextAction
     )
   );
+}
+
+const priorProvenanceValidationFailure =
+  "Hosted research returned no candidates with adequate cited evidence";
+const provenanceRecoveryVersion = "canonical-provenance-v2";
+
+function isPriorProvenanceValidationFailure(blocker: string | null) {
+  return blocker
+    ?.toLowerCase()
+    .includes(priorProvenanceValidationFailure.toLowerCase());
+}
+
+function emptyResearchDiagnostics(): SignalCareResearchDiagnostics {
+  return {
+    rawCandidateCount: 0,
+    providerSourceCount: 0,
+    candidatesAccepted: 0,
+    candidatesRejectedLowConfidence: 0,
+    candidatesRejectedNoProviderSource: 0,
+    factsRejectedNoProviderSource: 0
+  };
+}
+
+function researchDiagnosticsSummary(
+  diagnostics: SignalCareResearchDiagnostics
+) {
+  return Object.entries(diagnostics)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
+}
+
+export async function recoverFailedSignalCareProspectResearch(
+  config: Pick<AgentProjectConfig, "userId" | "projectId" | "profile">,
+  db: PrismaClient = prisma
+) {
+  if (config.profile !== "SIGNALCARE_GM") return [];
+
+  const [existingQueue, persistedResearchCount, activeResearch] =
+    await Promise.all([
+      db.queueItem.findMany({
+        where: {
+          userId: config.userId,
+          lane: { in: ["signalcare", "pipeline"] },
+          status: { notIn: ["done", "killed"] }
+        },
+        select: { status: true, nextAction: true }
+      }),
+      db.pipelineAction.count({
+        where: { userId: config.userId, type: "prospect_research" }
+      }),
+      db.agentWorkItem.findFirst({
+        where: {
+          userId: config.userId,
+          projectId: config.projectId,
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          state: {
+            in: [
+              "QUEUED",
+              "PLANNING",
+              "RUNNING",
+              "VERIFYING",
+              "RETRY",
+              "AWAITING_EXECUTION"
+            ]
+          }
+        }
+      })
+    ]);
+  if (
+    activeResearch ||
+    persistedResearchCount > 0 ||
+    existingQueue.some(isUsefulExistingProspect)
+  ) {
+    return [];
+  }
+
+  const failedItems = await db.agentWorkItem.findMany({
+    where: {
+      userId: config.userId,
+      projectId: config.projectId,
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      state: "FAILED"
+    },
+    orderBy: { completedAt: "desc" }
+  });
+  const failed = failedItems.find(
+    (item) =>
+      isPriorProvenanceValidationFailure(item.blocker) &&
+      isSignalCareProspectShortlistDescription(item)
+  );
+  if (!failed) return [];
+
+  const idempotencyKey = `${provenanceRecoveryVersion}:${failed.id}`;
+  const existingRecovery = await db.agentWorkItem.findUnique({
+    where: {
+      projectId_idempotencyKey: {
+        projectId: config.projectId,
+        idempotencyKey
+      }
+    }
+  });
+  if (existingRecovery) return [];
+
+  const replacement = await db.agentWorkItem.create({
+    data: {
+      userId: failed.userId,
+      projectId: failed.projectId,
+      parentWorkItemId: failed.id,
+      idempotencyKey,
+      title: failed.title,
+      objective: failed.objective,
+      expectedValue: failed.expectedValue,
+      acceptanceCriteria: failed.acceptanceCriteria,
+      agentRole: failed.agentRole,
+      actionCategory: failed.actionCategory,
+      requiredCapability: failed.requiredCapability,
+      sandboxPolicy: failed.sandboxPolicy,
+      networkPolicy: failed.networkPolicy,
+      operationalContext: failed.operationalContext,
+      priority: failed.priority,
+      maxAttempts: 1,
+      workspaceIdentifier: null,
+      repositoryIdentifier: failed.repositoryIdentifier,
+      blocker: null,
+      nextEligibleRunAt: null
+    }
+  });
+  await recordAgentEvent(
+    {
+      userId: config.userId,
+      projectId: config.projectId,
+      workItemId: replacement.id,
+      idempotencyKey: `signalcare-research-recovered:${failed.id}:${provenanceRecoveryVersion}`,
+      type: "RETRY_CREATED",
+      summary:
+        "Created one bounded replacement attempt for the prior SignalCare provenance-validation failure.",
+      metadata: {
+        supersedesFailedWorkItemId: failed.id,
+        recoveryVersion: provenanceRecoveryVersion,
+        maximumNewAttempts: 1
+      }
+    },
+    db
+  );
+  return [replacement.id];
 }
 
 async function persistCandidates(
@@ -578,6 +882,8 @@ export async function executeSignalCareHostedResearch(
     db
   );
 
+  let researchDiagnostics = emptyResearchDiagnostics();
+  let failureStage = "provider_request";
   try {
     const existingQueue = await db.queueItem.findMany({
       where: {
@@ -597,7 +903,7 @@ export async function executeSignalCareHostedResearch(
     const usefulExistingProspects = existingQueue.filter(
       isUsefulExistingProspect
     );
-    const research =
+    const discovery: SignalCareResearchDiscoveryResult =
       usefulExistingProspects.length > 0
         ? {
             candidates: [],
@@ -609,18 +915,32 @@ export async function executeSignalCareHostedResearch(
             existingDomains,
             maxProspects
           });
+    failureStage = "result_validation";
+    const { diagnostics: providerDiagnostics, ...research } = discovery;
     const validated = signalCareResearchResultSchema.parse(research);
     const boundedCandidates = validated.candidates
       .filter((candidate) => candidate.evidenceConfidence !== "LOW")
       .slice(0, maxProspects);
+    researchDiagnostics = providerDiagnostics ?? {
+      rawCandidateCount: validated.candidates.length,
+      providerSourceCount: 0,
+      candidatesAccepted: boundedCandidates.length,
+      candidatesRejectedLowConfidence: validated.candidates.filter(
+        (candidate) => candidate.evidenceConfidence === "LOW"
+      ).length,
+      candidatesRejectedNoProviderSource: 0,
+      factsRejectedNoProviderSource: 0
+    };
     if (
       usefulExistingProspects.length === 0 &&
       boundedCandidates.length === 0
     ) {
+      failureStage = "evidence_validation";
       throw new Error(
-        "Hosted research returned no candidates with adequate cited evidence."
+        `${priorProvenanceValidationFailure}. ${researchDiagnosticsSummary(researchDiagnostics)}.`
       );
     }
+    failureStage = "candidate_persistence";
     const created = await persistCandidates(
       input.userId,
       boundedCandidates,
@@ -638,9 +958,14 @@ export async function executeSignalCareHostedResearch(
         evidence: JSON.stringify({
           created,
           candidateCount: boundedCandidates.length,
-          summary: validated.searchSummary
+          summary: validated.searchSummary,
+          validationDiagnostics: researchDiagnostics
         }),
-        structuredOutcome: JSON.stringify({ ...validated, created }),
+        structuredOutcome: JSON.stringify({
+          ...validated,
+          created,
+          validationDiagnostics: researchDiagnostics
+        }),
         completedAt: now
       }
     });
@@ -718,9 +1043,27 @@ export async function executeSignalCareHostedResearch(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (
+      message.startsWith("SignalCare research model-output validation failed")
+    ) {
+      failureStage = "model_output_validation";
+    }
     await db.agentRun.update({
       where: { id: run.id },
-      data: { status: "FAILED", error: message, completedAt: now }
+      data: {
+        status: "FAILED",
+        error: message,
+        evidence: JSON.stringify({
+          failureStage,
+          validationDiagnostics: researchDiagnostics
+        }),
+        structuredOutcome: JSON.stringify({
+          outcome: "FAILED",
+          failureStage,
+          validationDiagnostics: researchDiagnostics
+        }),
+        completedAt: now
+      }
     });
     const nextState: "FAILED" | "RETRY" =
       attempt >= work.maxAttempts ? "FAILED" : "RETRY";
