@@ -9,3 +9,19 @@ Repository work distinguishes verification from integration. `READY_FOR_REVIEW` 
 Production defaults are all off: orchestration, model agents, runner execution, Codex execution, and project autonomy. Apply the PostgreSQL migrations (or the current reviewed `prisma db push` bootstrap), deploy the control plane, verify schema and Agent HQ, register the HMAC runner, observe heartbeat, enable model support, then enable only SignalCare in `LIVE_INTERNAL`, followed by runner/Codex. Rykas follows with read-only truth; CCHCS remains PHI-free and restricted.
 
 Rollback: turn off runner/Codex/model/orchestration flags and pause all project configs. Leases expire safely and durable evidence remains. External communication, purchases, production deployment, destructive actions, credentials, price/offer changes, and automatic merge remain unavailable.
+
+## SignalCare hosted prospect research
+
+`SIGNALCARE_PUBLIC_WEB_RESEARCH` is a narrow control-plane capability, not a Windows-runner capability. The PM may select it only for the `SIGNALCARE_GM` profile when `signalcare.pipeline.snapshot` contains no useful active prospects. RyanOS calls the OpenAI Responses API hosted `web_search` tool, validates strict structured output, retains only medium/high-confidence candidates with provider-returned source provenance, caps the run at five prospects by default (hard maximum ten), and writes accepted candidates into the existing `QueueItem` and `PipelineAction` truth.
+
+Capability dispatch is explicit: repository capabilities route to the outbound local runner; SignalCare public research routes to the Railway control plane; unknown or disabled capabilities remain queued with a blocker. The legacy queued work titled `Build an evidence-backed qualified prospect shortlist for SignalCare` is deterministically reclassified, loses its local workspace binding, and cannot be claimed by Windows.
+
+Required configuration remains off by default:
+
+```env
+FEATURE_SIGNALCARE_WEB_RESEARCH=false
+AGENT_SIGNALCARE_RESEARCH_MODEL=gpt-4.1-mini
+AGENT_SIGNALCARE_RESEARCH_MAX_PROSPECTS=5
+```
+
+The hosted capability also requires `FEATURE_AGENT_MODELS=true` and `OPENAI_API_KEY`. It never emails, messages, submits forms, changes pricing, commits, spends, deploys, or runs for CCHCS. Disable `FEATURE_SIGNALCARE_WEB_RESEARCH` to stop new hosted discovery without changing queued work or durable evidence.

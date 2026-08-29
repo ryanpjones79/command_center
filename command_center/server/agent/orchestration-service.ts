@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentProjectConfig, AgentWorkItem, PrismaClient } from "@prisma/client";
+import { executorForCapability } from "@/lib/agent-capabilities";
 import { activeAgentWorkStates } from "@/lib/agent-state-machine";
 import { evaluateAgentPolicy } from "@/lib/agent-policy";
 import { prisma } from "@/lib/prisma";
@@ -17,6 +18,13 @@ import {
 } from "@/server/agent/mock-agents";
 import { ModelProjectManagerAgent } from "@/server/agent/model-agents";
 import { collectProjectEvidence, defaultToolsForProfile } from "@/server/agent/project-tools";
+import {
+  executeSignalCareHostedResearch,
+  OpenAiSignalCareResearchClient,
+  reclassifySignalCareProspectResearch,
+  signalCareWebResearchEnabled,
+  type SignalCareResearchClient
+} from "@/server/agent/signalcare-research-service";
 import { createOwnerDecision, transitionAgentWorkItem } from "@/server/agent/work-service";
 
 const reviewIntervalMs = 15 * 60 * 1000;
@@ -27,6 +35,7 @@ export type OrchestrationServices = {
   projectManager: ProjectManagerAgent;
   worker: AgentWorker;
   verifier: AgentVerifier;
+  signalCareResearchClient?: SignalCareResearchClient;
 };
 
 export type AgentCycleProjectResult = {
@@ -60,15 +69,16 @@ async function releaseProjectClaim(
   configId: string,
   leaseToken: string,
   now: Date,
-  data: Partial<Pick<AgentProjectConfig, "health" | "currentBottleneck">>,
+  data: Partial<Pick<AgentProjectConfig, "health" | "currentBottleneck" | "nextAgentReviewAt">>,
   db: PrismaClient
 ) {
+  const { nextAgentReviewAt, ...configData } = data;
   await db.agentProjectConfig.updateMany({
     where: { id: configId, leaseToken },
     data: {
-      ...data,
+      ...configData,
       lastAgentReviewAt: now,
-      nextAgentReviewAt: addMs(now, reviewIntervalMs),
+      nextAgentReviewAt: nextAgentReviewAt ?? addMs(now, reviewIntervalMs),
       leaseToken: null,
       leaseExpiresAt: null
     }
@@ -111,6 +121,8 @@ async function processClaimedProject(
     },
     db
   );
+
+  await reclassifySignalCareProspectResearch(config, db);
 
   const activeCount = await db.agentWorkItem.count({
     where: { projectId: config.projectId, userId: config.userId, state: { in: activeAgentWorkStates } }
@@ -167,6 +179,10 @@ async function processClaimedProject(
     return { ...baseResult, outcome: plan.disposition === "WAIT" ? "WAITING" : "PARKED", detail: "No make-work item was created." };
   }
 
+  const plannedCapability = plan.requiredCapability ??
+    (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK"
+      ? "CODEX_IMPLEMENTATION"
+      : "REPOSITORY_READ");
   const workKey = eligibleExisting?.idempotencyKey ?? `pm:${config.projectId}:${dueAnchor.toISOString()}`;
   const workItem =
     eligibleExisting ??
@@ -183,14 +199,17 @@ async function processClaimedProject(
         acceptanceCriteria: plan.acceptanceCriteria,
         agentRole: plan.agentRole,
         actionCategory: plan.actionCategory,
-        requiredCapability: plan.requiredCapability ?? (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK" ? "CODEX_IMPLEMENTATION" : "REPOSITORY_READ"),
+        requiredCapability: plannedCapability,
         sandboxPolicy: plan.sandboxPolicy ?? (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK" ? "WORKSPACE_WRITE" : "READ_ONLY"),
         networkPolicy: plan.networkPolicy ?? "OFF",
         operationalContext: plan.operationalContext,
         dependsOnWorkItemId: plan.dependsOnWorkItemId,
         priority: plan.priority,
         maxAttempts: plan.maxAttempts,
-        workspaceIdentifier: config.workspaceIdentifier
+        workspaceIdentifier:
+          executorForCapability(plannedCapability) === "LOCAL_RUNNER"
+            ? config.workspaceIdentifier
+            : null
       }
     }));
 
@@ -214,11 +233,49 @@ async function processClaimedProject(
   }
 
   if (config.operatingMode === "LIVE_INTERNAL" && (workItem.state === "QUEUED" || workItem.state === "RETRY")) {
+    const executor = executorForCapability(workItem.requiredCapability);
+    if (executor === "CONTROL_PLANE") {
+      if (!signalCareWebResearchEnabled()) {
+        await db.agentWorkItem.update({ where: { id: workItem.id }, data: {
+          blocker: "Hosted SignalCare web research is disabled; work is safely waiting for an eligible executor."
+        } });
+        await recordAgentEvent({ userId: config.userId, projectId: config.projectId, workItemId: workItem.id,
+          idempotencyKey: `hosted-research-disabled:${workItem.id}:${workItem.attemptCount + 1}`, type: "WORK_WAITING_FOR_EXECUTOR",
+          summary: "SignalCare prospect discovery is waiting because its hosted research kill switch is off." }, db);
+        await releaseProjectClaim(config.id, leaseToken, now, { health: "NEEDS_ATTENTION", currentBottleneck: plan.plannedBottleneck }, db);
+        return { ...baseResult, outcome: "WAITING", workItemId: workItem.id, detail: "Hosted SignalCare research is disabled; no local runner claim is permitted." };
+      }
+      const research = await executeSignalCareHostedResearch({ userId: config.userId, projectId: config.projectId,
+        workItemId: workItem.id, objective: workItem.objective },
+        services.signalCareResearchClient ?? new OpenAiSignalCareResearchClient(), db, now);
+      if (research.outcome === "COMPLETED") {
+        await releaseProjectClaim(config.id, leaseToken, now, { health: "ON_TRACK", currentBottleneck: plan.plannedBottleneck, nextAgentReviewAt: now }, db);
+        return { ...baseResult, outcome: "COMPLETED", workItemId: workItem.id,
+          detail: research.skippedBecauseProspectsExist ? "Existing prospects suppressed repeated discovery; PM is due to reevaluate." : `${research.created.length} evidence-backed prospect(s) entered the pipeline; PM is due to reevaluate.` };
+      }
+      await releaseProjectClaim(config.id, leaseToken, now, {
+        health: research.outcome === "FAILED" ? "BLOCKED" : "NEEDS_ATTENTION",
+        currentBottleneck: plan.plannedBottleneck,
+        nextAgentReviewAt: research.outcome === "RETRY" ? addMs(now, retryDelayMs) : addMs(now, reviewIntervalMs)
+      }, db);
+      return { ...baseResult, outcome: research.outcome, workItemId: workItem.id,
+        detail: research.error ?? "Hosted SignalCare research did not complete." };
+    }
+    if (executor === "LOCAL_RUNNER") {
+      await recordAgentEvent({ userId: config.userId, projectId: config.projectId, workItemId: workItem.id,
+        idempotencyKey: `runner-queued:${workItem.id}:${workItem.attemptCount + 1}`, type: "WORK_QUEUED_FOR_RUNNER",
+        summary: `${workItem.title} is queued for a registered outbound local runner.` }, db);
+      await releaseProjectClaim(config.id, leaseToken, now, { health: "ON_TRACK", currentBottleneck: plan.plannedBottleneck }, db);
+      return { ...baseResult, outcome: "QUEUED_FOR_RUNNER", workItemId: workItem.id, detail: "Awaiting outbound runner claim." };
+    }
+    await db.agentWorkItem.update({ where: { id: workItem.id }, data: {
+      blocker: `No registered executor supports ${workItem.requiredCapability}; work remains queued.`
+    } });
     await recordAgentEvent({ userId: config.userId, projectId: config.projectId, workItemId: workItem.id,
-      idempotencyKey: `runner-queued:${workItem.id}:${workItem.attemptCount + 1}`, type: "WORK_QUEUED_FOR_RUNNER",
-      summary: `${workItem.title} is queued for a registered outbound local runner.` }, db);
-    await releaseProjectClaim(config.id, leaseToken, now, { health: "ON_TRACK", currentBottleneck: plan.plannedBottleneck }, db);
-    return { ...baseResult, outcome: "QUEUED_FOR_RUNNER", workItemId: workItem.id, detail: "Awaiting outbound runner claim." };
+      idempotencyKey: `executor-unavailable:${workItem.id}:${workItem.attemptCount + 1}`, type: "WORK_WAITING_FOR_EXECUTOR",
+      summary: `No registered executor supports ${workItem.requiredCapability}; no dispatch occurred.` }, db);
+    await releaseProjectClaim(config.id, leaseToken, now, { health: "NEEDS_ATTENTION", currentBottleneck: plan.plannedBottleneck }, db);
+    return { ...baseResult, outcome: "WAITING", workItemId: workItem.id, detail: "No eligible executor is registered for this capability." };
   }
 
   let current: AgentWorkItem = workItem;

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { agentActionCategories } from "@/lib/agent-policy";
-import { phase2AllowedCapabilities } from "@/lib/agent-capabilities";
+import { phase2AllowedCapabilities, SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
 import type { AgentVerifier, ChiefPortfolioAgent, PortfolioProjectSnapshot, ProjectManagerAgent, ProjectManagerContext } from "@/server/agent/contracts";
 
 type StructuredModelClient = { generate<T>(input: { model: string; name: string; instructions: string; payload: unknown; schema: Record<string, unknown>; validator: z.ZodType<T> }): Promise<T> };
@@ -74,11 +74,43 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
   constructor(private client: StructuredModelClient = new OpenAiStructuredModelClient(), private model = process.env.AGENT_PM_MODEL ?? "gpt-5-mini") {}
   async chooseNextWork(context: ProjectManagerContext) {
     const result = await this.client.generate({ model: this.model, name: "pm_project_review", validator: pmOutputSchema, schema: pmJsonSchema,
-      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. CCHCS is PHI-free; never propose sensitive data access. Owner approval is authority, never proof of execution. Return operational summaries only.`, payload: context });
+      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. SIGNALCARE_PUBLIC_WEB_RESEARCH is hosted SignalCare-only public research: use it only when the SignalCare pipeline evidence shows no useful prospects, never for CCHCS or repository work. If useful prospects exist, work the highest-value prospect or WAIT instead of repeating discovery. Public research cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. CCHCS is PHI-free; never propose sensitive data access. Owner approval is authority, never proof of execution. Return operational summaries only.`, payload: context });
+    if (
+      result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
+      context.profile !== "SIGNALCARE_GM"
+    ) {
+      throw new Error("Hosted public web research is not eligible for this project profile.");
+    }
+    const signalCareSnapshot = context.toolEvidence?.find(
+      (evidence) => evidence.toolId === "signalcare.pipeline.snapshot"
+    )?.output as { prospects?: unknown[] } | undefined;
+    if (
+      result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
+      (signalCareSnapshot?.prospects?.length ?? 0) > 0
+    ) {
+      return {
+        disposition: "WAIT" as const,
+        title: "Use existing SignalCare prospects",
+        objective: "Avoid unnecessary repeated prospect discovery.",
+        expectedValue: "Preserve attention for current acquisition opportunities.",
+        acceptanceCriteria: "Existing prospect evidence remains available to the next PM review.",
+        agentRole: "SIGNALCARE_GM",
+        actionCategory: "RESEARCH_READ_ONLY" as const,
+        priority: "MEDIUM" as const,
+        maxAttempts: 1,
+        plannedBottleneck: result.currentBottleneck,
+        requiredCapability: "REPOSITORY_READ",
+        sandboxPolicy: "READ_ONLY" as const,
+        networkPolicy: "OFF" as const,
+        operationalContext: "Repeated discovery deterministically suppressed because prospects already exist."
+      };
+    }
     return { disposition: result.disposition, title: result.title, objective: result.objective, expectedValue: result.expectedValue,
       acceptanceCriteria: result.acceptanceCriteria, agentRole: result.agentRole, actionCategory: result.actionCategory, priority: result.priority,
       maxAttempts: result.maxAttempts, plannedBottleneck: result.currentBottleneck, requiredCapability: result.requiredCapability,
-      sandboxPolicy: result.sandboxPolicy, networkPolicy: result.networkPolicy, operationalContext: result.operationalContext };
+      sandboxPolicy: result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY ? "READ_ONLY" : result.sandboxPolicy,
+      networkPolicy: result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY ? "ALLOWLIST" : result.networkPolicy,
+      operationalContext: result.operationalContext };
   }
 }
 

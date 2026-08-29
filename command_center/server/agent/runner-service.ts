@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { AgentRunner, PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { assertPhase2Capability } from "@/lib/agent-capabilities";
+import { assertLocalRunnerCapability } from "@/lib/agent-capabilities";
 import { evaluateAgentPolicy } from "@/lib/agent-policy";
 import { prisma } from "@/lib/prisma";
 import { recordAgentEvent } from "@/server/agent/event-service";
+import { reclassifySignalCareProspectResearch } from "@/server/agent/signalcare-research-service";
 import { createOwnerDecision } from "@/server/agent/work-service";
 
 const leaseMs = 5 * 60 * 1000;
@@ -23,7 +24,13 @@ export type RunnerResult = z.infer<typeof runnerResultSchema>;
 
 export async function claimRunnerWork(runner: AgentRunner, input: { capabilities: string[]; version: string }, db: PrismaClient = prisma, now = new Date()) {
   if (process.env.FEATURE_RUNNER_EXECUTION !== "true") return null;
-  const capabilities = input.capabilities.map(assertPhase2Capability);
+  const capabilities = input.capabilities.map(assertLocalRunnerCapability);
+  const signalCareConfigs = await db.agentProjectConfig.findMany({
+    where: { userId: runner.userId, profile: "SIGNALCARE_GM" }
+  });
+  for (const config of signalCareConfigs) {
+    await reclassifySignalCareProspectResearch(config, db);
+  }
   await db.agentWorkItem.updateMany({ where: { userId: runner.userId, state: { in: ["PLANNING", "RUNNING"] }, leaseExpiresAt: { lt: now } },
     data: { state: "RETRY", claimToken: null, leaseExpiresAt: null, heartbeatAt: null, nextEligibleRunAt: now, blocker: "Expired runner lease recovered; retry is eligible." } });
   await db.agentRunner.update({ where: { id: runner.id }, data: { status: "ONLINE", version: input.version, capabilities: JSON.stringify(capabilities), lastHeartbeatAt: now } });
@@ -37,7 +44,7 @@ export async function claimRunnerWork(runner: AgentRunner, input: { capabilities
   });
   for (const item of candidates) {
     if (!item.workspaceIdentifier) continue;
-    assertPhase2Capability(item.requiredCapability);
+    assertLocalRunnerCapability(item.requiredCapability);
     const policy = evaluateAgentPolicy({ category: item.actionCategory as never, projectProfile: item.project.agentConfig?.profile });
     if (policy !== "ALLOW") continue;
     const claimToken = randomUUID();

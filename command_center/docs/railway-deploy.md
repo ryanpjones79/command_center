@@ -29,6 +29,8 @@ For Agent HQ Phase 2A, keep `FEATURE_AGENT_MODELS`, `FEATURE_RUNNER_EXECUTION`, 
 
 Operational rollback is to disable the three feature flags and pause project autonomy. Preserve the durable work, authorization, execution, and audit history.
 
+SignalCare hosted prospect discovery is a separate, default-off control-plane capability. Configure `AGENT_SIGNALCARE_RESEARCH_MODEL=gpt-4.1-mini` and `AGENT_SIGNALCARE_RESEARCH_MAX_PROSPECTS=5`, but keep `FEATURE_SIGNALCARE_WEB_RESEARCH=false` during deployment. It uses the existing Railway `OPENAI_API_KEY`; no web credential or network access is added to the Windows runner.
+
 Set these at the project or production-environment level so both `web` and `cron` can read them:
 
 ```env
@@ -50,6 +52,9 @@ GOOGLE_DAILY_BRIEF_EMAIL_TO=
 FEATURE_GOOGLE_CALENDAR=true
 FEATURE_GMAIL_TRIAGE=true
 FEATURE_DAILY_BRIEF_AUTOSEND=true
+FEATURE_SIGNALCARE_WEB_RESEARCH=false
+AGENT_SIGNALCARE_RESEARCH_MODEL=gpt-4.1-mini
+AGENT_SIGNALCARE_RESEARCH_MAX_PROSPECTS=5
 DAILY_BRIEF_TIMEZONE=America/Los_Angeles
 DAILY_BRIEF_SEND_HOUR=6
 DAILY_BRIEF_SEND_MINUTE=30
@@ -92,6 +97,16 @@ Why every 15 minutes:
 This keeps `6:30 AM Pacific` stable through daylight saving changes without hard-coding UTC offsets.
 
 The same cron process also calls `/api/cron/agents`. Agent HQ performs its own due-project checks, atomic leases, WIP enforcement, and idempotent work creation. Set `FEATURE_AGENT_ORCHESTRATION=false` for an operational kill switch without deleting durable agent history.
+
+To activate the first SignalCare discovery cycle after the control plane and ordinary model PM are healthy:
+
+1. Keep external communication, Gmail, purchases, deployment, and destructive capabilities disabled.
+2. Confirm SignalCare alone is `LIVE_INTERNAL` and its project autonomy is enabled.
+3. Set `FEATURE_AGENT_MODELS=true` and verify a normal PM review.
+4. Set `FEATURE_SIGNALCARE_WEB_RESEARCH=true`.
+5. Invoke or wait for `/api/cron/agents`; the existing queued shortlist is reclassified automatically.
+6. Verify `HOSTED_WEB_RESEARCH` and deterministic QA runs, new SignalCare `QueueItem`/`PipelineAction` records, and an immediate follow-up PM review.
+7. If results are unexpected, set `FEATURE_SIGNALCARE_WEB_RESEARCH=false`; queued work remains safe and the Windows runner cannot claim it.
 
 ## 5. First deployment check
 

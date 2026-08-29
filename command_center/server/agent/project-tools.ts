@@ -10,7 +10,9 @@ type ToolDefinition = { id: string; profiles: string[]; classification: "READ" |
   execute: (context: ToolContext, input: unknown, db: PrismaClient) => Promise<unknown> };
 
 const emptyInput = z.object({}).strict();
-const signalOutput = z.object({ prospects: z.array(z.object({ name: z.string(), stage: z.string(), evidence: z.string().nullable(), nextAction: z.string().nullable(), stale: z.boolean() })), openOwnerDecisions: z.number() });
+const signalOutput = z.object({ prospects: z.array(z.object({ name: z.string(), stage: z.string(), evidence: z.string().nullable(),
+  domain: z.string().nullable(), verifiedFacts: z.array(z.object({ fact: z.string(), sourceUrls: z.array(z.string().url()) })),
+  sourceUrls: z.array(z.string().url()), evidenceConfidence: z.string().nullable(), nextAction: z.string().nullable(), stale: z.boolean() })), openOwnerDecisions: z.number() });
 const rykasOutput = z.object({ backlog: z.number(), toShip: z.string().nullable(), listedToday: z.number(), sourcingAllowed: z.boolean(), blockers: z.array(z.string()) });
 const cchcsOutput = z.object({ commitments: z.array(z.object({ title: z.string(), status: z.string(), dueAt: z.string().nullable(), waitingOn: z.string().nullable(), blocked: z.boolean() })), overdueCount: z.number(), waitingCount: z.number() });
 
@@ -20,7 +22,14 @@ export const projectToolRegistry: Record<string, ToolDefinition> = {
       db.pipelineAction.findMany({ where: { userId: context.userId }, orderBy: { date: "desc" }, take: 50 }),
       db.queueItem.findMany({ where: { userId: context.userId, lane: { in: ["signalcare", "pipeline"] }, status: { not: "done" } }, orderBy: { createdAt: "asc" }, take: 50 }),
       db.agentDecision.count({ where: { userId: context.userId, projectId: context.projectId, status: "PENDING" } })]);
-      const now = Date.now(); return { prospects: queue.map((item) => { const evidence = actions.find((a) => a.withWhom?.toLowerCase() === item.recipient.toLowerCase()); return { name: item.recipient, stage: item.status, evidence: evidence?.note ?? null, nextAction: item.nextAction || null, stale: now - item.createdAt.getTime() > 14 * 86400000 }; }), openOwnerDecisions: decisions }; } },
+      const now = Date.now(); return { prospects: queue.map((item) => { const evidence = actions.find((a) => a.withWhom?.toLowerCase() === item.recipient.toLowerCase());
+        let provenance: Record<string, unknown> = {}; try { provenance = evidence?.note ? JSON.parse(evidence.note) as Record<string, unknown> : {}; } catch { provenance = {}; }
+        const verifiedFacts = Array.isArray(provenance.verifiedFacts) ? provenance.verifiedFacts : [];
+        const sourceUrls = Array.isArray(provenance.sourceUrls) ? provenance.sourceUrls : [];
+        return { name: item.recipient, stage: item.status, evidence: evidence?.note ?? null,
+          domain: typeof provenance.domain === "string" ? provenance.domain : null,
+          verifiedFacts, sourceUrls, evidenceConfidence: typeof provenance.evidenceConfidence === "string" ? provenance.evidenceConfidence : null,
+          nextAction: item.nextAction || null, stale: now - item.createdAt.getTime() > 14 * 86400000 }; }), openOwnerDecisions: decisions }; } },
   "rykas.operations.snapshot": { id: "rykas.operations.snapshot", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: emptyInput, output: rykasOutput,
     async execute(context, _input, db) { const [day, tasks] = await Promise.all([db.rykasDay.findFirst({ where: { userId: context.userId }, orderBy: { date: "desc" } }), db.executionTask.findMany({ where: { userId: context.userId, domain: { slug: "rykas" }, status: { notIn: ["DONE", "DROPPED"] } }, take: 50 })]); const backlog = day?.backlogAfter ?? 0; return { backlog, toShip: day?.toShip ?? null, listedToday: day?.listedCount ?? 0, sourcingAllowed: backlog < 10, blockers: tasks.filter((t) => t.isBlocked || t.waitingOn).map((t) => `${t.title}${t.waitingOn ? ` — waiting on ${t.waitingOn}` : ""}`) }; } },
   "cchcs.commitments.snapshot": { id: "cchcs.commitments.snapshot", profiles: ["CCHCS_PM"], classification: "READ", sensitivity: "CCHCS_PHI_FREE", policyCategory: "CCHCS_PROJECT_MANAGEMENT", timeoutMs: 5000, input: emptyInput, output: cchcsOutput,

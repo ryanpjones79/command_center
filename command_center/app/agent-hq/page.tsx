@@ -16,11 +16,14 @@ export const metadata: Metadata = { title: "Agent HQ" };
 
 function formatDate(value: Date | null) {
   if (!value) return "Not yet";
+
   return value.toLocaleString("en-US", {
+    timeZone: process.env.DAILY_BRIEF_TIMEZONE || "America/Los_Angeles",
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
+    timeZoneName: "short"
   });
 }
 
