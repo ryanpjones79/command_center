@@ -12,6 +12,7 @@ import {
   vi
 } from "vitest";
 import { SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
+import { markAgentWorkIntegrated } from "@/server/agent/integration-service";
 import type { OrchestrationServices } from "@/server/agent/orchestration-service";
 import { runAgentOrchestrationCycle } from "@/server/agent/orchestration-service";
 import { executeProjectTool } from "@/server/agent/project-tools";
@@ -88,6 +89,43 @@ function fakeResearchClient(
     searchSummary: "Bounded public research completed with official sources."
   });
   return { discover };
+}
+
+function waitingServices(
+  researchClient: SignalCareResearchClient = fakeResearchClient([candidate(1)])
+) {
+  const chooseNextWork = vi.fn(async () => ({
+    disposition: "WAIT" as const,
+    title: "Wait instead of inventing work",
+    objective: "Do not create make-work.",
+    expectedValue: "Preserve focus.",
+    acceptanceCriteria: "No new work is created.",
+    agentRole: "SIGNALCARE_GM",
+    actionCategory: "RESEARCH_READ_ONLY" as const,
+    priority: "MEDIUM" as const,
+    maxAttempts: 1,
+    plannedBottleneck: "No valuable new action exists.",
+    requiredCapability: "REPOSITORY_READ",
+    sandboxPolicy: "READ_ONLY" as const,
+    networkPolicy: "OFF" as const
+  }));
+  const services: OrchestrationServices = {
+    projectManager: { chooseNextWork },
+    worker: {
+      async execute() {
+        throw new Error(
+          "Persisted LIVE_INTERNAL work must not use the mock worker."
+        );
+      }
+    },
+    verifier: {
+      async verify() {
+        throw new Error("Persisted LIVE_INTERNAL work must not use mock QA.");
+      }
+    },
+    signalCareResearchClient: researchClient
+  };
+  return { services, chooseNextWork };
 }
 
 async function createWork(
@@ -469,6 +507,170 @@ describe("SignalCare hosted public-web research", () => {
     expect(updated.requiredCapability).toBe(SIGNALCARE_WEB_RESEARCH_CAPABILITY);
     expect(updated.workspaceIdentifier).toBeNull();
     expect(updated.networkPolicy).toBe("ALLOWLIST");
+  });
+
+  it("executes existing hosted work before a PM WAIT can strand or duplicate it", async () => {
+    const now = new Date("2026-08-29T12:00:00.000Z");
+    const existing = await createWork(
+      "existing-hosted-order",
+      signalProjectId,
+      {
+        requiredCapability: "REPOSITORY_READ",
+        workspaceIdentifier: "signalcare-repo"
+      }
+    );
+    const client = fakeResearchClient([candidate(1)]);
+    const { services, chooseNextWork } = waitingServices(client);
+
+    const cycle = await runAgentOrchestrationCycle(now, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+
+    expect(cycle.projects[0]?.outcome).toBe("COMPLETED");
+    expect(cycle.projects[0]?.workItemId).toBe(existing.id);
+    expect(chooseNextWork).not.toHaveBeenCalled();
+    expect(client.discover).toHaveBeenCalledOnce();
+    expect(await db.agentWorkItem.count({ where: { userId } })).toBe(1);
+    const completed = await db.agentWorkItem.findUniqueOrThrow({
+      where: { id: existing.id }
+    });
+    expect(completed.requiredCapability).toBe(
+      SIGNALCARE_WEB_RESEARCH_CAPABILITY
+    );
+    expect(completed.state).toBe("DONE");
+    const config = await db.agentProjectConfig.findUniqueOrThrow({
+      where: { projectId: signalProjectId }
+    });
+    expect(config.nextAgentReviewAt?.getTime()).toBe(now.getTime());
+  });
+
+  it("leaves existing hosted work queued when hosted research is disabled", async () => {
+    process.env.FEATURE_SIGNALCARE_WEB_RESEARCH = "false";
+    const existing = await createWork("existing-hosted-disabled");
+    const client = fakeResearchClient([candidate(1)]);
+    const { services, chooseNextWork } = waitingServices(client);
+
+    const cycle = await runAgentOrchestrationCycle(
+      new Date("2026-08-29T12:00:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+
+    expect(cycle.projects[0]?.outcome).toBe("WAITING");
+    expect(chooseNextWork).not.toHaveBeenCalled();
+    expect(client.discover).not.toHaveBeenCalled();
+    const waiting = await db.agentWorkItem.findUniqueOrThrow({
+      where: { id: existing.id }
+    });
+    expect(waiting.state).toBe("QUEUED");
+    expect(waiting.blocker).toContain("safely waiting");
+  });
+
+  it("queues existing local repository work before a PM WAIT can strand it", async () => {
+    const existing = await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "existing-local-order",
+        title: "Implement existing bounded repository work",
+        objective: "Use the persisted repository objective.",
+        expectedValue: "Advance an existing internal blocker.",
+        acceptanceCriteria: "Persisted tests pass.",
+        agentRole: "CODE_WORKER",
+        actionCategory: "REVERSIBLE_REPOSITORY_WORK",
+        requiredCapability: "CODEX_IMPLEMENTATION",
+        sandboxPolicy: "WORKSPACE_WRITE",
+        networkPolicy: "OFF",
+        workspaceIdentifier: "signalcare-repo",
+        priority: "HIGH"
+      }
+    });
+    const { services, chooseNextWork } = waitingServices();
+
+    const cycle = await runAgentOrchestrationCycle(
+      new Date("2026-08-29T12:00:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+
+    expect(cycle.projects[0]?.outcome).toBe("QUEUED_FOR_RUNNER");
+    expect(cycle.projects[0]?.workItemId).toBe(existing.id);
+    expect(chooseNextWork).not.toHaveBeenCalled();
+    expect(await db.agentWorkItem.count({ where: { userId } })).toBe(1);
+  });
+
+  it("keeps dependent persisted work blocked until integration releases it", async () => {
+    const base = await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "orchestration-dependency-base",
+        title: "Verified unintegrated base",
+        objective: "Provide a canonical dependency.",
+        expectedValue: "Enable safe downstream work.",
+        acceptanceCriteria: "Integration is explicit.",
+        agentRole: "CODE_WORKER",
+        actionCategory: "REVERSIBLE_REPOSITORY_WORK",
+        requiredCapability: "CODEX_IMPLEMENTATION",
+        workspaceIdentifier: "signalcare-repo",
+        state: "READY_FOR_REVIEW",
+        integrationStatus: "PENDING_REVIEW"
+      }
+    });
+    const dependent = await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "orchestration-dependent",
+        title: "Dependent repository work",
+        objective: "Use only integrated canonical work.",
+        expectedValue: "Advance safely after integration.",
+        acceptanceCriteria: "Dependency is integrated first.",
+        agentRole: "CODE_WORKER",
+        actionCategory: "REVERSIBLE_REPOSITORY_WORK",
+        requiredCapability: "CODEX_IMPLEMENTATION",
+        workspaceIdentifier: "signalcare-repo",
+        dependsOnWorkItemId: base.id
+      }
+    });
+    const { services, chooseNextWork } = waitingServices();
+    const firstAt = new Date("2026-08-29T12:00:00.000Z");
+    const blocked = await runAgentOrchestrationCycle(firstAt, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+    expect(blocked.projects[0]?.outcome).toBe("WAITING");
+    expect(chooseNextWork).toHaveBeenCalledOnce();
+    expect(
+      (
+        await db.agentWorkItem.findUniqueOrThrow({
+          where: { id: dependent.id }
+        })
+      ).state
+    ).toBe("QUEUED");
+
+    await markAgentWorkIntegrated(userId, base.id, "canonical-sha", db);
+    await db.agentProjectConfig.update({
+      where: { projectId: signalProjectId },
+      data: {
+        nextAgentReviewAt: firstAt,
+        leaseToken: null,
+        leaseExpiresAt: null
+      }
+    });
+    chooseNextWork.mockClear();
+    const released = await runAgentOrchestrationCycle(firstAt, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+    expect(released.projects[0]?.outcome).toBe("QUEUED_FOR_RUNNER");
+    expect(released.projects[0]?.workItemId).toBe(dependent.id);
+    expect(chooseNextWork).not.toHaveBeenCalled();
   });
 
   it("makes discovered prospects visible to the existing pipeline snapshot", async () => {

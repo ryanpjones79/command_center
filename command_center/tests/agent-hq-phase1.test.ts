@@ -190,7 +190,7 @@ describe("Agent HQ durable orchestration", () => {
         expectedValue: "Test WIP",
         acceptanceCriteria: "Remain bounded",
         agentRole: "TEST",
-        state: "QUEUED" as const
+        state: "PLANNING" as const
       }))
     });
     await db.agentProjectConfig.update({

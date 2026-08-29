@@ -65,6 +65,30 @@ function addMs(value: Date, milliseconds: number) {
   return new Date(value.getTime() + milliseconds);
 }
 
+function planFromPersistedWork(
+  workItem: AgentWorkItem,
+  currentBottleneck: string | null
+): AgentWorkPlan {
+  return {
+    disposition: "CREATE_WORK",
+    title: workItem.title,
+    objective: workItem.objective,
+    expectedValue: workItem.expectedValue,
+    acceptanceCriteria: workItem.acceptanceCriteria,
+    agentRole: workItem.agentRole,
+    actionCategory: workItem.actionCategory as AgentWorkPlan["actionCategory"],
+    priority: workItem.priority,
+    maxAttempts: workItem.maxAttempts,
+    plannedBottleneck:
+      currentBottleneck ?? "Resume existing eligible queued work.",
+    requiredCapability: workItem.requiredCapability,
+    sandboxPolicy: workItem.sandboxPolicy as AgentWorkPlan["sandboxPolicy"],
+    networkPolicy: workItem.networkPolicy as AgentWorkPlan["networkPolicy"],
+    operationalContext: workItem.operationalContext ?? undefined,
+    dependsOnWorkItemId: workItem.dependsOnWorkItemId ?? undefined
+  };
+}
+
 async function releaseProjectClaim(
   configId: string,
   leaseToken: string,
@@ -124,10 +148,28 @@ async function processClaimedProject(
 
   await reclassifySignalCareProspectResearch(config, db);
 
+  const eligibleExisting = await db.agentWorkItem.findFirst({
+    where: {
+      userId: config.userId,
+      projectId: config.projectId,
+      state: { in: ["QUEUED", "RETRY"] },
+      AND: [
+        { OR: [{ nextEligibleRunAt: null }, { nextEligibleRunAt: { lte: now } }] },
+        {
+          OR: [
+            { dependsOnWorkItemId: null },
+            { dependsOnWorkItem: { is: { integrationStatus: "INTEGRATED" } } }
+          ]
+        }
+      ]
+    },
+    orderBy: [{ priority: "desc" }, { createdAt: "asc" }]
+  });
+
   const activeCount = await db.agentWorkItem.count({
     where: { projectId: config.projectId, userId: config.userId, state: { in: activeAgentWorkStates } }
   });
-  if (activeCount >= config.maxConcurrentWorkItems) {
+  if (!eligibleExisting && activeCount >= config.maxConcurrentWorkItems) {
     await recordAgentEvent(
       {
         userId: config.userId,
@@ -142,51 +184,45 @@ async function processClaimedProject(
     return { ...baseResult, outcome: "WIP_LIMIT", detail: "Project WIP limit enforced." };
   }
 
-  const eligibleExisting = await db.agentWorkItem.findFirst({
-    where: {
-      userId: config.userId,
+  let plan: AgentWorkPlan;
+  let workItem: AgentWorkItem;
+  if (eligibleExisting) {
+    workItem = eligibleExisting;
+    plan = planFromPersistedWork(workItem, config.currentBottleneck);
+  } else {
+    const toolEvidence = await collectProjectEvidence({ userId: config.userId, projectId: config.projectId, profile: config.profile }, defaultToolsForProfile(config.profile), db);
+    plan = await services.projectManager.chooseNextWork({
+      profile: config.profile,
       projectId: config.projectId,
-      state: { in: ["QUEUED", "RETRY"] },
-      OR: [{ nextEligibleRunAt: null }, { nextEligibleRunAt: { lte: now } }]
-    },
-    orderBy: [{ priority: "desc" }, { createdAt: "asc" }]
-  });
+      projectName: config.project.name,
+      objective: config.objective,
+      primaryKpi: config.primaryKpi,
+      currentBottleneck: config.currentBottleneck,
+      instructions: config.projectManagerInstructions,
+      autonomyPolicy: config.autonomyPolicy,
+      escalationPolicy: config.escalationPolicy,
+      operatingMode: config.operatingMode,
+      toolEvidence,
+      existingWorkTitles: await db.agentWorkItem
+        .findMany({ where: { projectId: config.projectId }, select: { title: true }, take: 20 })
+        .then((items) => items.map((item) => item.title))
+    });
 
-  const toolEvidence = await collectProjectEvidence({ userId: config.userId, projectId: config.projectId, profile: config.profile }, defaultToolsForProfile(config.profile), db);
-  const plan = await services.projectManager.chooseNextWork({
-    profile: config.profile,
-    projectId: config.projectId,
-    projectName: config.project.name,
-    objective: config.objective,
-    primaryKpi: config.primaryKpi,
-    currentBottleneck: config.currentBottleneck,
-    instructions: config.projectManagerInstructions,
-    autonomyPolicy: config.autonomyPolicy,
-    escalationPolicy: config.escalationPolicy,
-    operatingMode: config.operatingMode,
-    toolEvidence,
-    existingWorkTitles: await db.agentWorkItem
-      .findMany({ where: { projectId: config.projectId }, select: { title: true }, take: 20 })
-      .then((items) => items.map((item) => item.title))
-  });
+    if (plan.disposition === "WAIT" || plan.disposition === "PARK") {
+      await recordAgentEvent({ userId: config.userId, projectId: config.projectId,
+        idempotencyKey: `pm-${plan.disposition.toLowerCase()}:${config.projectId}:${dueAnchor.toISOString()}`,
+        type: plan.disposition === "WAIT" ? "WORK_WAITING" : "WORK_PARKED",
+        summary: plan.disposition === "WAIT" ? "PM found no valuable bounded action and chose to wait." : "PM deliberately parked low-value work." }, db);
+      await releaseProjectClaim(config.id, leaseToken, now, { health: plan.disposition === "WAIT" ? "ON_TRACK" : "NEEDS_ATTENTION", currentBottleneck: plan.plannedBottleneck }, db);
+      return { ...baseResult, outcome: plan.disposition === "WAIT" ? "WAITING" : "PARKED", detail: "No make-work item was created." };
+    }
 
-  if (plan.disposition === "WAIT" || plan.disposition === "PARK") {
-    await recordAgentEvent({ userId: config.userId, projectId: config.projectId,
-      idempotencyKey: `pm-${plan.disposition.toLowerCase()}:${config.projectId}:${dueAnchor.toISOString()}`,
-      type: plan.disposition === "WAIT" ? "WORK_WAITING" : "WORK_PARKED",
-      summary: plan.disposition === "WAIT" ? "PM found no valuable bounded action and chose to wait." : "PM deliberately parked low-value work." }, db);
-    await releaseProjectClaim(config.id, leaseToken, now, { health: plan.disposition === "WAIT" ? "ON_TRACK" : "NEEDS_ATTENTION", currentBottleneck: plan.plannedBottleneck }, db);
-    return { ...baseResult, outcome: plan.disposition === "WAIT" ? "WAITING" : "PARKED", detail: "No make-work item was created." };
-  }
-
-  const plannedCapability = plan.requiredCapability ??
-    (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK"
-      ? "CODEX_IMPLEMENTATION"
-      : "REPOSITORY_READ");
-  const workKey = eligibleExisting?.idempotencyKey ?? `pm:${config.projectId}:${dueAnchor.toISOString()}`;
-  const workItem =
-    eligibleExisting ??
-    (await db.agentWorkItem.upsert({
+    const plannedCapability = plan.requiredCapability ??
+      (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK"
+        ? "CODEX_IMPLEMENTATION"
+        : "REPOSITORY_READ");
+    const workKey = `pm:${config.projectId}:${dueAnchor.toISOString()}`;
+    workItem = await db.agentWorkItem.upsert({
       where: { projectId_idempotencyKey: { projectId: config.projectId, idempotencyKey: workKey } },
       update: {},
       create: {
@@ -211,15 +247,16 @@ async function processClaimedProject(
             ? config.workspaceIdentifier
             : null
       }
-    }));
+    });
 
-  if (process.env.FEATURE_AGENT_MODELS === "true" && !eligibleExisting) {
-    await db.agentRun.upsert({ where: { idempotencyKey: `pm-model:${workItem.id}` }, update: {}, create: {
-      userId: config.userId, projectId: config.projectId, workItemId: workItem.id, idempotencyKey: `pm-model:${workItem.id}`,
-      role: "PROJECT_MANAGER", runType: "MODEL_PM", status: "SUCCEEDED", providerIdentifier: "openai",
-      modelIdentifier: process.env.AGENT_PM_MODEL ?? "gpt-5-mini", operationalResultSummary: `PM selected ${plan.disposition ?? "CREATE_WORK"}: ${plan.title}`,
-      structuredOutcome: JSON.stringify(plan), completedAt: now
-    } });
+    if (process.env.FEATURE_AGENT_MODELS === "true") {
+      await db.agentRun.upsert({ where: { idempotencyKey: `pm-model:${workItem.id}` }, update: {}, create: {
+        userId: config.userId, projectId: config.projectId, workItemId: workItem.id, idempotencyKey: `pm-model:${workItem.id}`,
+        role: "PROJECT_MANAGER", runType: "MODEL_PM", status: "SUCCEEDED", providerIdentifier: "openai",
+        modelIdentifier: process.env.AGENT_PM_MODEL ?? "gpt-5-mini", operationalResultSummary: `PM selected ${plan.disposition ?? "CREATE_WORK"}: ${plan.title}`,
+        structuredOutcome: JSON.stringify(plan), completedAt: now
+      } });
+    }
   }
 
   if (!["QUEUED", "RETRY", "PLANNING", "RUNNING", "VERIFYING"].includes(workItem.state)) {
@@ -384,7 +421,7 @@ async function processClaimedProject(
       status: "RUNNING",
       providerIdentifier: "deterministic-mock",
       executorIdentifier: "ryanos-phase1-mock-worker",
-      workspaceIdentifier: config.workspaceIdentifier
+      workspaceIdentifier: current.workspaceIdentifier
     }
   });
 
@@ -407,7 +444,7 @@ async function processClaimedProject(
       ...plan,
       workItemId: current.id,
       attempt,
-      workspaceIdentifier: config.workspaceIdentifier
+      workspaceIdentifier: current.workspaceIdentifier
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown worker error";
