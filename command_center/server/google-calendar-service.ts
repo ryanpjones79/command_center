@@ -246,8 +246,12 @@ export function parseWorkdayWindow(referenceDate: Date, input?: string | null) {
 }
 
 export async function getCalendarEventsForDate(referenceDate = new Date()) {
+  const { calendarEnabled, calendarId } = getGoogleConfigSnapshot();
+  if (!calendarEnabled) {
+    return [];
+  }
+
   const calendar = getGoogleCalendarClient();
-  const { calendarId } = getGoogleConfigSnapshot();
   const timeZone = getBriefTimeZone();
 
   const response = await calendar.events.list({

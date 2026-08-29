@@ -994,7 +994,9 @@ export async function getDailyBriefData(
   const config = getGoogleConfigSnapshot();
   const warnings: string[] = [];
   const missingInputs: string[] = [];
-  const missingConfig = getMissingGoogleConfigKeys();
+  const missingConfig = config.calendarEnabled
+    ? getMissingGoogleConfigKeys()
+    : [];
   const resolvedUserId = await resolveDailyBriefUserId(userId);
 
   if (missingConfig.length > 0) {
@@ -1150,6 +1152,10 @@ export async function sendDailyBriefEmail(
   referenceDate = getDailyBriefReferenceDate(),
   userId?: string
 ) {
+  if (!getGoogleConfigSnapshot().gmailEnabled) {
+    throw new Error("Gmail integration is disabled by FEATURE_GMAIL_TRIAGE.");
+  }
+
   const brief = await getDailyBriefData(referenceDate, userId);
   if (brief.status !== "ok") {
     throw new Error(
