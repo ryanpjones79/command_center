@@ -15,6 +15,14 @@
       "networkPolicy": "OFF",
       "sensitivity": "CCHCS_PHI_FREE",
       "testCommands": []
+    },
+    "rykas-repo": {
+      "canonicalPath": "C:\\Users\\Ryan\\Desktop\\Rykas-codex",
+      "projectSlug": "rykas",
+      "capabilities": ["RYKAS_OPERATIONS_READ"],
+      "networkPolicy": "LOCALHOST_ONLY",
+      "sensitivity": "STANDARD",
+      "testCommands": []
     }
   }
 }

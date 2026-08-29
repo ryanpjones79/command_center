@@ -22,6 +22,9 @@ describe("fail-closed runner boundaries", () => {
     expect(() => resolveWorkspace({}, "invented", "CODEX_IMPLEMENTATION")).toThrow("Unregistered");
     expect(() => resolveWorkspace({ safe: workspace }, "safe", "CODEX_REVIEW")).toThrow("does not allow");
     expect(() => resolveWorkspace({ cchcs: { ...workspace, sensitivity: "CCHCS_SENSITIVE" } }, "cchcs", "CODEX_IMPLEMENTATION")).toThrow("Sensitive CCHCS");
+    const rykas: Workspace = { canonicalPath: ".", projectSlug: "rykas", capabilities: ["RYKAS_OPERATIONS_READ"], networkPolicy: "LOCALHOST_ONLY", sensitivity: "STANDARD", testCommands: [] };
+    expect(resolveWorkspace({ "rykas-repo": rykas }, "rykas-repo", "RYKAS_OPERATIONS_READ").projectSlug).toBe("rykas");
+    expect(() => resolveWorkspace({ other: rykas }, "other", "RYKAS_OPERATIONS_READ")).toThrow("fixed rykas-repo");
   });
 });
 

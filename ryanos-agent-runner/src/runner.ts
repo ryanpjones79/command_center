@@ -5,17 +5,24 @@ import { CodexWorker } from "./codex-worker.js";
 import { resolveWorkspace } from "./workspace-registry.js";
 import { WorktreeManager } from "./worktree.js";
 import { verifyRepositoryResult } from "./qa.js";
+import { RykasTruthAdapter } from "./rykas-adapter.js";
 
 export class LocalRunner {
   private registry: Record<string, Workspace>; private client: RyanOsClient; private worker: CodexWorker; private worktrees: WorktreeManager;
   constructor(private config: RunnerConfig) { this.registry = loadWorkspaceRegistry(config.RYANOS_WORKSPACE_REGISTRY); this.client = new RyanOsClient(config); this.worker = new CodexWorker(config); this.worktrees = new WorktreeManager(config.RYANOS_WORKTREE_ROOT); }
   async once() {
     if (this.config.FEATURE_RUNNER_EXECUTION !== "true") return false;
-    const capabilities = ["REPOSITORY_READ", "REPOSITORY_CHANGE", "RUN_TESTS", "CODEX_IMPLEMENTATION", "CODEX_REVIEW"];
+    const capabilities = ["REPOSITORY_READ", "REPOSITORY_CHANGE", "RUN_TESTS", "CODEX_IMPLEMENTATION", "CODEX_REVIEW", ...(this.config.FEATURE_RYKAS_TRUTH_READ === "true" ? ["RYKAS_OPERATIONS_READ"] : [])];
     const claim = await this.client.claim(capabilities); if (!claim) return false;
     let heartbeat: NodeJS.Timeout | undefined;
     try {
       const workspace = resolveWorkspace(this.registry, claim.workspaceIdentifier, claim.allowedCapability);
+      if (claim.allowedCapability === "RYKAS_OPERATIONS_READ") {
+        const request = JSON.parse(claim.operationalContext ?? "null") as unknown;
+        const result = await new RykasTruthAdapter(this.config).execute(request);
+        await this.client.result(claim, { status: "SUCCEEDED", summary: `Read-only Rykas ${result.operation} completed.`, filesChanged: [], testsRun: ["Zod input/output validation"], testResults: "Bounded result schema passed.", unresolvedIssues: result.data.blockers.map((item) => item.summary), evidence: JSON.stringify({ observedAt: result.observedAt, authoritativeSource: result.authoritativeSource, freshness: result.freshness, blockerCount: result.data.blockers.length }), acceptanceCriteriaSatisfied: true, recommendedQaAction: "PASS", providerIdentifier: "rykas-local-truth", rykasTruthResult: result });
+        return true;
+      }
       const mutable = claim.allowedCapability === "REPOSITORY_CHANGE" || claim.allowedCapability === "CODEX_IMPLEMENTATION";
       const isolated = mutable ? await this.worktrees.create(workspace.canonicalPath, workspace.projectSlug, claim.workItemId) : { branch: null, worktree: workspace.canonicalPath, baseCommit: undefined };
       heartbeat = setInterval(() => void this.client.heartbeat(claim).catch(() => undefined), 60_000);

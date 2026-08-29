@@ -10,6 +10,8 @@ import { createOwnerDecision, resolveOwnerDecision } from "@/server/agent/work-s
 import { runAgentOrchestrationCycle, type OrchestrationServices } from "@/server/agent/orchestration-service";
 import { collectProjectEvidence, executeProjectTool } from "@/server/agent/project-tools";
 import { markAgentWorkIntegrated } from "@/server/agent/integration-service";
+import { rykasTruthResultSchema } from "@/lib/rykas-truth-contract";
+import { DeterministicProjectManagerAgent } from "@/server/agent/mock-agents";
 
 const databasePath = path.join(process.cwd(), `.agent-hq-phase2-${process.pid}.db`);
 let db: PrismaClient; let userId: string; let projectId: string; let runner: Awaited<ReturnType<PrismaClient["agentRunner"]["create"]>>;
@@ -134,5 +136,43 @@ describe("integration dependencies and project truth tools", () => {
     await db.agentProjectConfig.update({ where: { projectId }, data: { profile: "CCHCS_PM" } });
     await expect(executeProjectTool({ userId, projectId, profile: "CCHCS_PM" }, "signalcare.pipeline.snapshot", {}, db)).rejects.toThrow("eligible");
     expect(await db.agentEvent.count({ where: { projectId, type: { in: ["PROJECT_TOOL_EXECUTED", "WORK_INTEGRATED"] } } })).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("Rykas real-truth read boundary", () => {
+  it("queues one durable read, accepts only bounded read-only evidence, and reuses it without duplicate work", async () => {
+    await db.agentWorkItem.updateMany({ where: { projectId, state: { notIn: ["DONE", "FAILED", "PARKED"] } }, data: { state: "PARKED", claimToken: null, leaseExpiresAt: null } });
+    await db.agentProjectConfig.update({ where: { projectId }, data: { profile: "RYKAS_GM", workspaceIdentifier: "rykas-repo", maxConcurrentWorkItems: 1 } });
+    const prior = process.env.FEATURE_RYKAS_TRUTH_READ; process.env.FEATURE_RYKAS_TRUTH_READ = "true";
+    try {
+      await expect(executeProjectTool({ userId, projectId, profile: "RYKAS_GM" }, "rykas.sourcing.opportunities", { view: "TOP", limit: 5, sql: "SELECT *" }, db)).rejects.toThrow();
+      await expect(executeProjectTool({ userId, projectId, profile: "RYKAS_GM" }, "rykas.sourcing.opportunity_detail", { opportunityId: "US:B000000001", shell: "whoami" }, db)).rejects.toThrow();
+      const pending = await executeProjectTool({ userId, projectId, profile: "RYKAS_GM" }, "rykas.operations.snapshot", {}, db) as { truthStatus: string; readWorkItemId: string | null };
+      expect(pending.truthStatus).toBe("PENDING"); expect(pending.readWorkItemId).toBeTruthy();
+      expect(await db.agentWorkItem.count({ where: { projectId, requiredCapability: "RYKAS_OPERATIONS_READ" } })).toBe(1);
+      const claim = await claimRunnerWork(runner, { capabilities: ["RYKAS_OPERATIONS_READ"], version: "test" }, db);
+      expect(claim).toMatchObject({ workItemId: pending.readWorkItemId, allowedCapability: "RYKAS_OPERATIONS_READ", workspaceIdentifier: "rykas-repo", networkPolicy: "LOCALHOST_ONLY" });
+      const truth = rykasTruthResultSchema.parse({ schemaVersion: "RYKAS_TRUTH_READ_V1", operation: "OPERATIONS_SNAPSHOT", readOnly: true, purchaseAuthorized: false, purchaseExecuted: false, observedAt: new Date().toISOString(), authoritativeSource: "Rykas SQL Server database rykas via loopback Command Center marts", sourceUpdatedAt: "2026-08-20T00:00:00.000Z", freshness: "STALE", stale: true, data: { actionSummary: [{ action: "PRICE CHECK", count: 1, topOpportunityScore: 98 }], capital: { reliable: false, status: "BLOCKED", reason: "PO truth stale", actionRequired: "Confirm PO ledger status", asOf: "2026-08-29", openCommitments: 0, purchaseOrderRows: 0, openPurchaseOrderLines: 0, poLedgerStatus: "NOT VERIFIED", poCertificationState: "NOT VERIFIED", poCertifiedAt: "2026-08-20T00:00:00.000Z", poTruthCurrent: false, safeInventoryCapital: null }, opportunities: [], purchaseCandidates: [], blockers: [{ id: "capital-po-truth", opportunityId: null, stage: "PURCHASE_DECISION", code: "CAPITAL_OR_PO_TRUTH_BLOCKED", summary: "Confirm PO ledger status", sourceUpdatedAt: "2026-08-20T00:00:00.000Z", stale: true }], detail: null } });
+      const submitted = await submitRunnerResult(runner, claim!.workItemId, claim!.claimToken, { status: "SUCCEEDED", summary: "Bounded read", filesChanged: [], testsRun: ["schema"], testResults: "passed", unresolvedIssues: [], evidence: "read only", acceptanceCriteriaSatisfied: true, recommendedQaAction: "PASS", providerIdentifier: "rykas-local-truth", rykasTruthResult: truth }, db);
+      expect(submitted.state).toBe("DONE");
+      const ready = await executeProjectTool({ userId, projectId, profile: "RYKAS_GM" }, "rykas.operations.snapshot", {}, db) as { truthStatus: string; stale: boolean; realTruth: { purchaseExecuted: boolean } };
+      expect(ready).toMatchObject({ truthStatus: "READY", stale: true, realTruth: { purchaseExecuted: false } });
+      await executeProjectTool({ userId, projectId, profile: "RYKAS_GM" }, "rykas.operations.snapshot", {}, db);
+      expect(await db.agentWorkItem.count({ where: { projectId, requiredCapability: "RYKAS_OPERATIONS_READ" } })).toBe(1);
+      expect(await db.agentEvent.count({ where: { projectId, type: "RYKAS_TRUTH_READ" } })).toBe(1);
+      expect(await db.agentEvent.count({ where: { projectId, type: "RYKAS_DATA_STALE" } })).toBe(1);
+    } finally { prior === undefined ? delete process.env.FEATURE_RYKAS_TRUTH_READ : process.env.FEATURE_RYKAS_TRUTH_READ = prior; }
+  });
+  it("denies Rykas truth tools to SignalCare and CCHCS", async () => {
+    await db.agentProjectConfig.update({ where: { projectId }, data: { profile: "SIGNALCARE_GM" } });
+    await expect(executeProjectTool({ userId, projectId, profile: "SIGNALCARE_GM" }, "rykas.operations.blockers", { limit: 5 }, db)).rejects.toThrow("eligible");
+    await db.agentProjectConfig.update({ where: { projectId }, data: { profile: "CCHCS_PM" } });
+    await expect(executeProjectTool({ userId, projectId, profile: "CCHCS_PM" }, "rykas.purchase.candidates", { limit: 5 }, db)).rejects.toThrow("eligible");
+  });
+  it("turns only a real purchase-ready row into an authorization-only bounded decision", async () => {
+    const candidate = { opportunityId: "US:B000000001", asin: "B000000001", vendorSku: "SKU-1", brand: "Brand", title: "Real candidate", supplier: "Supplier", discoverySource: "Rykas", discoveryStrategy: "existing", currentBuyBox: 20, buyBox90: 19, observedOrReferenceCost: 10, maxLandedCost: 11, idealLandedCost: 9, profitPerUnit: 4, expectedProfit: 48, expectedMonthlyContribution: 24, roi: 0.4, margin: 0.2, estimatedMonthlyUnits: 6, units30: 6, units90: 18, sellerCount: 3, amazonOos90: 50, opportunityScore: 91, decision: "BUY", actionState: "BUY NOW", recommendationStatus: "BUY_RECOMMENDATION", recommendedUnits: 12, recommendedCases: 1, expectedSpend: 120, eligibilityStatus: "ELIGIBLE", requiredAction: "NONE", sourceStatus: "CURRENT_VERIFIED_SOURCE", reasonCodes: [], missingEvidence: [], blockers: [], freshness: { observedAt: "2026-08-29T12:00:00.000Z", authoritativeSource: "Rykas SQL", sourceUpdatedAt: "2026-08-29T11:00:00.000Z", classification: "CURRENT", stale: false } };
+    const plan = await new DeterministicProjectManagerAgent().chooseNextWork({ profile: "RYKAS_GM", projectId, projectName: "Rykas", objective: "Profit", primaryKpi: null, currentBottleneck: "Decision", instructions: "Use truth", autonomyPolicy: "Read", escalationPolicy: "Purchases", existingWorkTitles: [], operatingMode: "LIVE_INTERNAL", toolEvidence: [{ toolId: "rykas.operations.snapshot", summary: "ready", output: { sourcingAllowed: true, realTruth: { stale: false, purchaseExecuted: false, data: { purchaseCandidates: [candidate], opportunities: [candidate], blockers: [] } } } }] });
+    expect(plan.ownerNeeded).toBe(true); expect(plan.ownerDecision).toMatchObject({ category: "PURCHASE_INVENTORY", availableChoices: ["BUY", "NEEDS_MORE_RESEARCH", "PASS"], boundedPayload: { opportunityId: "US:B000000001", purchaseExecuted: false } });
+    expect(plan.ownerDecision?.context).toContain('"expectedProfit":48');
   });
 });

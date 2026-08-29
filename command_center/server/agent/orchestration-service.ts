@@ -290,6 +290,13 @@ async function processClaimedProject(
     plan = planFromPersistedWork(workItem, config.currentBottleneck);
   } else {
     const toolEvidence = await collectProjectEvidence({ userId: config.userId, projectId: config.projectId, profile: config.profile }, defaultToolsForProfile(config.profile), db);
+    const rykasSnapshot = config.profile === "RYKAS_GM" ? toolEvidence.find((entry) => entry.toolId === "rykas.operations.snapshot")?.output as { truthStatus?: string; blockers?: string[] } | undefined : undefined;
+    if (process.env.FEATURE_RYKAS_TRUTH_READ === "true" && rykasSnapshot?.truthStatus && rykasSnapshot.truthStatus !== "READY") {
+      const detail = rykasSnapshot.blockers?.join(" ") || "Rykas truth is not ready.";
+      await recordAgentEvent({ userId: config.userId, projectId: config.projectId, type: "WORK_WAITING", summary: `Rykas GM waited safely: ${detail}` }, db);
+      await releaseProjectClaim(config.id, leaseToken, now, { health: rykasSnapshot.truthStatus === "BLOCKED" ? "BLOCKED" : "NEEDS_ATTENTION", currentBottleneck: detail, nextAgentReviewAt: nextReviewAt(now, 15) }, db);
+      return { ...baseResult, outcome: "WAITING", detail };
+    }
     plan = await services.projectManager.chooseNextWork({
       profile: config.profile,
       projectId: config.projectId,

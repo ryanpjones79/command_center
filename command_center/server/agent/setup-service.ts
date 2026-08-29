@@ -55,7 +55,7 @@ export const initialAgentProfiles: InitialAgentProfile[] = [
     primaryKpi: null,
     currentBottleneck: "Verified opportunities need bounded buying decisions",
     projectManagerInstructions:
-      "Prioritize verified opportunity to purchase decision to inventory to listing to sale to reorder. Actual realized profit and inventory turns outrank cosmetic dashboards or endless sourcing-system refinement. Never invent KPI values.",
+      "Use the real Rykas truth tools. Prioritize owner-decision-ready profitable purchases, then unblock high-value sourcing evidence, inventory/listing flow, and capital tied up in stale inventory. Rykas owns economics; never recompute or estimate missing values. Stale purchase evidence requires refresh or research rather than BUY. BUY is authorization only and cannot execute a purchase. Actual realized profit and inventory turns outrank cosmetic dashboards or endless sourcing-system refinement. Never invent KPI values.",
     autonomyPolicy:
       "Research, sourcing analysis, economics validation, drafting, and reversible internal tooling work may proceed autonomously within WIP limits.",
     escalationPolicy:
@@ -110,7 +110,7 @@ export async function ensureInitialAgentProjects(userId: string, db: PrismaClien
         projectManagerInstructions: profile.projectManagerInstructions,
         autonomyPolicy: profile.autonomyPolicy,
         escalationPolicy: profile.escalationPolicy,
-        maxConcurrentWorkItems: 2,
+        maxConcurrentWorkItems: profile.profile === "RYKAS_GM" ? 1 : 2,
         nextAgentReviewAt: new Date(),
         health: "ON_TRACK",
         externalActionApproval: profile.externalActionApproval

@@ -12,6 +12,7 @@ import type { OrchestrationServices } from "@/server/agent/orchestration-service
 import { runAgentOrchestrationCycle } from "@/server/agent/orchestration-service";
 import { ensureInitialAgentProjects } from "@/server/agent/setup-service";
 import {
+  createOwnerDecision,
   resolveOwnerDecision,
   setAgentProjectPaused,
   transitionAgentWorkItem
@@ -101,7 +102,8 @@ describe("Agent HQ durable orchestration", () => {
       orderBy: { name: "asc" }
     });
     expect(projects).toHaveLength(3);
-    expect(projects.every((project) => project.agentConfig?.maxConcurrentWorkItems === 2)).toBe(true);
+    expect(projects.find((project) => project.name === "Rykas")?.agentConfig?.maxConcurrentWorkItems).toBe(1);
+    expect(projects.filter((project) => project.name !== "Rykas").every((project) => project.agentConfig?.maxConcurrentWorkItems === 2)).toBe(true);
     expect(projects.find((project) => project.name === "CCHCS")?.agentConfig?.primaryKpi).toBeNull();
   });
 
@@ -118,7 +120,7 @@ describe("Agent HQ durable orchestration", () => {
       "SignalCare"
     ]);
     expect(result.projects.find((project) => project.projectName === "CCHCS")?.outcome).toBe("NEEDS_RYAN");
-    expect(result.projects.find((project) => project.projectName === "Rykas")?.outcome).toBe("NEEDS_RYAN");
+    expect(result.projects.find((project) => project.projectName === "Rykas")?.outcome).toBe("COMPLETED");
     expect(result.projects.find((project) => project.projectName === "SignalCare")?.outcome).toBe("COMPLETED");
 
     const [work, runs, decisions, events] = await Promise.all([
@@ -128,15 +130,12 @@ describe("Agent HQ durable orchestration", () => {
       db.agentEvent.findMany({ where: { userId } })
     ]);
     expect(work).toHaveLength(3);
-    expect(work.filter((item) => item.state === "NEEDS_RYAN")).toHaveLength(2);
-    expect(work.filter((item) => item.state === "DONE")).toHaveLength(1);
+    expect(work.filter((item) => item.state === "NEEDS_RYAN")).toHaveLength(1);
+    expect(work.filter((item) => item.state === "DONE")).toHaveLength(2);
     expect(work.every((item) => item.attemptCount === 1)).toBe(true);
     expect(runs).toHaveLength(6);
     expect(runs.every((run) => run.status === "SUCCEEDED")).toBe(true);
-    expect(decisions.map((decision) => decision.project.name).sort()).toEqual([
-      "CCHCS",
-      "Rykas"
-    ]);
+    expect(decisions.map((decision) => decision.project.name)).toEqual(["CCHCS"]);
     expect(events.some((event) => event.type === "WORK_COMPLETED")).toBe(true);
     expect(events.some((event) => event.type === "QA_PASSED")).toBe(true);
     expect(events.some((event) => event.type === "OWNER_ESCALATION_CREATED")).toBe(true);
@@ -154,9 +153,9 @@ describe("Agent HQ durable orchestration", () => {
   });
 
   it("creates and resolves owner decisions with per-user isolation", async () => {
-    const decision = await db.agentDecision.findFirstOrThrow({
-      where: { userId, project: { name: "Rykas" }, status: "PENDING" }
-    });
+    const project = await db.executionProject.findFirstOrThrow({ where: { userId, name: "Rykas" } });
+    const decisionWork = await db.agentWorkItem.create({ data: { userId, projectId: project.id, idempotencyKey: "explicit-owner-isolation", title: "Explicit authorization boundary test", objective: "Prove authorization does not execute", expectedValue: "Safety coverage", acceptanceCriteria: "Decision remains bounded", agentRole: "RYKAS_GM", actionCategory: "PURCHASE_INVENTORY", requiredCapability: "REPOSITORY_READ", state: "NEEDS_RYAN" } });
+    const decision = await createOwnerDecision({ userId, projectId: project.id, workItemId: decisionWork.id, idempotencyKey: "explicit-owner-isolation-decision", plan: { category: "PURCHASE_INVENTORY", question: "Authorize the exact test lot?", context: "Explicit test fixture; no purchase executor exists.", recommendedChoice: "BUY", availableChoices: ["BUY", "NEEDS_MORE_RESEARCH", "PASS"], expectedUpside: "Proves the authorization boundary.", risk: "No execution is allowed.", capability: "PURCHASE", boundedPayload: { lotId: "test-only", purchaseExecuted: false } } }, db);
     await expect(resolveOwnerDecision(otherUserId, decision.id, "APPROVE", db)).rejects.toThrow(
       "not found for this user"
     );

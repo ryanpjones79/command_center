@@ -5,7 +5,8 @@ export const localRunnerCapabilities = [
   "REPOSITORY_CHANGE",
   "RUN_TESTS",
   "CODEX_IMPLEMENTATION",
-  "CODEX_REVIEW"
+  "CODEX_REVIEW",
+  "RYKAS_OPERATIONS_READ"
 ] as const;
 
 export const SIGNALCARE_WEB_RESEARCH_CAPABILITY =

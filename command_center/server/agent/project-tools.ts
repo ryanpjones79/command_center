@@ -4,6 +4,8 @@ import { evaluateAgentPolicy, type AgentActionCategory } from "@/lib/agent-polic
 import { prisma } from "@/lib/prisma";
 import { signalCareApprovedOfferSchema } from "@/lib/signalcare-commercial-profile";
 import { recordAgentEvent } from "@/server/agent/event-service";
+import { rykasTruthResultSchema, rykasViewSchema } from "@/lib/rykas-truth-contract";
+import { getOrQueueRykasTruth } from "@/server/agent/rykas-truth-service";
 
 type ToolContext = { userId: string; projectId: string; profile: string };
 type ToolDefinition = { id: string; profiles: string[]; classification: "READ" | "WRITE"; sensitivity: "STANDARD" | "CCHCS_PHI_FREE";
@@ -18,7 +20,9 @@ const signalOutput = z.object({ prospects: z.array(z.object({ name: z.string(), 
   approvedEntryOffer: signalCareApprovedOfferSchema.nullable(), likelyStakeholderRole: z.string().nullable(), conversationAngle: z.string().nullable(),
   hasInternalDraft: z.boolean(), providerBackedProvenance: z.boolean(), externalOutreachPerformed: z.boolean().nullable(),
   outreachReadinessComplete: z.boolean() })), openOwnerDecisions: z.number() });
-const rykasOutput = z.object({ backlog: z.number(), toShip: z.string().nullable(), listedToday: z.number(), sourcingAllowed: z.boolean(), blockers: z.array(z.string()) });
+const truthStatus = z.enum(["READY", "PENDING", "BLOCKED", "DISABLED"]);
+const rykasEnvelope = z.object({ status: truthStatus, result: rykasTruthResultSchema.nullable(), workItemId: z.string().nullable(), blockers: z.array(z.string()).max(50) });
+const rykasOutput = z.object({ backlog: z.number(), toShip: z.string().nullable(), listedToday: z.number(), sourcingAllowed: z.boolean(), blockers: z.array(z.string()), truthStatus, observedAt: z.string().datetime().nullable(), authoritativeSource: z.string().nullable(), sourceUpdatedAt: z.string().datetime().nullable(), stale: z.boolean().nullable(), realTruth: rykasTruthResultSchema.nullable(), readWorkItemId: z.string().nullable() });
 const cchcsOutput = z.object({ commitments: z.array(z.object({ title: z.string(), status: z.string(), dueAt: z.string().nullable(), waitingOn: z.string().nullable(), blocked: z.boolean() })), overdueCount: z.number(), waitingCount: z.number() });
 
 export const projectToolRegistry: Record<string, ToolDefinition> = {
@@ -52,21 +56,37 @@ export const projectToolRegistry: Record<string, ToolDefinition> = {
             verifiedFacts.length > 0 && sourceUrls.length > 0 && providerBackedProvenance && Boolean(likelyStakeholderRole?.trim()) &&
             approvedEntryOffer.success && Boolean(conversationAngle?.trim()) && hasInternalDraft && ["MEDIUM", "HIGH"].includes(String(provenance.confidence)) && externalOutreachPerformed === false }; }), openOwnerDecisions: decisions }; } },
   "rykas.operations.snapshot": { id: "rykas.operations.snapshot", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: emptyInput, output: rykasOutput,
-    async execute(context, _input, db) { const [day, tasks] = await Promise.all([db.rykasDay.findFirst({ where: { userId: context.userId }, orderBy: { date: "desc" } }), db.executionTask.findMany({ where: { userId: context.userId, domain: { slug: "rykas" }, status: { notIn: ["DONE", "DROPPED"] } }, take: 50 })]); const backlog = day?.backlogAfter ?? 0; return { backlog, toShip: day?.toShip ?? null, listedToday: day?.listedCount ?? 0, sourcingAllowed: backlog < 10, blockers: tasks.filter((t) => t.isBlocked || t.waitingOn).map((t) => `${t.title}${t.waitingOn ? ` — waiting on ${t.waitingOn}` : ""}`) }; } },
+    async execute(context, _input, db) { const [day, tasks, truth] = await Promise.all([db.rykasDay.findFirst({ where: { userId: context.userId }, orderBy: { date: "desc" } }), db.executionTask.findMany({ where: { userId: context.userId, domain: { slug: "rykas" }, status: { notIn: ["DONE", "DROPPED"] } }, take: 50 }), getOrQueueRykasTruth(context, { version: 1, operation: "OPERATIONS_SNAPSHOT", input: { limit: 10 } }, db)]); const backlog = day?.backlogAfter ?? 0; const localBlockers = tasks.filter((t) => t.isBlocked || t.waitingOn).map((t) => `${t.title}${t.waitingOn ? ` — waiting on ${t.waitingOn}` : ""}`); return { backlog, toShip: day?.toShip ?? null, listedToday: day?.listedCount ?? 0, sourcingAllowed: backlog < 10, blockers: [...localBlockers, ...truth.blockers].slice(0, 50), truthStatus: truth.status, observedAt: truth.result?.observedAt ?? null, authoritativeSource: truth.result?.authoritativeSource ?? null, sourceUpdatedAt: truth.result?.sourceUpdatedAt ?? null, stale: truth.result?.stale ?? null, realTruth: truth.result, readWorkItemId: truth.workItemId }; } },
+  "rykas.sourcing.opportunities": { id: "rykas.sourcing.opportunities", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: z.object({ view: rykasViewSchema.default("TOP"), limit: z.number().int().min(1).max(25).default(10) }).strict(), output: rykasEnvelope,
+    execute(context, input, db) { return getOrQueueRykasTruth(context, { version: 1, operation: "SOURCING_OPPORTUNITIES", input }, db); } },
+  "rykas.sourcing.opportunity_detail": { id: "rykas.sourcing.opportunity_detail", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: z.object({ opportunityId: z.string().regex(/^US:[A-Z0-9]{10}$/) }).strict(), output: rykasEnvelope,
+    execute(context, input, db) { return getOrQueueRykasTruth(context, { version: 1, operation: "OPPORTUNITY_DETAIL", input }, db); } },
+  "rykas.purchase.candidates": { id: "rykas.purchase.candidates", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: z.object({ limit: z.number().int().min(1).max(25).default(10) }).strict(), output: rykasEnvelope,
+    execute(context, input, db) { return getOrQueueRykasTruth(context, { version: 1, operation: "PURCHASE_CANDIDATES", input }, db); } },
+  "rykas.operations.blockers": { id: "rykas.operations.blockers", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: z.object({ limit: z.number().int().min(1).max(25).default(10) }).strict(), output: rykasEnvelope,
+    execute(context, input, db) { return getOrQueueRykasTruth(context, { version: 1, operation: "OPERATIONS_BLOCKERS", input }, db); } },
   "cchcs.commitments.snapshot": { id: "cchcs.commitments.snapshot", profiles: ["CCHCS_PM"], classification: "READ", sensitivity: "CCHCS_PHI_FREE", policyCategory: "CCHCS_PROJECT_MANAGEMENT", timeoutMs: 5000, input: emptyInput, output: cchcsOutput,
     async execute(context, _input, db) { const tasks = await db.executionTask.findMany({ where: { userId: context.userId, projectId: context.projectId, status: { notIn: ["DONE", "DROPPED"] } }, orderBy: [{ dueDate: "asc" }, { priority: "desc" }], take: 100 }); const now = new Date(); return { commitments: tasks.map((t) => ({ title: t.title, status: t.status, dueAt: t.dueDate?.toISOString() ?? null, waitingOn: t.waitingOn, blocked: t.isBlocked })), overdueCount: tasks.filter((t) => t.dueDate && t.dueDate < now).length, waitingCount: tasks.filter((t) => t.status === "WAITING" || t.waitingOn).length }; } }
 };
 
 export async function executeProjectTool(context: ToolContext, toolId: string, rawInput: unknown, db: PrismaClient = prisma) {
-  const tool = projectToolRegistry[toolId]; if (!tool) throw new Error(`DENY: unknown project tool ${toolId}.`);
-  const config = await db.agentProjectConfig.findFirst({ where: { userId: context.userId, projectId: context.projectId } });
-  if (!config || config.profile !== context.profile) throw new Error("DENY: project tool ownership/profile mismatch.");
-  if (!tool.profiles.includes(context.profile)) throw new Error(`DENY: ${toolId} is not eligible for ${context.profile}.`);
-  if (context.profile === "CCHCS_PM" && tool.sensitivity !== "CCHCS_PHI_FREE") throw new Error("DENY: CCHCS tool is outside the PHI-free boundary.");
-  if (evaluateAgentPolicy({ category: tool.policyCategory, projectProfile: context.profile }) !== "ALLOW") throw new Error(`DENY: policy does not allow ${toolId}.`);
-  const input = tool.input.parse(rawInput); const result = await Promise.race([tool.execute(context, input, db), new Promise((_, reject) => setTimeout(() => reject(new Error(`Tool ${toolId} timed out.`)), tool.timeoutMs))]);
-  const output = tool.output.parse(result); await recordAgentEvent({ userId: context.userId, projectId: context.projectId, type: "PROJECT_TOOL_EXECUTED", summary: `${toolId} observed current project truth.`, metadata: { toolId, classification: tool.classification, sensitivity: tool.sensitivity } }, db);
-  return output;
+  const tool = projectToolRegistry[toolId];
+  try {
+    if (!tool) throw new Error(`DENY: unknown project tool ${toolId}.`);
+    const config = await db.agentProjectConfig.findFirst({ where: { userId: context.userId, projectId: context.projectId } });
+    if (!config || config.profile !== context.profile) throw new Error("DENY: project tool ownership/profile mismatch.");
+    if (!tool.profiles.includes(context.profile)) throw new Error(`DENY: ${toolId} is not eligible for ${context.profile}.`);
+    if (context.profile === "CCHCS_PM" && tool.sensitivity !== "CCHCS_PHI_FREE") throw new Error("DENY: CCHCS tool is outside the PHI-free boundary.");
+    if (evaluateAgentPolicy({ category: tool.policyCategory, projectProfile: context.profile }) !== "ALLOW") throw new Error(`DENY: policy does not allow ${toolId}.`);
+    const input = tool.input.parse(rawInput);
+    const result = await Promise.race([tool.execute(context, input, db), new Promise((_, reject) => setTimeout(() => reject(new Error(`Tool ${toolId} timed out.`)), tool.timeoutMs))]);
+    const output = tool.output.parse(result);
+    await recordAgentEvent({ userId: context.userId, projectId: context.projectId, type: "PROJECT_TOOL_EXECUTED", summary: `${toolId} observed current project truth.`, metadata: { toolId, classification: tool.classification, sensitivity: tool.sensitivity } }, db);
+    return output;
+  } catch (error) {
+    await recordAgentEvent({ userId: context.userId, projectId: context.projectId, type: "PROJECT_TOOL_DENIED_OR_FAILED", summary: `${toolId.slice(0, 200)} was denied or failed closed.`, metadata: { toolId: toolId.slice(0, 200), profile: context.profile, inputPersisted: false, reason: error instanceof Error ? error.message.slice(0, 1000) : "Unknown failure" } }, db).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function collectProjectEvidence(context: ToolContext, toolIds: string[], db: PrismaClient = prisma, maxCalls = Number(process.env.AGENT_MAX_TOOL_CALLS_PER_REVIEW ?? 3)) {

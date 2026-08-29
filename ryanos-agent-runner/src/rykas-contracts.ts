@@ -1,0 +1,31 @@
+import { z } from "zod";
+
+export const RYKAS_READ_CAPABILITY = "RYKAS_OPERATIONS_READ" as const;
+export const rykasViewSchema = z.enum(["TOP", "OWNER_ACTION_NEEDED", "PURCHASE_READY", "NEEDS_DATA", "BLOCKED", "STALE_EVIDENCE"]);
+const limit = z.number().int().min(1).max(25);
+export const rykasReadRequestSchema = z.discriminatedUnion("operation", [
+  z.object({ version: z.literal(1), operation: z.literal("OPERATIONS_SNAPSHOT"), input: z.object({ limit: limit.default(10) }).strict() }).strict(),
+  z.object({ version: z.literal(1), operation: z.literal("SOURCING_OPPORTUNITIES"), input: z.object({ view: rykasViewSchema, limit: limit.default(10) }).strict() }).strict(),
+  z.object({ version: z.literal(1), operation: z.literal("OPPORTUNITY_DETAIL"), input: z.object({ opportunityId: z.string().regex(/^US:[A-Z0-9]{10}$/) }).strict() }).strict(),
+  z.object({ version: z.literal(1), operation: z.literal("PURCHASE_CANDIDATES"), input: z.object({ limit: limit.default(10) }).strict() }).strict(),
+  z.object({ version: z.literal(1), operation: z.literal("OPERATIONS_BLOCKERS"), input: z.object({ limit: limit.default(10) }).strict() }).strict()
+]);
+export type RykasReadRequest = z.infer<typeof rykasReadRequestSchema>;
+
+const nullableNumber = z.number().finite().nullable();
+const freshnessSchema = z.object({ observedAt: z.string().datetime(), authoritativeSource: z.string().min(1).max(500), sourceUpdatedAt: z.string().datetime().nullable(), classification: z.enum(["CURRENT", "STALE", "UNKNOWN"]), stale: z.boolean() }).strict();
+export const rykasOpportunitySchema = z.object({
+  opportunityId: z.string().regex(/^US:[A-Z0-9]{10}$/), asin: z.string().regex(/^[A-Z0-9]{10}$/), vendorSku: z.string().max(200).nullable(), brand: z.string().max(400).nullable(), title: z.string().max(1000).nullable(), supplier: z.string().max(500).nullable(),
+  discoverySource: z.string().max(200).nullable(), discoveryStrategy: z.string().max(200).nullable(), currentBuyBox: nullableNumber, buyBox90: nullableNumber, observedOrReferenceCost: nullableNumber, maxLandedCost: nullableNumber, idealLandedCost: nullableNumber,
+  profitPerUnit: nullableNumber, expectedProfit: nullableNumber, expectedMonthlyContribution: nullableNumber, roi: nullableNumber, margin: nullableNumber, estimatedMonthlyUnits: nullableNumber, units30: nullableNumber, units90: nullableNumber,
+  sellerCount: z.number().int().nonnegative().nullable(), amazonOos90: nullableNumber, opportunityScore: nullableNumber, decision: z.string().max(80).nullable(), actionState: z.string().max(100), recommendationStatus: z.string().max(100).nullable(), recommendedUnits: z.number().int().nonnegative().nullable(), recommendedCases: nullableNumber, expectedSpend: nullableNumber,
+  eligibilityStatus: z.string().max(100).nullable(), requiredAction: z.string().max(200).nullable(), sourceStatus: z.string().max(100).nullable(), reasonCodes: z.array(z.string().max(200)).max(100), missingEvidence: z.array(z.string().max(200)).max(50), blockers: z.array(z.string().max(500)).max(50), freshness: freshnessSchema
+}).strict();
+
+const blockerSchema = z.object({ id: z.string().max(200), opportunityId: z.string().max(50).nullable(), stage: z.enum(["OPPORTUNITY", "PURCHASE_DECISION", "INBOUND_INVENTORY", "LISTING", "SALE", "SYSTEM"]), code: z.string().max(200), summary: z.string().max(1000), sourceUpdatedAt: z.string().datetime().nullable(), stale: z.boolean() }).strict();
+const capitalSchema = z.object({ reliable: z.boolean(), status: z.string().max(100), reason: z.string().max(2000).nullable(), actionRequired: z.string().max(1000).nullable(), asOf: z.string().nullable(), openCommitments: nullableNumber, purchaseOrderRows: z.number().int().nonnegative(), openPurchaseOrderLines: z.number().int().nonnegative(), poLedgerStatus: z.string().max(100), poCertificationState: z.string().max(100), poCertifiedAt: z.string().datetime().nullable(), poTruthCurrent: z.boolean(), safeInventoryCapital: nullableNumber }).strict();
+const actionSummarySchema = z.object({ action: z.string().max(100), count: z.number().int().nonnegative(), topOpportunityScore: nullableNumber }).strict();
+const detailSchema = z.object({ opportunity: rykasOpportunitySchema, priceHistory: z.object({ buyBox30: nullableNumber, buyBox90: nullableNumber, buyBox180: nullableNumber }).strict(), competition: z.object({ offerCount30: nullableNumber, offerCount90: nullableNumber, offerCount180: nullableNumber }).strict(), inventory: z.object({ onHand: nullableNumber, reserved: nullableNumber, inbound: nullableNumber }).strict(), evidence: z.object({ evaluationVersion: z.string().max(200).nullable(), positives: z.array(z.string().max(1000)).max(50), risks: z.array(z.string().max(1000)).max(50), confidenceFactor: nullableNumber, priceConfidence: z.string().max(100).nullable(), availabilityConfidence: z.string().max(100).nullable(), priceAgeDays: z.number().int().nonnegative().nullable(), quantityStatus: z.string().max(100).nullable(), eligibilityCheckedAt: z.string().datetime().nullable(), marketCheckedAt: z.string().datetime().nullable(), buyBoxCheckedAt: z.string().datetime().nullable(), sourcePriceObservedAt: z.string().datetime().nullable() }).strict() }).strict();
+const dataSchema = z.object({ actionSummary: z.array(actionSummarySchema).max(30).default([]), capital: capitalSchema.nullable().default(null), opportunities: z.array(rykasOpportunitySchema).max(25).default([]), purchaseCandidates: z.array(rykasOpportunitySchema).max(25).default([]), blockers: z.array(blockerSchema).max(25).default([]), detail: detailSchema.nullable().default(null) }).strict();
+export const rykasTruthResultSchema = z.object({ schemaVersion: z.literal("RYKAS_TRUTH_READ_V1"), operation: z.enum(["OPERATIONS_SNAPSHOT", "SOURCING_OPPORTUNITIES", "OPPORTUNITY_DETAIL", "PURCHASE_CANDIDATES", "OPERATIONS_BLOCKERS"]), readOnly: z.literal(true), purchaseAuthorized: z.literal(false), purchaseExecuted: z.literal(false), observedAt: z.string().datetime(), authoritativeSource: z.string().min(1).max(500), sourceUpdatedAt: z.string().datetime().nullable(), freshness: z.enum(["CURRENT", "STALE", "UNKNOWN"]), stale: z.boolean(), data: dataSchema }).strict();
+export type RykasTruthResult = z.infer<typeof rykasTruthResultSchema>;

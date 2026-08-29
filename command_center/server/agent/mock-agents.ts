@@ -100,20 +100,7 @@ const plansByProfile: Record<string, AgentWorkPlan> = {
     actionCategory: "RESEARCH_READ_ONLY",
     priority: "HIGH",
     maxAttempts: 3,
-    plannedBottleneck: "Verified opportunity needs a purchase decision",
-    ownerDecisionAfterQa: {
-      category: "PURCHASE_INVENTORY",
-      question: "Approve inventory purchase up to $487?",
-      context: "A bounded opportunity was verified against current economic guardrails; no purchase has been made.",
-      recommendedChoice: "BUY",
-      availableChoices: ["BUY", "REDUCE", "PASS"],
-      expectedUpside: "Adds inventory with a credible path to realized monthly net profit and healthy turns.",
-      risk: "Capital may be tied up or lost if demand or economics are wrong.",
-      amountCents: 48700,
-      currency: "USD",
-      capability: "PURCHASE",
-      boundedPayload: { candidate: "verified inventory opportunity", maximumCents: 48700, currency: "USD" }
-    }
+    plannedBottleneck: "Verified opportunity needs a purchase decision"
   }
 };
 
@@ -127,7 +114,20 @@ export class DeterministicProjectManagerAgent implements ProjectManagerAgent {
         const target = prospects.find((p) => !p.evidence || p.stale) ?? prospects[0]!;
         return { ...plansByProfile.SIGNALCARE_GM, title: `Resolve qualification evidence for ${target.name}`, objective: `Resolve the highest-value missing or stale acquisition evidence for ${target.name} without sending outreach.`, ownerDecisionAfterQa: undefined };
       }
-      if (context.profile === "RYKAS_GM" && output.sourcingAllowed === false) return { ...plansByProfile.RYKAS_GM, title: "Resolve the Rykas listing backlog before sourcing", objective: "Identify and resolve the highest-value listing or inventory-flow blocker.", actionCategory: "RESEARCH_READ_ONLY" as const, ownerDecisionAfterQa: undefined };
+      if (context.profile === "RYKAS_GM") {
+        const truth = output.realTruth as { stale?: boolean; purchaseExecuted?: boolean; data?: { purchaseCandidates?: Array<Record<string, unknown>>; opportunities?: Array<Record<string, unknown>>; blockers?: Array<{ summary?: string }> } } | null | undefined;
+        const candidate = truth?.data?.purchaseCandidates?.[0];
+        if (candidate && truth?.stale === false && truth.purchaseExecuted === false) {
+          const opportunityId = String(candidate.opportunityId ?? "");
+          const title = String(candidate.title ?? opportunityId);
+          const contextSummary = JSON.stringify({ opportunityId, product: title, supplier: candidate.supplier ?? null, quantity: candidate.recommendedUnits ?? null, totalSpend: candidate.expectedSpend ?? null, expectedProfit: candidate.expectedProfit ?? null, expectedContribution: candidate.expectedMonthlyContribution ?? null, roi: candidate.roi ?? null, margin: candidate.margin ?? null, demand: candidate.estimatedMonthlyUnits ?? null, competition: candidate.sellerCount ?? null, freshness: candidate.freshness ?? null, risks: candidate.blockers ?? [], purchaseExecuted: false });
+          return { ...plansByProfile.RYKAS_GM, disposition: "CREATE_WORK" as const, title: `Owner purchase decision: ${title}`, objective: "Present one Rykas-authored purchase candidate for an authorization-only owner decision.", acceptanceCriteria: "Ryan selects BUY, NEEDS_MORE_RESEARCH, or PASS; no order is placed.", plannedBottleneck: "One real Rykas purchase candidate needs owner judgment.", requiredCapability: "REPOSITORY_READ", sandboxPolicy: "READ_ONLY" as const, networkPolicy: "OFF" as const, operationalContext: `Decision evidence for ${opportunityId}`, ownerNeeded: true, ownerDecision: { category: "PURCHASE_INVENTORY" as const, question: `Buy ${String(candidate.recommendedUnits ?? "UNKNOWN")} units of ${title}?`, context: contextSummary, recommendedChoice: "BUY", availableChoices: ["BUY", "NEEDS_MORE_RESEARCH", "PASS"], expectedUpside: `Rykas expected profit ${String(candidate.expectedProfit ?? "UNKNOWN")} and ROI ${String(candidate.roi ?? "UNKNOWN")}.`, risk: Array.isArray(candidate.blockers) && candidate.blockers.length ? candidate.blockers.join("; ") : "Inventory demand and capital remain exposed until sale.", capability: "PURCHASE", boundedPayload: { opportunityId, recommendedUnits: candidate.recommendedUnits ?? null, maximumSpend: candidate.expectedSpend ?? null, purchaseExecuted: false } } };
+        }
+        const next = truth?.data?.opportunities?.find((item) => item.actionState !== "WATCH");
+        const blocker = truth?.data?.blockers?.[0]?.summary;
+        if (truth) return { ...plansByProfile.RYKAS_GM, disposition: "WAIT" as const, title: "Wait for decision-ready Rykas truth", objective: "Do not fabricate economics or duplicate work already owned by Rykas.", plannedBottleneck: blocker ?? (next ? `${String(next.opportunityId)} requires ${String(next.actionState)}.` : "No current Rykas opportunity deserves action."), ownerDecisionAfterQa: undefined };
+        if (output.sourcingAllowed === false) return { ...plansByProfile.RYKAS_GM, title: "Resolve the Rykas listing backlog before sourcing", objective: "Identify and resolve the highest-value listing or inventory-flow blocker.", actionCategory: "RESEARCH_READ_ONLY" as const, ownerDecisionAfterQa: undefined };
+      }
       if (context.profile === "CCHCS_PM" && (Number(output.overdueCount) > 0 || Number(output.waitingCount) > 0)) return { ...plansByProfile.CCHCS_PM, title: "Reconcile overdue and waiting CCHCS commitments", objective: "Produce a PHI-free prioritized follow-up plan for current stalled commitments.", ownerDecisionAfterQa: undefined };
     }
     return (

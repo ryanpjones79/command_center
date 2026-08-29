@@ -5,6 +5,7 @@ import {
   phase2AllowedCapabilities,
   SIGNALCARE_WEB_RESEARCH_CAPABILITY
 } from "@/lib/agent-capabilities";
+import { RYKAS_READ_CAPABILITY, rykasReadRequestSchema } from "@/lib/rykas-truth-contract";
 import type {
   AgentVerifier,
   ChiefPortfolioAgent,
@@ -399,12 +400,19 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       name: "pm_project_review",
       validator: pmOutputSchema,
       schema: pmJsonSchema,
-      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When a prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
+      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. For RYKAS_GM, Rykas owns economics: use only realTruth values, treat null as UNKNOWN, and never derive landed cost, profit, ROI, margin, max/ideal cost, score, or quantity. Prioritize purchase-decision-ready profitable candidates, then high-value missing evidence, inventory/listing flow, and stale tied-up capital. Stale evidence requires refresh/research, never BUY. BUY is authorization only and cannot purchase. RYKAS_OPERATIONS_READ is RYKAS_GM-only and operationalContext must be exactly one versioned predefined JSON request; it cannot contain SQL, shell, URLs, or paths. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When a prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
       payload: context
     });
     const ownerEscalation = result.ownerNeeded && result.ownerDecision !== null;
     const researchMode = ownerEscalation ? null : result.researchMode;
     const targetProspect = ownerEscalation ? null : result.targetProspect;
+    if (result.requiredCapability === RYKAS_READ_CAPABILITY) {
+      if (context.profile !== "RYKAS_GM") throw new Error("Rykas truth reads are eligible only for RYKAS_GM.");
+      let request: unknown;
+      try { request = JSON.parse(result.operationalContext); }
+      catch { throw new Error("Rykas truth operationalContext must be strict JSON."); }
+      rykasReadRequestSchema.parse(request);
+    }
     if (
       !ownerEscalation &&
       result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
