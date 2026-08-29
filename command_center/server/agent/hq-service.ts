@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { DeterministicChiefPortfolioAgent } from "@/server/agent/mock-agents";
 import { ModelChiefPortfolioAgent } from "@/server/agent/model-agents";
 import { ensureInitialAgentProjects } from "@/server/agent/setup-service";
+import { recoverBrokenRykasOwnerDataDecision } from "@/server/agent/work-service";
 
 export function parseDecisionChoices(value: string): string[] {
   try {
@@ -17,6 +18,7 @@ export function parseDecisionChoices(value: string): string[] {
 
 export async function getAgentHqData(userId: string, now = new Date()) {
   await ensureInitialAgentProjects(userId);
+  await recoverBrokenRykasOwnerDataDecision(userId, prisma, now);
   const [configs, decisions, events, completedCount, retryFailureCount, runners, actions] = await Promise.all([
     prisma.agentProjectConfig.findMany({
       where: { userId },

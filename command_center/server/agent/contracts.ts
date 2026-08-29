@@ -1,4 +1,5 @@
 import type { AgentActionCategory } from "@/lib/agent-policy";
+import type { RykasTruthReconciliation } from "@/lib/rykas-owner-data-contract";
 import type { RykasReadRequest } from "@/lib/rykas-truth-contract";
 
 export type PortfolioProjectSnapshot = {
@@ -62,6 +63,7 @@ export type OwnerDecisionPlan = {
   boundedPayload?: Record<string, unknown>;
   authorizationExpiresAt?: Date;
   createsActionRequest?: boolean;
+  ownerDataRequest?: RykasTruthReconciliation;
 };
 
 export type AgentWorkPlan = {

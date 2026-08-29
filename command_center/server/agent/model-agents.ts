@@ -2,6 +2,10 @@ import { z } from "zod";
 import { agentActionCategories } from "@/lib/agent-policy";
 import { signalCareCommercialProfileInstructions } from "@/lib/signalcare-commercial-profile";
 import {
+  extractRykasTruthReconciliation,
+  rykasTruthReconciliationWorkPlan
+} from "@/lib/rykas-owner-data-contract";
+import {
   phase2AllowedCapabilities,
   SIGNALCARE_WEB_RESEARCH_CAPABILITY
 } from "@/lib/agent-capabilities";
@@ -12,6 +16,7 @@ import {
 } from "@/lib/rykas-truth-contract";
 import type {
   AgentVerifier,
+  AgentWorkPlan,
   ChiefPortfolioAgent,
   PortfolioProjectSnapshot,
   ProjectManagerAgent,
@@ -497,7 +502,14 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
     private client: StructuredModelClient = new OpenAiStructuredModelClient(),
     private model = process.env.AGENT_PM_MODEL ?? "gpt-5-mini"
   ) {}
-  async chooseNextWork(context: ProjectManagerContext) {
+  async chooseNextWork(context: ProjectManagerContext): Promise<AgentWorkPlan> {
+    const rykasOwnerDataRequest =
+      context.profile === "RYKAS_GM"
+        ? extractRykasTruthReconciliation(context.toolEvidence)
+        : null;
+    if (rykasOwnerDataRequest) {
+      return rykasTruthReconciliationWorkPlan(rykasOwnerDataRequest);
+    }
     const result = await this.client.generate({
       model: this.model,
       name: "pm_project_review",

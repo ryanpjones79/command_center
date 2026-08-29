@@ -4,6 +4,16 @@ import { SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
 import { assertAgentWorkTransition } from "@/lib/agent-state-machine";
 import { evaluateAgentPolicy, type AgentActionCategory } from "@/lib/agent-policy";
 import { prisma } from "@/lib/prisma";
+import {
+  parseRykasTruthReconciliation,
+  rykasTruthReconciliationDecision,
+  rykasTruthReconciliationSchema,
+  RYKAS_TRUTH_RECONCILIATION_KIND
+} from "@/lib/rykas-owner-data-contract";
+import {
+  RYKAS_READ_CAPABILITY,
+  serializeRykasReadRequest
+} from "@/lib/rykas-truth-contract";
 import type { OwnerDecisionPlan } from "@/server/agent/contracts";
 import { recordAgentEvent } from "@/server/agent/event-service";
 import {
@@ -60,12 +70,25 @@ export async function createOwnerDecision(
   db: PrismaClient = prisma
 ) {
   let plan = input.plan;
+  const ownerDataRequest = plan.ownerDataRequest
+    ? rykasTruthReconciliationSchema.parse(plan.ownerDataRequest)
+    : null;
+  if (ownerDataRequest) {
+    const config = await db.agentProjectConfig.findFirst({
+      where: { userId: input.userId, projectId: input.projectId }
+    });
+    if ((input.profile ?? config?.profile) !== "RYKAS_GM") {
+      throw new Error("Rykas owner-data decisions are eligible only for RYKAS_GM.");
+    }
+    plan = rykasTruthReconciliationDecision(ownerDataRequest);
+  }
   const policy = evaluateAgentPolicy({
     category: plan.category,
     projectProfile: input.profile,
     amountCents: plan.amountCents
   });
-  if (policy === "ALLOW") throw new Error("Owner decision cannot be used to gate an ALLOW action.");
+  if (policy === "ALLOW" && !ownerDataRequest)
+    throw new Error("Owner decision cannot be used to gate an ALLOW action.");
   if (policy === "DENY") throw new Error("Denied actions cannot be converted into owner approvals.");
 
   if (
@@ -103,6 +126,8 @@ export async function createOwnerDecision(
       }
     };
   }
+
+  validateOwnerDecisionChoices(plan.availableChoices, plan.recommendedChoice);
 
   const decision = await db.agentDecision.upsert({
     where: { idempotencyKey: input.idempotencyKey },
@@ -175,6 +200,7 @@ export async function createOwnerDecision(
       type: "OWNER_ESCALATION_CREATED",
       summary: plan.question,
       metadata: { category: plan.category, policy, movementKind:
+        ownerDataRequest ? "RYKAS_TRUTH_RECONCILIATION_REQUIRED" :
         plan.category === "SEND_EMAIL_OR_MESSAGE" ? "SIGNALCARE_OUTREACH_DECISION_READY" :
         plan.category === "PURCHASE_INVENTORY" ? "RYKAS_PURCHASE_DECISION_READY" :
         plan.category.startsWith("CCHCS_") ? "CCHCS_OWNER_DECISION_READY" : undefined }
@@ -184,12 +210,212 @@ export async function createOwnerDecision(
   return decision;
 }
 
-function resolutionState(choice: string): AgentWorkState {
+export function resolutionState(choice: string): AgentWorkState {
   const normalized = choice.trim().toUpperCase().replace(/[_-]+/g, " ");
   if (["APPROVE", "BUY"].includes(normalized)) return "AWAITING_EXECUTION";
-  if (["PASS", "CANCEL", "CANCELLED", "DECLINE", "REJECT"].includes(normalized)) return "PARKED";
-  if (["MORE RESEARCH", "NEEDS MORE RESEARCH", "REVISE", "REVIEW DETAILS", "REDUCE"].includes(normalized)) return "QUEUED";
+  if (["PASS", "CANCEL", "CANCELLED", "DECLINE", "REJECT", "REQUIRES RECONCILIATION", "CAPITAL UNKNOWN"].includes(normalized)) return "PARKED";
+  if (["MORE RESEARCH", "NEEDS MORE RESEARCH", "REVISE", "REVIEW DETAILS", "REDUCE", "UPDATED AND RECHECK"].includes(normalized)) return "QUEUED";
   throw new Error("Selected owner choice has no safe deterministic resolution mapping.");
+}
+
+export function validateOwnerDecisionChoices(
+  choices: string[],
+  recommendedChoice?: string | null
+) {
+  if (choices.length < 2 || choices.length > 6)
+    throw new Error("Owner decisions require between two and six choices.");
+  const normalized = choices.map((choice) => choice.trim().toUpperCase());
+  if (normalized.some((choice) => !choice) || new Set(normalized).size !== choices.length)
+    throw new Error("Owner decision choices must be non-empty and unique.");
+  for (const choice of choices) resolutionState(choice);
+  if (
+    recommendedChoice &&
+    !normalized.includes(recommendedChoice.trim().toUpperCase())
+  ) {
+    throw new Error("The recommended owner choice must be available.");
+  }
+}
+
+const rykasRecheckRequest = {
+  version: 1,
+  operation: "OPERATIONS_SNAPSHOT",
+  input: { limit: 10 }
+} as const;
+
+async function resolveRykasTruthReconciliation(
+  userId: string,
+  decision: Awaited<ReturnType<typeof loadDecisionForResolution>>,
+  canonicalChoice: string,
+  db: PrismaClient
+) {
+  if (!decision) throw new Error("AgentDecision not found for this user.");
+  const context = parseRykasTruthReconciliation(decision.context);
+  if (!context) throw new Error("Rykas owner-data decision context is invalid.");
+  const now = new Date();
+  const nextState = resolutionState(canonicalChoice);
+  const recheck = canonicalChoice === "UPDATED_AND_RECHECK";
+  const blocker = recheck
+    ? null
+    : canonicalChoice === "REQUIRES_RECONCILIATION"
+      ? "Owner reports that the authoritative Rykas PO/capital source requires reconciliation; buying remains blocked."
+      : "Safe inventory capital remains unknown in Rykas; buying remains blocked.";
+  const resultingAction = recheck
+    ? "A fresh bounded Rykas truth read was queued. The owner click did not certify PO truth or set capital."
+      : `${blocker} No purchase or financial action occurred.`;
+
+  if (
+    decision.actionRequest &&
+    (decision.actionRequest.executionStartedAt ||
+      decision.actionRequest.executedAt ||
+      decision.actionRequest.verifiedAt ||
+      ["EXECUTING", "VERIFYING", "COMPLETED"].includes(
+        decision.actionRequest.state
+      ))
+  ) {
+    throw new Error(
+      "Rykas owner-data decisions cannot resolve an action request with execution evidence."
+    );
+  }
+
+  const resolved = await db.agentDecision.update({
+    where: { id: decision.id },
+    data: {
+      status: "RESOLVED",
+      selectedChoice: canonicalChoice,
+      resultingAction,
+      resolvedAt: now
+    }
+  });
+  if (decision.actionRequest) {
+    await db.agentActionRequest.update({
+      where: { id: decision.actionRequest.id },
+      data: { state: "CANCELLED", cancelledAt: now }
+    });
+  }
+
+  if (decision.originatingWorkItem?.state === "NEEDS_RYAN") {
+    await transitionAgentWorkItem(
+      userId,
+      decision.originatingWorkItem.id,
+      nextState,
+      {
+        blocker,
+        nextEligibleRunAt: recheck ? now : null
+      },
+      db
+    );
+    if (recheck) {
+      await db.agentWorkItem.update({
+        where: { id: decision.originatingWorkItem.id },
+        data: {
+          title: "Recheck authoritative Rykas PO and capital truth",
+          objective:
+            "Reread the existing Rykas SQL-backed PO and safe-capital truth after the owner updated its authoritative source.",
+          expectedValue:
+            "Determine whether buying is unblocked without copying or certifying financial facts in RyanOS.",
+          acceptanceCriteria:
+            "The fixed local adapter returns a schema-valid OPERATIONS_SNAPSHOT; buying remains blocked when PO truth is stale or safe inventory capital is unknown.",
+          agentRole: "RYKAS_TRUTH_READER",
+          actionCategory: "RESEARCH_READ_ONLY",
+          requiredCapability: RYKAS_READ_CAPABILITY,
+          sandboxPolicy: "READ_ONLY",
+          networkPolicy: "LOCALHOST_ONLY",
+          operationalContext: serializeRykasReadRequest(rykasRecheckRequest),
+          workspaceIdentifier: "rykas-repo",
+          repositoryIdentifier: null,
+          attemptCount: 0,
+          maxAttempts: 2,
+          resultSummary: null,
+          evidenceSummary: null,
+          executorIdentifier: null,
+          providerIdentifier: null,
+          externalThreadId: null,
+          externalRunId: null,
+          claimToken: null,
+          leaseExpiresAt: null,
+          heartbeatAt: null,
+          completedAt: null
+        }
+      });
+    }
+  } else if (recheck) {
+    await db.agentWorkItem.upsert({
+      where: {
+        projectId_idempotencyKey: {
+          projectId: decision.projectId,
+          idempotencyKey: `rykas-owner-recheck:${decision.id}`
+        }
+      },
+      update: {},
+      create: {
+        userId,
+        projectId: decision.projectId,
+        idempotencyKey: `rykas-owner-recheck:${decision.id}`,
+        title: "Recheck authoritative Rykas PO and capital truth",
+        objective:
+          "Reread the existing Rykas SQL-backed PO and safe-capital truth after the owner updated its authoritative source.",
+        expectedValue:
+          "Determine whether buying is unblocked without copying or certifying financial facts in RyanOS.",
+        acceptanceCriteria:
+          "The fixed local adapter returns a schema-valid OPERATIONS_SNAPSHOT; buying remains blocked when PO truth is stale or safe inventory capital is unknown.",
+        agentRole: "RYKAS_TRUTH_READER",
+        actionCategory: "RESEARCH_READ_ONLY",
+        requiredCapability: RYKAS_READ_CAPABILITY,
+        sandboxPolicy: "READ_ONLY",
+        networkPolicy: "LOCALHOST_ONLY",
+        operationalContext: serializeRykasReadRequest(rykasRecheckRequest),
+        workspaceIdentifier: "rykas-repo",
+        priority: "HIGH",
+        maxAttempts: 2,
+        nextEligibleRunAt: now
+      }
+    });
+  }
+
+  const parkedReviewAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  await db.agentProjectConfig.updateMany({
+    where: { userId, projectId: decision.projectId, profile: "RYKAS_GM" },
+    data: {
+      health: recheck ? "NEEDS_ATTENTION" : "BLOCKED",
+      currentBottleneck: recheck
+        ? "Fresh authoritative Rykas PO/capital truth recheck queued."
+        : blocker,
+      nextAgentReviewAt: recheck ? now : parkedReviewAt
+    }
+  });
+  await recordAgentEvent(
+    {
+      userId,
+      projectId: decision.projectId,
+      workItemId: decision.originatingWorkItemId,
+      runId: decision.originatingRunId,
+      decisionId: decision.id,
+      idempotencyKey: `rykas-truth-reconciliation-resolved:${decision.id}`,
+      type: "OWNER_DECISION_RESOLVED",
+      summary: `${decision.question} — ${canonicalChoice}`,
+      metadata: {
+        decisionKind: RYKAS_TRUTH_RECONCILIATION_KIND,
+        selectedChoice: canonicalChoice,
+        freshReadQueued: recheck,
+        ownerClickCertifiedTruth: false,
+        purchaseAuthorized: false,
+        purchaseExecuted: false
+      }
+    },
+    db
+  );
+  return resolved;
+}
+
+function loadDecisionForResolution(
+  userId: string,
+  decisionId: string,
+  db: PrismaClient
+) {
+  return db.agentDecision.findFirst({
+    where: { id: decisionId, userId },
+    include: { originatingWorkItem: true, actionRequest: true }
+  });
 }
 
 export async function resolveOwnerDecision(
@@ -198,10 +424,7 @@ export async function resolveOwnerDecision(
   selectedChoice: string,
   db: PrismaClient = prisma
 ) {
-  const decision = await db.agentDecision.findFirst({
-    where: { id: decisionId, userId },
-    include: { originatingWorkItem: true, actionRequest: true }
-  });
+  const decision = await loadDecisionForResolution(userId, decisionId, db);
   if (!decision) throw new Error("AgentDecision not found for this user.");
   if (decision.status !== "PENDING") return decision;
 
@@ -210,6 +433,14 @@ export async function resolveOwnerDecision(
     (choice) => choice.toUpperCase() === selectedChoice.trim().toUpperCase()
   );
   if (!canonicalChoice) throw new Error("Selected choice is not available for this decision.");
+  if (parseRykasTruthReconciliation(decision.context)) {
+    return resolveRykasTruthReconciliation(
+      userId,
+      decision,
+      canonicalChoice,
+      db
+    );
+  }
   const nextState = resolutionState(canonicalChoice);
   const signalCareConfig =
     decision.category === "SEND_EMAIL_OR_MESSAGE"
@@ -410,6 +641,114 @@ export async function resolveOwnerDecision(
     db
   );
   return resolved;
+}
+
+export const BROKEN_RYKAS_OWNER_DATA_DECISION_ID =
+  "cmtf0aqkm00evt20p5ucwikif";
+
+export async function recoverBrokenRykasOwnerDataDecision(
+  userId: string | undefined,
+  db: PrismaClient = prisma,
+  now = new Date()
+) {
+  const decision = await db.agentDecision.findFirst({
+    where: {
+      id: BROKEN_RYKAS_OWNER_DATA_DECISION_ID,
+      ...(userId ? { userId } : {})
+    },
+    include: { originatingWorkItem: true, actionRequest: true }
+  });
+  if (!decision) return { recovered: false, reason: "NOT_FOUND" as const };
+
+  const alreadyRecovered =
+    decision.status === "CANCELLED" &&
+    (!decision.originatingWorkItem ||
+      decision.originatingWorkItem.state !== "NEEDS_RYAN") &&
+    (!decision.actionRequest || decision.actionRequest.state === "CANCELLED");
+  if (alreadyRecovered)
+    return { recovered: false, reason: "ALREADY_RECOVERED" as const };
+
+  if (
+    decision.actionRequest &&
+    (decision.actionRequest.executionStartedAt ||
+      decision.actionRequest.executedAt ||
+      decision.actionRequest.verifiedAt ||
+      ["EXECUTING", "VERIFYING", "COMPLETED"].includes(
+        decision.actionRequest.state
+      ))
+  ) {
+    throw new Error(
+      "The broken Rykas decision has execution evidence and cannot be recovered automatically."
+    );
+  }
+
+  await db.agentDecision.update({
+    where: { id: decision.id },
+    data: {
+      status: "CANCELLED",
+      selectedChoice: null,
+      resultingAction:
+        "Superseded because its owner choices had no safe deterministic mapping. No authorization was recorded and no action occurred.",
+      resolvedAt: now
+    }
+  });
+  if (decision.actionRequest && decision.actionRequest.state !== "CANCELLED") {
+    await db.agentActionRequest.update({
+      where: { id: decision.actionRequest.id },
+      data: {
+        state: "CANCELLED",
+        decisionId: null,
+        cancelledAt: now
+      }
+    });
+  }
+  if (decision.originatingWorkItem?.state === "NEEDS_RYAN") {
+    await transitionAgentWorkItem(
+      decision.userId,
+      decision.originatingWorkItem.id,
+      "PARKED",
+      {
+        blocker:
+          "Superseded broken Rykas PO/capital owner-data request; awaiting a fresh typed RyanOS review.",
+        nextEligibleRunAt: null
+      },
+      db
+    );
+  }
+  await db.agentProjectConfig.updateMany({
+    where: {
+      userId: decision.userId,
+      projectId: decision.projectId,
+      profile: "RYKAS_GM"
+    },
+    data: {
+      health: "NEEDS_ATTENTION",
+      currentBottleneck:
+        "Broken PO/capital owner-data decision superseded; fresh Rykas review scheduled.",
+      nextAgentReviewAt: now
+    }
+  });
+  await recordAgentEvent(
+    {
+      userId: decision.userId,
+      projectId: decision.projectId,
+      workItemId: decision.originatingWorkItemId,
+      runId: decision.originatingRunId,
+      decisionId: decision.id,
+      idempotencyKey: `rykas-broken-decision-recovered:${decision.id}`,
+      type: "RYKAS_DATA_BLOCKED",
+      summary:
+        "Superseded the unsupported Rykas owner-data decision and scheduled a fresh review; no authorization or external action occurred.",
+      metadata: {
+        cancelledDecisionId: decision.id,
+        authorizationRecorded: false,
+        actionExecuted: false,
+        purchaseExecuted: false
+      }
+    },
+    db
+  );
+  return { recovered: true, reason: "RECOVERED" as const };
 }
 
 export async function setAgentProjectPaused(

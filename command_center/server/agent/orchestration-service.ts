@@ -33,7 +33,11 @@ import {
   signalCareWebResearchEnabled,
   type SignalCareResearchClient
 } from "@/server/agent/signalcare-research-service";
-import { createOwnerDecision, transitionAgentWorkItem } from "@/server/agent/work-service";
+import {
+  createOwnerDecision,
+  recoverBrokenRykasOwnerDataDecision,
+  transitionAgentWorkItem
+} from "@/server/agent/work-service";
 
 const reviewIntervalMs = 15 * 60 * 1000;
 const retryDelayMs = 5 * 60 * 1000;
@@ -468,7 +472,11 @@ async function processClaimedProject(
           config.userId,
           proposedAction.id,
           "NEEDS_RYAN",
-          { blocker: "Owner authorization required before external execution." },
+          {
+            blocker: plan.ownerDecision.ownerDataRequest
+              ? "Owner must update the authoritative Rykas source before a fresh read; no authorization is requested."
+              : "Owner authorization required before external execution."
+          },
           db
         );
       }
@@ -1010,6 +1018,7 @@ export async function runAgentOrchestrationCycle(
   } = {}
 ): Promise<AgentCycleResult> {
   const db = options.db ?? prisma;
+  await recoverBrokenRykasOwnerDataDecision(options.userId, db, now);
   const maxModelInvocations = Math.max(0, Number(process.env.AGENT_MAX_MODEL_INVOCATIONS_PER_CYCLE ?? 3));
   let modelInvocations = 0;
   const dueConfigs = await db.agentProjectConfig.findMany({

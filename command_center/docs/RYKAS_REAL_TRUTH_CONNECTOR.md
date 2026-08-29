@@ -34,6 +34,16 @@ Rykas owns all economic values. The connector may rename and bound fields but mu
 
 The audited API does not expose an authoritative listing-work backlog or a complete portfolio-level inventory exception queue. Therefore this phase does not create `rykas.listing.backlog`, and it does not claim that the bounded capital/PO summary is a full inventory system. Item inventory is returned only where the existing detail endpoint provides it.
 
+### Existing owner-maintained PO and capital surfaces
+
+RyanOS does not store or certify Rykas cash, commitments, or buying budget. The audited owner-maintained sources are already in Rykas:
+
+- PO rows are loaded through the controlled procurement import into `manual.purchase_order`; the current staged read is `staging.purchase_orders`.
+- PO certification is recorded in `manual.po_ledger_certification` by the existing authenticated Rykas Sourcing Command Center at `/sourcing` (`POST /api/sourcing/po-certification`). `CONFIRM NO OPEN POS` is valid only when the ledger is genuinely empty. When commitments exist, the owner loads the controlled `inputs/command_center/purchase_orders.example.tsv` shape and certifies `CURRENT_OPEN_POS_LOADED` through the existing workflow.
+- Owner cash inputs remain in `Rykas_Command_Center_CURRENT.xlsx`, Owner Health sheet: `Balance as of` and `Operating bank / checking balance`. The existing `tools/command_center/sync_owner_controls.py` and owner-health refresh persist those controlled inputs and calculate safe inventory capital. Safe inventory capital is not entered in RyanOS.
+
+The typed `RYKAS_TRUTH_RECONCILIATION` NEED RYAN card therefore asks the owner to update those sources and request a read-only recheck. Its button is not certification evidence. Only a subsequent schema-valid `RYKAS_OPERATIONS_READ` result may clear the blocker.
+
 ## Connector path
 
 Chosen path:

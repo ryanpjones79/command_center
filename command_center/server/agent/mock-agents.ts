@@ -5,6 +5,10 @@ import type {
   ChiefPortfolioAgent,
   ProjectManagerAgent
 } from "@/server/agent/contracts";
+import {
+  extractRykasTruthReconciliation,
+  rykasTruthReconciliationWorkPlan
+} from "@/lib/rykas-owner-data-contract";
 
 const staleAfterMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -105,7 +109,9 @@ const plansByProfile: Record<string, AgentWorkPlan> = {
 };
 
 export class DeterministicProjectManagerAgent implements ProjectManagerAgent {
-  async chooseNextWork(context: Parameters<ProjectManagerAgent["chooseNextWork"]>[0]) {
+  async chooseNextWork(
+    context: Parameters<ProjectManagerAgent["chooseNextWork"]>[0]
+  ): Promise<AgentWorkPlan> {
     if (context.operatingMode === "LIVE_INTERNAL" && context.toolEvidence?.length) {
       const output = context.toolEvidence[0]?.output as Record<string, unknown>;
       if (context.profile === "SIGNALCARE_GM") {
@@ -115,6 +121,12 @@ export class DeterministicProjectManagerAgent implements ProjectManagerAgent {
         return { ...plansByProfile.SIGNALCARE_GM, title: `Resolve qualification evidence for ${target.name}`, objective: `Resolve the highest-value missing or stale acquisition evidence for ${target.name} without sending outreach.`, ownerDecisionAfterQa: undefined };
       }
       if (context.profile === "RYKAS_GM") {
+        const ownerDataRequest = extractRykasTruthReconciliation(
+          context.toolEvidence
+        );
+        if (ownerDataRequest) {
+          return rykasTruthReconciliationWorkPlan(ownerDataRequest);
+        }
         const truth = output.realTruth as { stale?: boolean; purchaseExecuted?: boolean; data?: { purchaseCandidates?: Array<Record<string, unknown>>; opportunities?: Array<Record<string, unknown>>; blockers?: Array<{ summary?: string }> } } | null | undefined;
         const candidate = truth?.data?.purchaseCandidates?.[0];
         if (candidate && truth?.stale === false && truth.purchaseExecuted === false) {

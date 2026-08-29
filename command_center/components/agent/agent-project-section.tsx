@@ -6,6 +6,11 @@ import {
 } from "@/app/agent-hq/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  parseRykasTruthReconciliation,
+  RYKAS_OWNER_DATA_SOURCE_INSTRUCTIONS,
+  rykasOwnerChoiceLabel
+} from "@/lib/rykas-owner-data-contract";
 import { parseDecisionChoices } from "@/server/agent/hq-service";
 
 type AgentProjectSectionProps = {
@@ -21,6 +26,33 @@ function formatDate(value: Date | null) {
   return value
     ? value.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
     : "Not yet";
+}
+
+function RykasOwnerDataContext({ context }: { context: string }) {
+  const data = parseRykasTruthReconciliation(context);
+  if (!data) return <p className="mt-1 text-xs text-muted-foreground">{context}</p>;
+  return (
+    <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+      <p className="font-semibold text-foreground">Rykas buying blocked</p>
+      <div>
+        <p className="font-medium text-foreground">PO ledger</p>
+        <p>Observed commitments: {data.openCommitments ?? "Unknown"}</p>
+        <p>Ledger status: {data.poLedgerStatus}</p>
+        <p>Truth current: {data.poTruthCurrent ? "Yes" : "No"}</p>
+        <p>
+          Last certified: {data.poCertifiedAt ? new Date(data.poCertifiedAt).toLocaleString() : "Unknown"}
+        </p>
+      </div>
+      <div>
+        <p className="font-medium text-foreground">Safe inventory capital</p>
+        <p>{data.safeInventoryCapital === null ? "Unknown" : data.safeInventoryCapital.toLocaleString("en-US", { style: "currency", currency: "USD" })}</p>
+      </div>
+      <div>
+        <p className="font-medium text-foreground">What Ryan needs to do</p>
+        <p>{RYKAS_OWNER_DATA_SOURCE_INSTRUCTIONS}</p>
+      </div>
+    </div>
+  );
 }
 
 export function AgentProjectSection({ projectId, config }: AgentProjectSectionProps) {
@@ -74,13 +106,13 @@ export function AgentProjectSection({ projectId, config }: AgentProjectSectionPr
             {pendingDecisions.map((decision) => (
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] p-3" key={decision.id}>
                 <p className="text-sm font-medium">{decision.question}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{decision.context}</p>
+                <RykasOwnerDataContext context={decision.context} />
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {parseDecisionChoices(decision.availableChoices).map((choice) => (
                     <form action={resolveAgentDecisionAction} key={choice}>
                       <input name="decisionId" type="hidden" value={decision.id} />
                       <input name="choice" type="hidden" value={choice} />
-                      <Button size="sm" variant={choice === decision.recommendedChoice ? "default" : "outline"} type="submit">{choice}</Button>
+                      <Button size="sm" variant={choice === decision.recommendedChoice ? "default" : "outline"} type="submit">{rykasOwnerChoiceLabel(choice)}</Button>
                     </form>
                   ))}
                 </div>
