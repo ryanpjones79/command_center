@@ -21,8 +21,10 @@ import { collectProjectEvidence, defaultToolsForProfile } from "@/server/agent/p
 import {
   executeSignalCareHostedResearch,
   OpenAiSignalCareResearchClient,
+  parseSignalCareResearchContext,
   recoverFailedSignalCareProspectResearch,
   reclassifySignalCareProspectResearch,
+  serializeSignalCareResearchContext,
   signalCareWebResearchEnabled,
   type SignalCareResearchClient
 } from "@/server/agent/signalcare-research-service";
@@ -66,10 +68,70 @@ function addMs(value: Date, milliseconds: number) {
   return new Date(value.getTime() + milliseconds);
 }
 
+function nextReviewAt(now: Date, requestedMinutes?: number) {
+  const minutes = Math.min(
+    10080,
+    Math.max(5, Math.floor(requestedMinutes ?? reviewIntervalMs / 60000))
+  );
+  return addMs(now, minutes * 60 * 1000);
+}
+
+function assertOwnerDecisionConsistency(plan: AgentWorkPlan) {
+  if (plan.ownerNeeded === true && !plan.ownerDecision) {
+    throw new Error("ownerNeeded=true requires a structured ownerDecision.");
+  }
+  if (plan.ownerNeeded !== true && plan.ownerDecision) {
+    throw new Error("ownerNeeded=false requires ownerDecision=null.");
+  }
+}
+
+async function recordModelPmDecision(
+  config: AgentProjectConfig,
+  dueAnchor: Date,
+  plan: AgentWorkPlan,
+  db: PrismaClient
+) {
+  return recordAgentEvent(
+    {
+      userId: config.userId,
+      projectId: config.projectId,
+      idempotencyKey: `pm-decision:${config.projectId}:${dueAnchor.toISOString()}`,
+      type: "PM_DECISION_RECORDED",
+      summary: `Model PM selected ${plan.disposition ?? "CREATE_WORK"}: ${plan.title}`,
+      metadata: {
+        disposition: plan.disposition ?? "CREATE_WORK",
+        currentBottleneck: plan.plannedBottleneck,
+        evidence: plan.evidence ?? null,
+        title: plan.title,
+        objective: plan.objective,
+        expectedValue: plan.expectedValue,
+        requiredCapability: plan.requiredCapability ?? null,
+        researchMode: plan.researchMode ?? null,
+        targetProspect: plan.targetProspect ?? null,
+        nextReviewMinutes: plan.nextReviewMinutes ?? null,
+        ownerNeeded: plan.ownerNeeded ?? false,
+        ownerDecisionSummary: plan.ownerDecision
+          ? {
+              category: plan.ownerDecision.category,
+              question: plan.ownerDecision.question,
+              recommendedChoice: plan.ownerDecision.recommendedChoice,
+              availableChoices: plan.ownerDecision.availableChoices
+            }
+          : null
+      }
+    },
+    db
+  );
+}
+
 function planFromPersistedWork(
   workItem: AgentWorkItem,
   currentBottleneck: string | null
 ): AgentWorkPlan {
+  const signalCareContext =
+    workItem.requiredCapability === "SIGNALCARE_PUBLIC_WEB_RESEARCH"
+      ? parseSignalCareResearchContext(workItem.operationalContext)
+      : null;
   return {
     disposition: "CREATE_WORK",
     title: workItem.title,
@@ -86,7 +148,9 @@ function planFromPersistedWork(
     sandboxPolicy: workItem.sandboxPolicy as AgentWorkPlan["sandboxPolicy"],
     networkPolicy: workItem.networkPolicy as AgentWorkPlan["networkPolicy"],
     operationalContext: workItem.operationalContext ?? undefined,
-    dependsOnWorkItemId: workItem.dependsOnWorkItemId ?? undefined
+    dependsOnWorkItemId: workItem.dependsOnWorkItemId ?? undefined,
+    researchMode: signalCareContext?.researchMode ?? null,
+    targetProspect: signalCareContext?.targetProspect ?? null
   };
 }
 
@@ -210,12 +274,94 @@ async function processClaimedProject(
         .then((items) => items.map((item) => item.title))
     });
 
+    assertOwnerDecisionConsistency(plan);
+    if (services.projectManager.adapterKind === "MODEL") {
+      await recordModelPmDecision(config, dueAnchor, plan, db);
+    }
+
+    if (plan.ownerNeeded === true && plan.ownerDecision) {
+      let proposedAction = await db.agentWorkItem.upsert({
+        where: {
+          projectId_idempotencyKey: {
+            projectId: config.projectId,
+            idempotencyKey: `pm-owner-work:${config.projectId}:${dueAnchor.toISOString()}`
+          }
+        },
+        update: {},
+        create: {
+          userId: config.userId,
+          projectId: config.projectId,
+          idempotencyKey: `pm-owner-work:${config.projectId}:${dueAnchor.toISOString()}`,
+          title: plan.title,
+          objective: plan.objective,
+          expectedValue: plan.expectedValue,
+          acceptanceCriteria: plan.acceptanceCriteria,
+          agentRole: plan.agentRole,
+          actionCategory: plan.ownerDecision.category,
+          requiredCapability: plan.requiredCapability ?? "REPOSITORY_READ",
+          sandboxPolicy: "READ_ONLY",
+          networkPolicy: "OFF",
+          operationalContext: plan.operationalContext,
+          priority: plan.priority,
+          maxAttempts: plan.maxAttempts
+        }
+      });
+      if (proposedAction.state === "QUEUED") {
+        proposedAction = await transitionAgentWorkItem(
+          config.userId,
+          proposedAction.id,
+          "PLANNING",
+          {},
+          db
+        );
+      }
+      const decision = await createOwnerDecision(
+        {
+          userId: config.userId,
+          projectId: config.projectId,
+          workItemId: proposedAction.id,
+          idempotencyKey: `pm-owner-decision:${config.projectId}:${dueAnchor.toISOString()}`,
+          profile: config.profile,
+          plan: plan.ownerDecision
+        },
+        db
+      );
+      if (proposedAction.state === "PLANNING") {
+        await transitionAgentWorkItem(
+          config.userId,
+          proposedAction.id,
+          "NEEDS_RYAN",
+          { blocker: "Owner authorization required before external execution." },
+          db
+        );
+      }
+      await releaseProjectClaim(
+        config.id,
+        leaseToken,
+        now,
+        {
+          health: "NEEDS_ATTENTION",
+          currentBottleneck: plan.plannedBottleneck,
+          nextAgentReviewAt: nextReviewAt(now, plan.nextReviewMinutes)
+        },
+        db
+      );
+      return {
+        ...baseResult,
+        outcome: "NEEDS_RYAN",
+        workItemId: proposedAction.id,
+        decisionId: decision.id,
+        detail: decision.question
+      };
+    }
+
     if (plan.disposition === "WAIT" || plan.disposition === "PARK") {
       await recordAgentEvent({ userId: config.userId, projectId: config.projectId,
         idempotencyKey: `pm-${plan.disposition.toLowerCase()}:${config.projectId}:${dueAnchor.toISOString()}`,
         type: plan.disposition === "WAIT" ? "WORK_WAITING" : "WORK_PARKED",
         summary: plan.disposition === "WAIT" ? "PM found no valuable bounded action and chose to wait." : "PM deliberately parked low-value work." }, db);
-      await releaseProjectClaim(config.id, leaseToken, now, { health: plan.disposition === "WAIT" ? "ON_TRACK" : "NEEDS_ATTENTION", currentBottleneck: plan.plannedBottleneck }, db);
+      await releaseProjectClaim(config.id, leaseToken, now, { health: plan.disposition === "WAIT" ? "ON_TRACK" : "NEEDS_ATTENTION", currentBottleneck: plan.plannedBottleneck,
+        nextAgentReviewAt: nextReviewAt(now, plan.nextReviewMinutes) }, db);
       return { ...baseResult, outcome: plan.disposition === "WAIT" ? "WAITING" : "PARKED", detail: "No make-work item was created." };
     }
 
@@ -240,7 +386,14 @@ async function processClaimedProject(
         requiredCapability: plannedCapability,
         sandboxPolicy: plan.sandboxPolicy ?? (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK" ? "WORKSPACE_WRITE" : "READ_ONLY"),
         networkPolicy: plan.networkPolicy ?? "OFF",
-        operationalContext: plan.operationalContext,
+        operationalContext:
+          plannedCapability === "SIGNALCARE_PUBLIC_WEB_RESEARCH"
+            ? serializeSignalCareResearchContext({
+                researchMode: plan.researchMode ?? "DISCOVER_PROSPECTS",
+                targetProspect: plan.targetProspect,
+                instructions: plan.operationalContext
+              })
+            : plan.operationalContext,
         dependsOnWorkItemId: plan.dependsOnWorkItemId,
         priority: plan.priority,
         maxAttempts: plan.maxAttempts,
@@ -251,14 +404,6 @@ async function processClaimedProject(
       }
     });
 
-    if (process.env.FEATURE_AGENT_MODELS === "true") {
-      await db.agentRun.upsert({ where: { idempotencyKey: `pm-model:${workItem.id}` }, update: {}, create: {
-        userId: config.userId, projectId: config.projectId, workItemId: workItem.id, idempotencyKey: `pm-model:${workItem.id}`,
-        role: "PROJECT_MANAGER", runType: "MODEL_PM", status: "SUCCEEDED", providerIdentifier: "openai",
-        modelIdentifier: process.env.AGENT_PM_MODEL ?? "gpt-5-mini", operationalResultSummary: `PM selected ${plan.disposition ?? "CREATE_WORK"}: ${plan.title}`,
-        structuredOutcome: JSON.stringify(plan), completedAt: now
-      } });
-    }
   }
 
   if (!["QUEUED", "RETRY", "PLANNING", "RUNNING", "VERIFYING"].includes(workItem.state)) {
@@ -290,7 +435,9 @@ async function processClaimedProject(
       if (research.outcome === "COMPLETED") {
         await releaseProjectClaim(config.id, leaseToken, now, { health: "ON_TRACK", currentBottleneck: plan.plannedBottleneck, nextAgentReviewAt: now }, db);
         return { ...baseResult, outcome: "COMPLETED", workItemId: workItem.id,
-          detail: research.skippedBecauseProspectsExist ? "Existing prospects suppressed repeated discovery; PM is due to reevaluate." : `${research.created.length} evidence-backed prospect(s) entered the pipeline; PM is due to reevaluate.` };
+          detail: research.qualifiedProspect
+            ? `${research.qualifiedProspect} advanced to ${research.pipelineStatus}; PM is due to reevaluate.`
+            : research.skippedBecauseProspectsExist ? "Existing prospects suppressed repeated discovery; PM is due to reevaluate." : `${research.created.length} evidence-backed prospect(s) entered the pipeline; PM is due to reevaluate.` };
       }
       await releaseProjectClaim(config.id, leaseToken, now, {
         health: research.outcome === "FAILED" ? "BLOCKED" : "NEEDS_ATTENTION",
@@ -682,7 +829,7 @@ export async function runAgentOrchestrationCycle(
     const dueAnchor = config.nextAgentReviewAt ?? config.createdAt;
     try {
       const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
-      const dailyModelRuns = process.env.FEATURE_AGENT_MODELS === "true" ? await db.agentRun.count({ where: { projectId: config.projectId, runType: "MODEL_PM", startedAt: { gte: startOfDay } } }) : 0;
+      const dailyModelRuns = process.env.FEATURE_AGENT_MODELS === "true" ? await db.agentEvent.count({ where: { projectId: config.projectId, type: "PM_DECISION_RECORDED", createdAt: { gte: startOfDay } } }) : 0;
       const dailyLimit = Math.max(0, Number(process.env.AGENT_MAX_MODEL_RUNS_PER_PROJECT_DAY ?? 8));
       const services = options.services ?? {
         ...defaultServices,

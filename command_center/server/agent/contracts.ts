@@ -22,14 +22,25 @@ export type ChiefPortfolioAssessment = {
   wipViolationProjectIds: string[];
   projectsNeedingPmReview: string[];
   attentionSummary: string;
-  prioritizationRecommendations?: Array<{ projectId: string; action: "PRIORITIZE" | "DEPRIORITIZE" | "KEEP"; rationale: string }>;
+  prioritizationRecommendations?: Array<{
+    projectId: string;
+    action: "PRIORITIZE" | "DEPRIORITIZE" | "KEEP";
+    rationale: string;
+  }>;
   recommendedParkProjectIds?: string[];
   recommendedResumeProjectIds?: string[];
-  ownerEscalations?: Array<{ projectId: string; question: string; rationale: string }>;
+  ownerEscalations?: Array<{
+    projectId: string;
+    question: string;
+    rationale: string;
+  }>;
 };
 
 export interface ChiefPortfolioAgent {
-  inspectPortfolio(projects: PortfolioProjectSnapshot[], now: Date): Promise<ChiefPortfolioAssessment>;
+  inspectPortfolio(
+    projects: PortfolioProjectSnapshot[],
+    now: Date
+  ): Promise<ChiefPortfolioAssessment>;
 }
 
 export type OwnerDecisionPlan = {
@@ -64,6 +75,12 @@ export type AgentWorkPlan = {
   networkPolicy?: "OFF" | "ALLOWLIST";
   operationalContext?: string;
   dependsOnWorkItemId?: string;
+  evidence?: string;
+  nextReviewMinutes?: number;
+  ownerNeeded?: boolean;
+  ownerDecision?: OwnerDecisionPlan | null;
+  researchMode?: "DISCOVER_PROSPECTS" | "QUALIFY_EXISTING_PROSPECT" | null;
+  targetProspect?: string | null;
   ownerDecisionAfterQa?: OwnerDecisionPlan;
 };
 
@@ -83,6 +100,7 @@ export type ProjectManagerContext = {
 };
 
 export interface ProjectManagerAgent {
+  readonly adapterKind?: "MODEL" | "DETERMINISTIC";
   chooseNextWork(context: ProjectManagerContext): Promise<AgentWorkPlan>;
 }
 

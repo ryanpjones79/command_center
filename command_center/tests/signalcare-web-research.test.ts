@@ -13,10 +13,16 @@ import {
 } from "vitest";
 import { SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
 import { markAgentWorkIntegrated } from "@/server/agent/integration-service";
+import {
+  ModelProjectManagerAgent,
+  pmOutputSchema,
+  type StructuredModelClient
+} from "@/server/agent/model-agents";
 import type { OrchestrationServices } from "@/server/agent/orchestration-service";
 import { runAgentOrchestrationCycle } from "@/server/agent/orchestration-service";
 import { executeProjectTool } from "@/server/agent/project-tools";
 import { claimRunnerWork } from "@/server/agent/runner-service";
+import { resolveOwnerDecision } from "@/server/agent/work-service";
 import {
   canonicalizeSignalCareSourceUrl,
   executeSignalCareHostedResearch,
@@ -25,8 +31,12 @@ import {
   OpenAiSignalCareResearchClient,
   recoverFailedSignalCareProspectResearch,
   reclassifySignalCareProspectResearch,
+  retainCitedSignalCareQualification,
   retainCitedSignalCareEvidence,
+  scheduleSignalCareQualificationReviewOnce,
+  serializeSignalCareResearchContext,
   signalCareResearchCandidateSchema,
+  type SignalCareQualification,
   type SignalCareResearchCandidate,
   type SignalCareResearchClient,
   type SignalCareProviderSource
@@ -47,6 +57,8 @@ const environmentKeys = [
   "FEATURE_SIGNALCARE_WEB_RESEARCH",
   "FEATURE_RUNNER_EXECUTION",
   "AGENT_SIGNALCARE_RESEARCH_MAX_PROSPECTS",
+  "AGENT_MAX_MODEL_INVOCATIONS_PER_CYCLE",
+  "AGENT_MAX_MODEL_RUNS_PER_PROJECT_DAY",
   "OPENAI_API_KEY"
 ] as const;
 const originalEnvironment = Object.fromEntries(
@@ -96,6 +108,76 @@ function fakeResearchClient(
   return { discover };
 }
 
+function qualification(
+  organizationName: string,
+  overrides: Partial<SignalCareQualification> = {}
+): SignalCareQualification {
+  const source = "https://existing-dental.example/locations";
+  return {
+    organizationName,
+    likelyStakeholderRole: "Operations leader",
+    verifiedPublicFacts: [
+      { fact: "The official site lists four locations.", sourceUrls: [source] }
+    ],
+    verifiedFitEvidence: [
+      {
+        fact: "The official services page lists multi-site scheduling services.",
+        sourceUrls: [source]
+      }
+    ],
+    hypothesis:
+      "Cross-location reporting may be a useful conversation topic; no current problem is asserted.",
+    recommendedEntryOffer: "Operational analytics diagnostic",
+    conversationAngle: "Compare scheduling visibility across locations.",
+    draftOutreachLanguage:
+      "Would a short conversation about multi-location scheduling visibility be useful?",
+    evidenceAgainstPursuit: "No public evidence confirms an urgent problem.",
+    confidence: "HIGH",
+    recommendation: "ADVANCE",
+    sourceUrls: [source],
+    qualificationSummary:
+      "Public evidence supports an internal outreach-ready package.",
+    nextResearchStep: null,
+    ...overrides
+  };
+}
+
+function modelOutput(
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    disposition: "WAIT",
+    currentBottleneck: "No valuable action is currently available.",
+    evidence: "The bounded project snapshot contains no actionable gap.",
+    title: "Wait for useful evidence",
+    objective: "Avoid make-work.",
+    expectedValue: "Preserve portfolio attention.",
+    acceptanceCriteria: "No duplicate work is created.",
+    agentRole: "SIGNALCARE_GM",
+    actionCategory: "RESEARCH_READ_ONLY",
+    priority: "MEDIUM",
+    maxAttempts: 1,
+    requiredCapability: "REPOSITORY_READ",
+    sandboxPolicy: "READ_ONLY",
+    networkPolicy: "OFF",
+    operationalContext: "Wait for a material change.",
+    researchMode: null,
+    targetProspect: null,
+    nextReviewMinutes: 90,
+    ownerNeeded: false,
+    ownerDecision: null,
+    ...overrides
+  };
+}
+
+function modelClient(output: Record<string, unknown>): StructuredModelClient {
+  return {
+    async generate<T>(input: { validator: { parse(value: unknown): T } }) {
+      return input.validator.parse(output);
+    }
+  } as StructuredModelClient;
+}
+
 function providerSource(url: string): SignalCareProviderSource {
   return {
     canonicalUrl: canonicalizeSignalCareSourceUrl(url),
@@ -141,6 +223,28 @@ function waitingServices(
   return { services, chooseNextWork };
 }
 
+function modelServices(
+  plan: Awaited<ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>>,
+  researchClient: SignalCareResearchClient = fakeResearchClient([candidate(1)])
+) {
+  const chooseNextWork = vi.fn(async () => plan);
+  const services: OrchestrationServices = {
+    projectManager: { adapterKind: "MODEL", chooseNextWork },
+    worker: {
+      async execute() {
+        throw new Error("Model PM test work must remain bounded.");
+      }
+    },
+    verifier: {
+      async verify() {
+        throw new Error("Model PM test work must remain bounded.");
+      }
+    },
+    signalCareResearchClient: researchClient
+  };
+  return { services, chooseNextWork };
+}
+
 async function createWork(
   key: string,
   projectId = signalProjectId,
@@ -149,6 +253,7 @@ async function createWork(
     objective: string;
     requiredCapability: string;
     workspaceIdentifier: string | null;
+    operationalContext: string;
   }> = {}
 ) {
   return db.agentWorkItem.create({
@@ -175,6 +280,7 @@ async function createWork(
         data.workspaceIdentifier === undefined
           ? null
           : data.workspaceIdentifier,
+      operationalContext: data.operationalContext,
       priority: "HIGH",
       maxAttempts: 2
     }
@@ -252,6 +358,10 @@ beforeEach(async () => {
   process.env.FEATURE_RUNNER_EXECUTION = "true";
   process.env.OPENAI_API_KEY = "test-key";
   delete process.env.AGENT_SIGNALCARE_RESEARCH_MAX_PROSPECTS;
+  delete process.env.AGENT_MAX_MODEL_INVOCATIONS_PER_CYCLE;
+  delete process.env.AGENT_MAX_MODEL_RUNS_PER_PROJECT_DAY;
+  await db.agentActionRequest.deleteMany({ where: { userId } });
+  await db.agentDecision.deleteMany({ where: { userId } });
   await db.agentEvent.deleteMany({ where: { userId } });
   await db.agentRun.deleteMany({ where: { userId } });
   await db.agentWorkItem.deleteMany({ where: { userId } });
@@ -1079,5 +1189,456 @@ describe("SignalCare hosted public-web research", () => {
     expect(second.projects[0]?.outcome).toBe("WAITING");
     expect(observedProspectCounts).toEqual([0, 1]);
     expect(await db.agentWorkItem.count({ where: { userId } })).toBe(1);
+  });
+
+  it.each(["CREATE_WORK", "WAIT", "PARK"] as const)(
+    "durably records a model PM %s decision",
+    async (disposition) => {
+      const now = new Date("2026-08-29T13:00:00.000Z");
+      const plan = {
+        ...modelOutput({ disposition }),
+        disposition,
+        plannedBottleneck: "Pipeline evidence was reviewed."
+      } as Awaited<
+        ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+      >;
+      const { services } = modelServices(plan);
+
+      await runAgentOrchestrationCycle(now, {
+        userId,
+        projectIds: [signalProjectId],
+        db,
+        services
+      });
+
+      const event = await db.agentEvent.findFirstOrThrow({
+        where: { projectId: signalProjectId, type: "PM_DECISION_RECORDED" }
+      });
+      expect(JSON.parse(event.metadata ?? "{}")).toMatchObject({
+        disposition,
+        currentBottleneck: "Pipeline evidence was reviewed.",
+        evidence: "The bounded project snapshot contains no actionable gap.",
+        nextReviewMinutes: 90,
+        ownerNeeded: false
+      });
+    }
+  );
+
+  it("counts a WAIT review toward the daily model invocation limit", async () => {
+    const now = new Date();
+    const { services } = modelServices({
+      ...modelOutput(),
+      disposition: "WAIT",
+      plannedBottleneck: "Wait for new evidence."
+    } as Awaited<
+      ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+    >);
+    await runAgentOrchestrationCycle(now, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+    process.env.AGENT_MAX_MODEL_RUNS_PER_PROJECT_DAY = "1";
+    await db.agentProjectConfig.update({
+      where: { projectId: signalProjectId },
+      data: {
+        nextAgentReviewAt: now,
+        leaseToken: null,
+        leaseExpiresAt: null
+      }
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await runAgentOrchestrationCycle(new Date(now.getTime() + 1), {
+      userId,
+      projectIds: [signalProjectId],
+      db
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("preserves PM control fields and rejects inconsistent owner proposals", async () => {
+    const ownerDecision = {
+      category: "SEND_EMAIL_OR_MESSAGE",
+      question: "Approve first outreach to Existing Dental?",
+      context: "Use only the bounded internal outreach package.",
+      recommendedChoice: "APPROVE",
+      availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+      expectedUpside: "Open a qualified customer conversation.",
+      risk: "External communication represents Ryan."
+    };
+    const output = modelOutput({
+      ownerNeeded: true,
+      ownerDecision,
+      evidence: "The prospect is outreach-ready.",
+      nextReviewMinutes: 180
+    });
+    const agent = new ModelProjectManagerAgent(modelClient(output));
+    const plan = await agent.chooseNextWork({
+      profile: "SIGNALCARE_GM",
+      projectId: signalProjectId,
+      projectName: "SignalCare",
+      objective: "Generate profitable customer engagements.",
+      primaryKpi: null,
+      currentBottleneck: "First outreach approval",
+      instructions: "Advance real acquisition work.",
+      autonomyPolicy: "Internal work only.",
+      escalationPolicy: "External outreach needs Ryan.",
+      existingWorkTitles: [],
+      toolEvidence: []
+    });
+    expect(plan).toMatchObject({
+      evidence: "The prospect is outreach-ready.",
+      nextReviewMinutes: 180,
+      ownerNeeded: true,
+      ownerDecision
+    });
+    expect(
+      pmOutputSchema.safeParse({
+        ...output,
+        ownerNeeded: true,
+        ownerDecision: null
+      }).success
+    ).toBe(false);
+    expect(
+      pmOutputSchema.safeParse({
+        ...output,
+        ownerNeeded: false,
+        ownerDecision
+      }).success
+    ).toBe(false);
+  });
+
+  it("suppresses repeated discovery but permits bounded qualification of an existing prospect", async () => {
+    const toolEvidence = [
+      {
+        toolId: "signalcare.pipeline.snapshot",
+        summary: "Current pipeline",
+        output: {
+          prospects: [{ name: "Existing Dental", stage: "queued" }],
+          openOwnerDecisions: 0
+        }
+      }
+    ];
+    const context = {
+      profile: "SIGNALCARE_GM",
+      projectId: signalProjectId,
+      projectName: "SignalCare",
+      objective: "Generate profitable customer engagements.",
+      primaryKpi: null,
+      currentBottleneck: null,
+      instructions: "Advance acquisition.",
+      autonomyPolicy: "Internal work only.",
+      escalationPolicy: "External outreach needs Ryan.",
+      existingWorkTitles: [],
+      toolEvidence
+    };
+    const discovery = new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          researchMode: "DISCOVER_PROSPECTS"
+        })
+      )
+    );
+    expect(await discovery.chooseNextWork(context)).toMatchObject({
+      disposition: "WAIT",
+      researchMode: "DISCOVER_PROSPECTS"
+    });
+
+    const qualify = new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          researchMode: "QUALIFY_EXISTING_PROSPECT",
+          targetProspect: "Existing Dental"
+        })
+      )
+    );
+    expect(await qualify.chooseNextWork(context)).toMatchObject({
+      disposition: "CREATE_WORK",
+      researchMode: "QUALIFY_EXISTING_PROSPECT",
+      targetProspect: "Existing Dental"
+    });
+  });
+
+  it("requires an existing prospect target and provider-backed qualification provenance", async () => {
+    const work = await createWork("missing-qualification-target", signalProjectId, {
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Missing Dental"
+      })
+    });
+    const qualify = vi.fn().mockResolvedValue(qualification("Missing Dental"));
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      { discover: vi.fn(), qualify },
+      db
+    );
+    expect(result.outcome).toBe("RETRY");
+    expect(qualify).not.toHaveBeenCalled();
+
+    const unbacked = qualification("Existing Dental");
+    expect(() =>
+      retainCitedSignalCareQualification(unbacked, [])
+    ).toThrow("inadequate provider provenance");
+  });
+
+  it.each([
+    ["ADVANCE", "HIGH", "outreach_ready"],
+    ["PASS", "MEDIUM", "passed"]
+  ] as const)(
+    "updates one existing prospect after %s qualification",
+    async (recommendation, confidence, expectedStatus) => {
+      const now = new Date("2026-08-29T13:30:00.000Z");
+      const prospect = await db.queueItem.create({
+        data: {
+          userId,
+          title: "Qualify Existing Dental",
+          lane: "signalcare",
+          recipient: "Existing Dental",
+          nextAction: "Resolve evidence gaps"
+        }
+      });
+      await db.pipelineAction.create({
+        data: {
+          userId,
+          date: new Date(),
+          type: "prospect_research",
+          withWhom: "Existing Dental",
+          note: JSON.stringify({
+            verifiedFacts: qualification("Existing Dental").verifiedPublicFacts,
+            sourceUrls: qualification("Existing Dental").sourceUrls
+          })
+        }
+      });
+      const work = await createWork(`qualification-${recommendation}`, signalProjectId, {
+        operationalContext: serializeSignalCareResearchContext({
+          researchMode: "QUALIFY_EXISTING_PROSPECT",
+          targetProspect: "Existing Dental"
+        })
+      });
+      const result = await executeSignalCareHostedResearch(
+        {
+          userId,
+          projectId: signalProjectId,
+          workItemId: work.id,
+          objective: work.objective
+        },
+        {
+          discover: vi.fn(),
+          qualify: vi.fn().mockResolvedValue(
+            qualification("Existing Dental", {
+              recommendation,
+              confidence,
+              ...(recommendation === "PASS"
+                ? {
+                    conversationAngle: null,
+                    draftOutreachLanguage: null,
+                    nextResearchStep: null
+                  }
+                : {})
+            })
+          )
+        },
+        db,
+        now
+      );
+      expect(result.outcome).toBe("COMPLETED");
+      expect(result.pipelineStatus).toBe(expectedStatus);
+      expect(await db.queueItem.count({ where: { userId } })).toBe(1);
+      expect(
+        await db.queueItem.findUniqueOrThrow({ where: { id: prospect.id } })
+      ).toMatchObject({ status: expectedStatus });
+      const action = await db.pipelineAction.findFirstOrThrow({
+        where: { userId, type: "prospect_qualification" }
+      });
+      expect(JSON.parse(action.note ?? "{}")).toMatchObject({
+        workItemId: work.id,
+        externalOutreachPerformed: false
+      });
+      const config = await db.agentProjectConfig.findUniqueOrThrow({
+        where: { projectId: signalProjectId }
+      });
+      expect(config.nextAgentReviewAt?.getTime()).toBe(
+        now.getTime()
+      );
+    }
+  );
+
+  it("turns an outreach-ready prospect into NEED RYAN without communicating externally", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Existing Dental outreach package",
+        lane: "signalcare",
+        recipient: "Existing Dental",
+        status: "outreach_ready",
+        nextAction: "Request Ryan approval for exact outreach package."
+      }
+    });
+    const ownerDecision = {
+      category: "SEND_EMAIL_OR_MESSAGE" as const,
+      question: "Approve first outreach to Existing Dental?",
+      context: "Evidence-backed package and exact internal draft are ready.",
+      recommendedChoice: "APPROVE",
+      availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+      expectedUpside: "Open a qualified customer conversation.",
+      risk: "External communication represents Ryan."
+    };
+    const { services } = modelServices({
+      ...modelOutput({
+        ownerNeeded: true,
+        ownerDecision,
+        actionCategory: "SEND_EMAIL_OR_MESSAGE",
+        title: "Authorize exact Existing Dental outreach",
+        objective: "Obtain transaction-specific owner authorization."
+      }),
+      disposition: "WAIT",
+      plannedBottleneck: "Owner authorization is the next controlled step."
+    } as Awaited<
+      ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+    >);
+
+    const result = await runAgentOrchestrationCycle(
+      new Date("2026-08-29T14:00:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+
+    expect(result.projects[0]?.outcome).toBe("NEEDS_RYAN");
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(1);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(1);
+    const actionRequest = await db.agentActionRequest.findFirstOrThrow({
+      where: { userId }
+    });
+    expect(actionRequest).toMatchObject({ state: "AWAITING_OWNER_APPROVAL" });
+    expect(
+      await db.pipelineAction.count({
+        where: { userId, type: { in: ["email", "sms", "outreach_sent"] } }
+      })
+    ).toBe(0);
+
+    await resolveOwnerDecision(userId, result.projects[0]!.decisionId!, "APPROVE", db);
+    expect(
+      await db.agentActionRequest.findUniqueOrThrow({
+        where: { id: actionRequest.id }
+      })
+    ).toMatchObject({ state: "AWAITING_EXECUTION", executedAt: null });
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({
+        where: { id: result.projects[0]!.workItemId! }
+      })
+    ).toMatchObject({ state: "AWAITING_EXECUTION", completedAt: null });
+  });
+
+  it("returns NEEDS_MORE_RESEARCH outreach decisions to bounded work", async () => {
+    const ownerDecision = {
+      category: "SEND_EMAIL_OR_MESSAGE" as const,
+      question: "Approve first outreach to Existing Dental?",
+      context: "Evidence-backed package is ready for owner review.",
+      recommendedChoice: "APPROVE",
+      availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+      expectedUpside: "Open a qualified customer conversation.",
+      risk: "External communication represents Ryan."
+    };
+    const { services } = modelServices({
+      ...modelOutput({ ownerNeeded: true, ownerDecision }),
+      disposition: "WAIT",
+      plannedBottleneck: "Owner controls external outreach."
+    } as Awaited<
+      ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+    >);
+    const result = await runAgentOrchestrationCycle(
+      new Date("2026-08-29T14:30:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+
+    await resolveOwnerDecision(
+      userId,
+      result.projects[0]!.decisionId!,
+      "NEEDS_MORE_RESEARCH",
+      db
+    );
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({
+        where: { id: result.projects[0]!.workItemId! }
+      })
+    ).toMatchObject({ state: "QUEUED" });
+    expect(
+      await db.agentActionRequest.findFirstOrThrow({ where: { userId } })
+    ).toMatchObject({ state: "PROPOSED", decisionId: null });
+  });
+
+  it("does not create NEED RYAN when ownerNeeded is false", async () => {
+    const { services } = modelServices({
+      ...modelOutput(),
+      disposition: "WAIT",
+      plannedBottleneck: "No owner-controlled action is needed."
+    } as Awaited<
+      ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+    >);
+    await runAgentOrchestrationCycle(
+      new Date("2026-08-29T15:00:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+  });
+
+  it("honors bounded nextReviewMinutes for WAIT", async () => {
+    const now = new Date("2026-08-29T16:00:00.000Z");
+    const { services } = modelServices({
+      ...modelOutput({ nextReviewMinutes: 120 }),
+      disposition: "WAIT",
+      plannedBottleneck: "Wait for a useful change."
+    } as Awaited<
+      ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+    >);
+    await runAgentOrchestrationCycle(now, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+    const config = await db.agentProjectConfig.findUniqueOrThrow({
+      where: { projectId: signalProjectId }
+    });
+    expect(config.nextAgentReviewAt?.toISOString()).toBe(
+      "2026-08-29T18:00:00.000Z"
+    );
+  });
+
+  it("schedules the existing production prospect for one immediate qualification review", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Existing prospect",
+        lane: "signalcare",
+        recipient: "Existing Dental",
+        nextAction: "Qualify existing public evidence"
+      }
+    });
+    const now = new Date("2026-08-29T17:00:00.000Z");
+    expect(await scheduleSignalCareQualificationReviewOnce(userId, db, now)).toEqual([
+      signalProjectId
+    ]);
+    expect(await scheduleSignalCareQualificationReviewOnce(userId, db, now)).toEqual([]);
+    expect(await db.queueItem.count({ where: { userId } })).toBe(1);
+    expect(
+      (
+        await db.agentProjectConfig.findUniqueOrThrow({
+          where: { projectId: signalProjectId }
+        })
+      ).nextAgentReviewAt?.toISOString()
+    ).toBe(now.toISOString());
   });
 });

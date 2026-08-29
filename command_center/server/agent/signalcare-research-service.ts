@@ -21,6 +21,64 @@ const verifiedFactSchema = z
   })
   .strict();
 
+export const signalCareResearchContextSchema = z.discriminatedUnion(
+  "researchMode",
+  [
+    z
+      .object({
+        researchMode: z.literal("DISCOVER_PROSPECTS"),
+        targetProspect: z.null(),
+        instructions: z.string().max(4000)
+      })
+      .strict(),
+    z
+      .object({
+        researchMode: z.literal("QUALIFY_EXISTING_PROSPECT"),
+        targetProspect: z.string().min(1).max(300),
+        instructions: z.string().max(4000)
+      })
+      .strict()
+  ]
+);
+
+export type SignalCareResearchContext = z.infer<
+  typeof signalCareResearchContextSchema
+>;
+
+export function serializeSignalCareResearchContext(input: {
+  researchMode: SignalCareResearchContext["researchMode"];
+  targetProspect?: string | null;
+  instructions?: string;
+}) {
+  return JSON.stringify(
+    signalCareResearchContextSchema.parse({
+      researchMode: input.researchMode,
+      targetProspect:
+        input.researchMode === "QUALIFY_EXISTING_PROSPECT"
+          ? input.targetProspect
+          : null,
+      instructions: input.instructions ?? ""
+    })
+  );
+}
+
+export function parseSignalCareResearchContext(
+  value: string | null | undefined
+): SignalCareResearchContext {
+  if (!value) {
+    return {
+      researchMode: "DISCOVER_PROSPECTS",
+      targetProspect: null,
+      instructions: "Legacy bounded prospect discovery."
+    };
+  }
+  try {
+    return signalCareResearchContextSchema.parse(JSON.parse(value));
+  } catch {
+    throw new Error("SignalCare research operationalContext is invalid.");
+  }
+}
+
 export const signalCareResearchCandidateSchema = z
   .object({
     organizationName: z.string().min(1).max(300),
@@ -48,11 +106,46 @@ export const signalCareResearchResultSchema = z
   })
   .strict();
 
+export const signalCareQualificationSchema = z
+  .object({
+    organizationName: z.string().min(1).max(300),
+    likelyStakeholderRole: z.string().min(1).max(500),
+    verifiedPublicFacts: z.array(verifiedFactSchema).min(1).max(12),
+    verifiedFitEvidence: z.array(verifiedFactSchema).min(1).max(8),
+    hypothesis: z.string().min(1).max(1500),
+    recommendedEntryOffer: z.string().min(1).max(500),
+    conversationAngle: z.string().max(1500).nullable(),
+    draftOutreachLanguage: z.string().max(3000).nullable(),
+    evidenceAgainstPursuit: z.string().min(1).max(1500),
+    confidence: z.enum(["HIGH", "MEDIUM", "LOW"]),
+    recommendation: z.enum(["ADVANCE", "NEED_MORE_RESEARCH", "PASS"]),
+    sourceUrls: z.array(sourceUrlSchema).min(1).max(15),
+    qualificationSummary: z.string().min(1).max(3000),
+    nextResearchStep: z.string().max(1000).nullable()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.recommendation === "ADVANCE" &&
+      (!value.conversationAngle || !value.draftOutreachLanguage)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["draftOutreachLanguage"],
+        message:
+          "ADVANCE requires an internal conversation angle and draft outreach language."
+      });
+    }
+  });
+
 export type SignalCareResearchCandidate = z.infer<
   typeof signalCareResearchCandidateSchema
 >;
 export type SignalCareResearchResult = z.infer<
   typeof signalCareResearchResultSchema
+>;
+export type SignalCareQualification = z.infer<
+  typeof signalCareQualificationSchema
 >;
 
 export type SignalCareResearchDiagnostics = {
@@ -75,6 +168,13 @@ export interface SignalCareResearchClient {
     existingDomains: string[];
     maxProspects: number;
   }): Promise<SignalCareResearchDiscoveryResult>;
+  qualify?(input: {
+    objective: string;
+    organizationName: string;
+    currentStatus: string;
+    currentNextAction: string;
+    existingEvidence: Record<string, unknown>;
+  }): Promise<SignalCareQualification>;
 }
 
 const candidateJsonSchema = {
@@ -146,6 +246,76 @@ const researchJsonSchema = {
       items: candidateJsonSchema
     },
     searchSummary: { type: "string" }
+  }
+} as const;
+
+const factJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["fact", "sourceUrls"],
+  properties: {
+    fact: { type: "string" },
+    sourceUrls: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: { type: "string" }
+    }
+  }
+} as const;
+
+const qualificationJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "organizationName",
+    "likelyStakeholderRole",
+    "verifiedPublicFacts",
+    "verifiedFitEvidence",
+    "hypothesis",
+    "recommendedEntryOffer",
+    "conversationAngle",
+    "draftOutreachLanguage",
+    "evidenceAgainstPursuit",
+    "confidence",
+    "recommendation",
+    "sourceUrls",
+    "qualificationSummary",
+    "nextResearchStep"
+  ],
+  properties: {
+    organizationName: { type: "string" },
+    likelyStakeholderRole: { type: "string" },
+    verifiedPublicFacts: {
+      type: "array",
+      minItems: 1,
+      maxItems: 12,
+      items: factJsonSchema
+    },
+    verifiedFitEvidence: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: factJsonSchema
+    },
+    hypothesis: { type: "string" },
+    recommendedEntryOffer: { type: "string" },
+    conversationAngle: { type: ["string", "null"] },
+    draftOutreachLanguage: { type: ["string", "null"] },
+    evidenceAgainstPursuit: { type: "string" },
+    confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
+    recommendation: {
+      type: "string",
+      enum: ["ADVANCE", "NEED_MORE_RESEARCH", "PASS"]
+    },
+    sourceUrls: {
+      type: "array",
+      minItems: 1,
+      maxItems: 15,
+      items: { type: "string" }
+    },
+    qualificationSummary: { type: "string" },
+    nextResearchStep: { type: ["string", "null"] }
   }
 } as const;
 
@@ -361,6 +531,57 @@ export function retainCitedSignalCareEvidence(
   };
 }
 
+function retainCitedFacts(
+  facts: Array<{ fact: string; sourceUrls: string[] }>,
+  provenance: Map<string, SignalCareProviderSource>
+) {
+  return facts.flatMap((fact) => {
+    const sourceUrls = uniqueProviderUrls(
+      fact.sourceUrls.flatMap((url) => {
+        const match = matchProviderSource(url, provenance);
+        return match ? [match] : [];
+      })
+    );
+    return sourceUrls.length > 0 ? [{ ...fact, sourceUrls }] : [];
+  });
+}
+
+export function retainCitedSignalCareQualification(
+  result: SignalCareQualification,
+  providerSources: SignalCareProviderSource[]
+) {
+  const provenance = providerSourceIndex(providerSources);
+  const sourceUrls = uniqueProviderUrls(
+    result.sourceUrls.flatMap((url) => {
+      const match = matchProviderSource(url, provenance);
+      return match ? [match] : [];
+    })
+  );
+  const verifiedPublicFacts = retainCitedFacts(
+    result.verifiedPublicFacts,
+    provenance
+  );
+  const verifiedFitEvidence = retainCitedFacts(
+    result.verifiedFitEvidence,
+    provenance
+  );
+  if (
+    sourceUrls.length === 0 ||
+    verifiedPublicFacts.length === 0 ||
+    verifiedFitEvidence.length === 0
+  ) {
+    throw new Error(
+      `SignalCare qualification returned inadequate provider provenance. providerSourceCount=${providerSources.length}, verifiedFactsAccepted=${verifiedPublicFacts.length}, fitEvidenceAccepted=${verifiedFitEvidence.length}.`
+    );
+  }
+  return signalCareQualificationSchema.parse({
+    ...result,
+    sourceUrls,
+    verifiedPublicFacts,
+    verifiedFitEvidence
+  });
+}
+
 export class OpenAiSignalCareResearchClient implements SignalCareResearchClient {
   constructor(
     private readonly fetcher: typeof fetch = fetch,
@@ -439,6 +660,88 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
       );
     }
     return retainCitedSignalCareEvidence(parsed, responseSourceUrls(raw));
+  }
+
+  async qualify(input: {
+    objective: string;
+    organizationName: string;
+    currentStatus: string;
+    currentNextAction: string;
+    existingEvidence: Record<string, unknown>;
+  }) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        "OPENAI_API_KEY is required for SignalCare web research."
+      );
+    }
+    const response = await this.fetcher("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: this.model,
+        tools: [{ type: "web_search", search_context_size: "medium" }],
+        tool_choice: "required",
+        include: ["web_search_call.action.sources", "web_search_call.results"],
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "Qualify exactly one existing SignalCare prospect using public web evidence only. Read the supplied existing public evidence first, then resolve the highest-value gaps: organization size and footprint, services and operational complexity, public growth signals, likely stakeholder ROLE (never private personal information), public scheduling/reporting/operations signals, best-fit SignalCare offer, precise conversation hypothesis, reasons to pursue, and evidence against pursuing. Clearly separate VERIFIED FACTS from HYPOTHESES. Every verified and fit fact must cite the actual public page used. Prefer official organization pages. Internal draft outreach language is allowed, but do not send messages, contact anyone, submit forms, modify external systems, make commitments, or claim revenue leakage or operational problems without evidence. Choose ADVANCE only when the evidence supports an outreach-ready internal package; otherwise choose NEED_MORE_RESEARCH or PASS."
+              }
+            ]
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: JSON.stringify(input)
+              }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "signalcare_prospect_qualification",
+            strict: true,
+            schema: qualificationJsonSchema
+          }
+        }
+      })
+    });
+    if (!response.ok) {
+      throw new Error(
+        `SignalCare qualification request failed (${response.status}): ${(await response.text()).slice(0, 1000)}`
+      );
+    }
+    const raw = (await response.json()) as Record<string, unknown>;
+    let parsed: SignalCareQualification;
+    try {
+      parsed = signalCareQualificationSchema.parse(
+        JSON.parse(responseText(raw))
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `SignalCare qualification model-output validation failed: ${detail}`
+      );
+    }
+    if (
+      parsed.organizationName.trim().toLowerCase() !==
+      input.organizationName.trim().toLowerCase()
+    ) {
+      throw new Error(
+        "SignalCare qualification returned a different organization than the bounded target."
+      );
+    }
+    return retainCitedSignalCareQualification(parsed, responseSourceUrls(raw));
   }
 }
 
@@ -711,6 +1014,87 @@ export async function recoverFailedSignalCareProspectResearch(
   return [replacement.id];
 }
 
+const qualificationReviewRecoveryVersion = "signalcare-qualification-review-v1";
+
+export async function scheduleSignalCareQualificationReviewOnce(
+  userId: string,
+  db: PrismaClient = prisma,
+  now = new Date()
+) {
+  const configs = await db.agentProjectConfig.findMany({
+    where: {
+      userId,
+      profile: "SIGNALCARE_GM",
+      enabled: true,
+      pausedAt: null
+    }
+  });
+  const scheduled: string[] = [];
+  for (const config of configs) {
+    const idempotencyKey = `${qualificationReviewRecoveryVersion}:${config.projectId}`;
+    const [priorSchedule, prospectCount, qualificationCount, activeResearch] =
+      await Promise.all([
+        db.agentEvent.findUnique({ where: { idempotencyKey } }),
+        db.queueItem.count({
+          where: {
+            userId,
+            lane: { in: ["signalcare", "pipeline"] },
+            status: { notIn: ["done", "killed", "passed"] }
+          }
+        }),
+        db.pipelineAction.count({
+          where: { userId, type: "prospect_qualification" }
+        }),
+        db.agentWorkItem.count({
+          where: {
+            userId,
+            projectId: config.projectId,
+            requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+            state: {
+              in: [
+                "QUEUED",
+                "PLANNING",
+                "RUNNING",
+                "VERIFYING",
+                "RETRY",
+                "AWAITING_EXECUTION"
+              ]
+            }
+          }
+        })
+      ]);
+    if (
+      priorSchedule ||
+      prospectCount === 0 ||
+      qualificationCount > 0 ||
+      activeResearch > 0
+    ) {
+      continue;
+    }
+    await db.agentProjectConfig.update({
+      where: { id: config.id },
+      data: { nextAgentReviewAt: now }
+    });
+    await recordAgentEvent(
+      {
+        userId,
+        projectId: config.projectId,
+        idempotencyKey,
+        type: "PM_REVIEW_SCHEDULED",
+        summary:
+          "SignalCare was made due once to evaluate existing prospects for bounded qualification.",
+        metadata: {
+          recoveryVersion: qualificationReviewRecoveryVersion,
+          prospectCount
+        }
+      },
+      db
+    );
+    scheduled.push(config.projectId);
+  }
+  return scheduled;
+}
+
 async function persistCandidates(
   userId: string,
   candidates: SignalCareResearchCandidate[],
@@ -781,6 +1165,93 @@ async function persistCandidates(
   return created;
 }
 
+function parseOperationalEvidence(note: string | null) {
+  if (!note) return {};
+  try {
+    const parsed = JSON.parse(note) as unknown;
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function qualificationPipelineState(qualification: SignalCareQualification) {
+  if (qualification.recommendation === "PASS") return "passed" as const;
+  if (
+    qualification.recommendation === "ADVANCE" &&
+    qualification.confidence !== "LOW" &&
+    qualification.conversationAngle &&
+    qualification.draftOutreachLanguage &&
+    qualification.verifiedFitEvidence.length > 0 &&
+    qualification.sourceUrls.length > 0
+  ) {
+    return "outreach_ready" as const;
+  }
+  return "qualified" as const;
+}
+
+async function persistQualification(
+  input: {
+    userId: string;
+    workItemId: string;
+    queueItemId: string;
+    qualification: SignalCareQualification;
+  },
+  db: PrismaClient,
+  now: Date
+) {
+  const status = qualificationPipelineState(input.qualification);
+  const nextAction =
+    status === "outreach_ready"
+      ? "Request Ryan approval for this exact evidence-backed outreach package."
+      : status === "passed"
+        ? `Pass — ${input.qualification.qualificationSummary}`
+        : (input.qualification.nextResearchStep ??
+          "Resolve the remaining evidence gap before outreach approval.");
+  await db.queueItem.update({
+    where: { id: input.queueItemId },
+    data: {
+      status,
+      nextAction,
+      resolvedAt: status === "passed" ? now : null
+    }
+  });
+
+  const priorQualification = await db.pipelineAction.findFirst({
+    where: {
+      userId: input.userId,
+      type: "prospect_qualification",
+      withWhom: input.qualification.organizationName
+    },
+    orderBy: { date: "desc" }
+  });
+  const priorEvidence = parseOperationalEvidence(
+    priorQualification?.note ?? null
+  );
+  if (priorEvidence.workItemId !== input.workItemId) {
+    await db.pipelineAction.create({
+      data: {
+        userId: input.userId,
+        date: now,
+        type: "prospect_qualification",
+        withWhom: input.qualification.organizationName,
+        note: JSON.stringify({
+          kind: "signalcare_prospect_qualification_v1",
+          workItemId: input.workItemId,
+          pipelineStatus: status,
+          ...input.qualification,
+          verifiedFacts: input.qualification.verifiedPublicFacts,
+          evidenceConfidence: input.qualification.confidence,
+          externalOutreachPerformed: false
+        })
+      }
+    });
+  }
+  return { status, nextAction };
+}
+
 export async function executeSignalCareHostedResearch(
   input: {
     userId: string;
@@ -827,6 +1298,9 @@ export async function executeSignalCareHostedResearch(
   if (!["QUEUED", "RETRY"].includes(work.state)) {
     throw new Error(`SignalCare research cannot start from ${work.state}.`);
   }
+  const researchContext = parseSignalCareResearchContext(
+    work.operationalContext
+  );
 
   work = await transitionAgentWorkItem(
     input.userId,
@@ -877,7 +1351,9 @@ export async function executeSignalCareHostedResearch(
       idempotencyKey: `signalcare-hosted-dispatch:${run.id}`,
       type: "WORK_DISPATCHED",
       summary:
-        "SignalCare prospect discovery dispatched to the bounded hosted web-research executor."
+        researchContext.researchMode === "QUALIFY_EXISTING_PROSPECT"
+          ? `SignalCare qualification for ${researchContext.targetProspect} dispatched to bounded hosted public-web research.`
+          : "SignalCare prospect discovery dispatched to the bounded hosted web-research executor."
     },
     db
   );
@@ -889,25 +1365,179 @@ export async function executeSignalCareHostedResearch(
       where: {
         userId: input.userId,
         lane: { in: ["signalcare", "pipeline"] },
-        status: { notIn: ["done", "killed"] }
+        status: { notIn: ["done", "killed", "passed"] }
       }
     });
     const existingActions = await db.pipelineAction.findMany({
-      where: { userId: input.userId, type: "prospect_research" }
+      where: { userId: input.userId },
+      orderBy: { date: "desc" }
     });
+    if (researchContext.researchMode === "QUALIFY_EXISTING_PROSPECT") {
+      const target = existingQueue.find(
+        (item) =>
+          item.recipient.trim().toLowerCase() ===
+          researchContext.targetProspect.trim().toLowerCase()
+      );
+      if (!target) {
+        throw new Error(
+          "SignalCare qualification target is not an existing active prospect."
+        );
+      }
+      if (!client.qualify) {
+        throw new Error(
+          "SignalCare research client does not support bounded qualification."
+        );
+      }
+      const existingEvidenceAction = existingActions.find(
+        (action) =>
+          action.withWhom?.trim().toLowerCase() ===
+          target.recipient.trim().toLowerCase()
+      );
+      const qualification = signalCareQualificationSchema.parse(
+        await client.qualify({
+          objective: input.objective,
+          organizationName: target.recipient,
+          currentStatus: target.status,
+          currentNextAction: target.nextAction,
+          existingEvidence: parseOperationalEvidence(
+            existingEvidenceAction?.note ?? null
+          )
+        })
+      );
+      if (
+        qualification.organizationName.trim().toLowerCase() !==
+        target.recipient.trim().toLowerCase()
+      ) {
+        throw new Error(
+          "SignalCare qualification returned a different organization than the existing target."
+        );
+      }
+      failureStage = "qualification_persistence";
+      const progression = await persistQualification(
+        {
+          userId: input.userId,
+          workItemId: work.id,
+          queueItemId: target.id,
+          qualification
+        },
+        db,
+        now
+      );
+      await db.agentRun.update({
+        where: { id: run.id },
+        data: {
+          status: "SUCCEEDED",
+          operationalResultSummary: qualification.qualificationSummary,
+          evidence: JSON.stringify({
+            organizationName: qualification.organizationName,
+            pipelineStatus: progression.status,
+            verifiedPublicFacts: qualification.verifiedPublicFacts,
+            verifiedFitEvidence: qualification.verifiedFitEvidence,
+            sourceUrls: qualification.sourceUrls,
+            externalOutreachPerformed: false
+          }),
+          structuredOutcome: JSON.stringify({
+            researchMode: researchContext.researchMode,
+            pipelineStatus: progression.status,
+            qualification,
+            externalOutreachPerformed: false
+          }),
+          completedAt: now
+        }
+      });
+      work = await transitionAgentWorkItem(
+        input.userId,
+        work.id,
+        "VERIFYING",
+        {
+          resultSummary: qualification.qualificationSummary,
+          evidenceSummary: `${qualification.sourceUrls.length} provider source(s) support the qualification package.`
+        },
+        db
+      );
+      const qaRun = await db.agentRun.upsert({
+        where: {
+          idempotencyKey: `signalcare-research-qa:${work.id}:${attempt}`
+        },
+        update: {},
+        create: {
+          userId: input.userId,
+          projectId: input.projectId,
+          workItemId: work.id,
+          idempotencyKey: `signalcare-research-qa:${work.id}:${attempt}`,
+          role: "INDEPENDENT_QA",
+          runType: "DETERMINISTIC_RESEARCH_QA",
+          status: "SUCCEEDED",
+          providerIdentifier: "ryanos",
+          executorIdentifier: "signalcare-evidence-validator",
+          operationalResultSummary: "PASS",
+          evidence: `${qualification.verifiedPublicFacts.length} verified fact(s), ${qualification.verifiedFitEvidence.length} fit fact(s), and ${qualification.sourceUrls.length} provider source(s) passed bounded qualification checks.`,
+          structuredOutcome: JSON.stringify({
+            outcome: "PASS",
+            pipelineStatus: progression.status,
+            externalOutreachPerformed: false
+          }),
+          completedAt: now
+        }
+      });
+      await transitionAgentWorkItem(
+        input.userId,
+        work.id,
+        "DONE",
+        {
+          blocker: null,
+          resultSummary: qualification.qualificationSummary,
+          evidenceSummary: `Existing prospect updated to ${progression.status}; no external outreach occurred.`
+        },
+        db
+      );
+      await recordAgentEvent(
+        {
+          userId: input.userId,
+          projectId: input.projectId,
+          workItemId: work.id,
+          runId: qaRun.id,
+          idempotencyKey: `signalcare-qualification-completed:${work.id}:${attempt}`,
+          type: "QA_PASSED",
+          summary: `${qualification.organizationName} qualification completed with pipeline status ${progression.status}.`,
+          metadata: {
+            movementKind:
+              progression.status === "outreach_ready"
+                ? "SIGNALCARE_OUTREACH_PACKAGE_READY"
+                : progression.status === "passed"
+                  ? "SIGNALCARE_PROSPECT_PASSED"
+                  : "SIGNALCARE_PROSPECT_QUALIFIED",
+            targetProspect: qualification.organizationName,
+            pipelineStatus: progression.status,
+            externalOutreachPerformed: false
+          }
+        },
+        db
+      );
+      await db.agentProjectConfig.update({
+        where: { projectId: input.projectId },
+        data: { nextAgentReviewAt: now }
+      });
+      return {
+        outcome: "COMPLETED" as const,
+        created: [],
+        qualifiedProspect: qualification.organizationName,
+        pipelineStatus: progression.status,
+        skippedBecauseProspectsExist: false
+      };
+    }
     const existingDomains = existingActions.flatMap((action) => {
+      if (action.type !== "prospect_research") return [];
       const domain = parseEvidenceDomain(action.note);
       return domain ? [domain] : [];
     });
     const maxProspects = getSignalCareResearchLimit();
-    const usefulExistingProspects = existingQueue.filter(
-      isUsefulExistingProspect
-    );
+    const sufficientExistingProspects = existingQueue;
     const discovery: SignalCareResearchDiscoveryResult =
-      usefulExistingProspects.length > 0
+      sufficientExistingProspects.length > 0
         ? {
             candidates: [],
-            searchSummary: `${usefulExistingProspects.length} useful SignalCare prospect(s) already exist; repeated discovery was skipped.`
+            searchSummary: `${sufficientExistingProspects.length} SignalCare prospect(s) already exist; repeated discovery was skipped.`
           }
         : await client.discover({
             objective: input.objective,
@@ -932,7 +1562,7 @@ export async function executeSignalCareHostedResearch(
       factsRejectedNoProviderSource: 0
     };
     if (
-      usefulExistingProspects.length === 0 &&
+      sufficientExistingProspects.length === 0 &&
       boundedCandidates.length === 0
     ) {
       failureStage = "evidence_validation";
@@ -952,7 +1582,7 @@ export async function executeSignalCareHostedResearch(
       data: {
         status: "SUCCEEDED",
         operationalResultSummary:
-          usefulExistingProspects.length > 0
+          sufficientExistingProspects.length > 0
             ? validated.searchSummary
             : `Created ${created.length} evidence-backed SignalCare prospect(s).`,
         evidence: JSON.stringify({
@@ -1005,7 +1635,7 @@ export async function executeSignalCareHostedResearch(
       {
         blocker: null,
         resultSummary:
-          usefulExistingProspects.length > 0
+          sufficientExistingProspects.length > 0
             ? validated.searchSummary
             : `Created ${created.length} evidence-backed SignalCare prospect(s).`,
         evidenceSummary: `${created.length} prospect(s) persisted with verified facts and public source URLs.`
@@ -1021,7 +1651,7 @@ export async function executeSignalCareHostedResearch(
         idempotencyKey: `signalcare-research-completed:${work.id}:${attempt}`,
         type: "QA_PASSED",
         summary:
-          usefulExistingProspects.length > 0
+          sufficientExistingProspects.length > 0
             ? "Existing SignalCare prospects prevented unnecessary repeated discovery."
             : `${created.length} evidence-backed prospect(s) entered the existing SignalCare pipeline.`,
         metadata: {
@@ -1039,7 +1669,7 @@ export async function executeSignalCareHostedResearch(
     return {
       outcome: "COMPLETED" as const,
       created,
-      skippedBecauseProspectsExist: usefulExistingProspects.length > 0
+      skippedBecauseProspectsExist: sufficientExistingProspects.length > 0
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

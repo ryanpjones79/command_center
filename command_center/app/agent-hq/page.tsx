@@ -39,6 +39,21 @@ function movementKind(metadata: string | null) {
   try { const value = JSON.parse(metadata) as { movementKind?: string }; return value.movementKind ?? null; } catch { return null; }
 }
 
+function pmDecisionDetails(type: string, metadata: string | null) {
+  if (type !== "PM_DECISION_RECORDED" || !metadata) return null;
+  try {
+    return JSON.parse(metadata) as {
+      disposition?: string;
+      currentBottleneck?: string;
+      evidence?: string;
+      nextReviewMinutes?: number;
+      ownerNeeded?: boolean;
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default async function AgentHqPage() {
   const user = await requireUser();
   const data = await getAgentHqData(user.id);
@@ -237,16 +252,26 @@ export default async function AgentHqPage() {
           <CardHeader><CardTitle>Recent movement</CardTitle><CardDescription>Operational state changes and outcomes—not token telemetry or private reasoning.</CardDescription></CardHeader>
           <CardContent className="space-y-2">
             {data.events.length === 0 && <p className="text-sm text-muted-foreground">No agent movement recorded yet.</p>}
-            {data.events.map((event) => (
-              <div className="flex gap-3 rounded-lg border p-3" key={event.id}>
-                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" />
-                <div className="min-w-0">
-                  <p className="text-sm"><span className="font-medium">{event.project.name}:</span> {event.summary}</p>
-                  {movementKind(event.metadata) && <Badge className="mt-1" variant="success">Movement: {movementKind(event.metadata)!.replaceAll("_", " ")}</Badge>}
-                  <p className="mt-1 text-xs text-muted-foreground">{event.type.replaceAll("_", " ")} · {formatDate(event.createdAt)}</p>
+            {data.events.map((event) => {
+              const pmDecision = pmDecisionDetails(event.type, event.metadata);
+              return (
+                <div className="flex gap-3 rounded-lg border p-3" key={event.id}>
+                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" />
+                  <div className="min-w-0">
+                    <p className="text-sm"><span className="font-medium">{event.project.name}:</span> {event.summary}</p>
+                    {movementKind(event.metadata) && <Badge className="mt-1" variant="success">Movement: {movementKind(event.metadata)!.replaceAll("_", " ")}</Badge>}
+                    {pmDecision && (
+                      <div className="mt-2 rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+                        <p><span className="font-medium text-foreground">Bottleneck:</span> {pmDecision.currentBottleneck || "Not specified"}</p>
+                        <p className="mt-1"><span className="font-medium text-foreground">Evidence:</span> {pmDecision.evidence || "Not supplied"}</p>
+                        <p className="mt-1">Next review: {pmDecision.nextReviewMinutes ?? 15} minutes · Owner needed: {pmDecision.ownerNeeded ? "yes" : "no"}</p>
+                      </div>
+                    )}
+                    <p className="mt-1 text-xs text-muted-foreground">{event.type.replaceAll("_", " ")} · {formatDate(event.createdAt)}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
         <Card>

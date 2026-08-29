@@ -142,9 +142,9 @@ export async function createOwnerDecision(
 }
 
 function resolutionState(choice: string): AgentWorkState {
-  const normalized = choice.trim().toUpperCase();
+  const normalized = choice.trim().toUpperCase().replace(/[_-]+/g, " ");
   if (["PASS", "CANCEL", "CANCELLED", "DECLINE"].includes(normalized)) return "PARKED";
-  if (["MORE RESEARCH", "REVISE", "REVIEW DETAILS", "REDUCE"].includes(normalized)) return "QUEUED";
+  if (["MORE RESEARCH", "NEEDS MORE RESEARCH", "REVISE", "REVIEW DETAILS", "REDUCE"].includes(normalized)) return "QUEUED";
   return "AWAITING_EXECUTION";
 }
 
