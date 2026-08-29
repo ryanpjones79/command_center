@@ -131,7 +131,10 @@ export async function createOwnerDecision(
       idempotencyKey: `decision-created:${decision.id}`,
       type: "OWNER_ESCALATION_CREATED",
       summary: input.plan.question,
-      metadata: { category: input.plan.category, policy }
+      metadata: { category: input.plan.category, policy, movementKind:
+        input.plan.category === "SEND_EMAIL_OR_MESSAGE" ? "SIGNALCARE_OUTREACH_DECISION_READY" :
+        input.plan.category === "PURCHASE_INVENTORY" ? "RYKAS_PURCHASE_DECISION_READY" :
+        input.plan.category.startsWith("CCHCS_") ? "CCHCS_OWNER_DECISION_READY" : undefined }
     },
     db
   );

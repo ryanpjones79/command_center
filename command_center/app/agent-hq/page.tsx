@@ -31,6 +31,11 @@ function statusVariant(status: string) {
   return "outline" as const;
 }
 
+function movementKind(metadata: string | null) {
+  if (!metadata) return null;
+  try { const value = JSON.parse(metadata) as { movementKind?: string }; return value.movementKind ?? null; } catch { return null; }
+}
+
 export default async function AgentHqPage() {
   const user = await requireUser();
   const data = await getAgentHqData(user.id);
@@ -234,6 +239,7 @@ export default async function AgentHqPage() {
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" />
                 <div className="min-w-0">
                   <p className="text-sm"><span className="font-medium">{event.project.name}:</span> {event.summary}</p>
+                  {movementKind(event.metadata) && <Badge className="mt-1" variant="success">Movement: {movementKind(event.metadata)!.replaceAll("_", " ")}</Badge>}
                   <p className="mt-1 text-xs text-muted-foreground">{event.type.replaceAll("_", " ")} · {formatDate(event.createdAt)}</p>
                 </div>
               </div>

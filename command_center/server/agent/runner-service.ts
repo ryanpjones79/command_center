@@ -112,7 +112,8 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
   }
   await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id,
     type: nextState === "READY_FOR_REVIEW" ? "QA_PASSED" : nextState === "NEEDS_RYAN" ? "OWNER_ESCALATION_CREATED" : "QA_FAILED",
-    summary: nextState === "READY_FOR_REVIEW" ? "Independent local QA passed; branch is ready for owner review and was not merged." : result.qaFeedback ?? result.summary }, db);
+    summary: nextState === "READY_FOR_REVIEW" ? "Independent local QA passed; branch is ready for owner review and was not merged." : result.qaFeedback ?? result.summary,
+    metadata: nextState === "READY_FOR_REVIEW" ? { movementKind: "CODE_READY_FOR_REVIEW", integrationStatus: "PENDING_REVIEW" } : undefined }, db);
   return { duplicate: false, state: nextState };
 }
 
