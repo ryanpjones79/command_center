@@ -17,7 +17,7 @@
     "prisma:seed": "node scripts/prisma-command.mjs generate && tsx prisma/seed.ts",
     "migrate:legacy-execution": "tsx scripts/migrate-legacy-execution.ts",
     "simulate:agent-hq": "tsx scripts/simulate-agent-lifecycle.ts",
-    "agent:register-runner": "tsx scripts/register-agent-runner.ts",
+    "agent:register-runner": "node scripts/prisma-command.mjs generate && tsx scripts/register-agent-runner.ts",
     "google:auth": "node --env-file=.env scripts/google-auth-bootstrap.mjs",
     "netlify:build": "npm run prisma:deploy:bootstrap && npm run build",
     "vercel:build": "npm run prisma:deploy:bootstrap && npm run build",
@@ -43,12 +43,12 @@
     "next-auth": "^5.0.0-beta.25",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^2.6.0",
+    "tailwind-merge": "^3.0.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcryptjs": "^2.4.3",
     "@types/node": "^22.13.4",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
