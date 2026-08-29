@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentActionCategories } from "@/lib/agent-policy";
+import { signalCareCommercialProfileInstructions } from "@/lib/signalcare-commercial-profile";
 import {
   phase2AllowedCapabilities,
   SIGNALCARE_WEB_RESEARCH_CAPABILITY
@@ -194,7 +195,14 @@ const ownerDecisionProposalSchema = z
     recommendedChoice: z.string().min(1).max(200),
     availableChoices: z.array(z.string().min(1).max(200)).min(2).max(6),
     expectedUpside: z.string().min(1).max(2000),
-    risk: z.string().min(1).max(2000)
+    risk: z.string().min(1).max(2000),
+    targetEntity: z
+      .object({
+        type: z.literal("SIGNALCARE_PROSPECT"),
+        name: z.string().min(1).max(300)
+      })
+      .strict()
+      .nullable()
   })
   .strict();
 
@@ -231,6 +239,16 @@ export const pmOutputSchema = z
         path: ["ownerDecision"],
         message:
           "ownerNeeded=true requires ownerDecision; ownerNeeded=false requires null."
+      });
+    }
+    if (
+      value.ownerDecision?.category === "SEND_EMAIL_OR_MESSAGE" &&
+      value.ownerDecision.targetEntity === null
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownerDecision", "targetEntity"],
+        message: "SignalCare outreach requires a typed target prospect."
       });
     }
     const hostedResearch =
@@ -275,7 +293,8 @@ const ownerDecisionJsonSchema = {
     "recommendedChoice",
     "availableChoices",
     "expectedUpside",
-    "risk"
+    "risk",
+    "targetEntity"
   ],
   properties: {
     category: { type: "string", enum: agentActionCategories },
@@ -284,7 +303,21 @@ const ownerDecisionJsonSchema = {
     recommendedChoice: { type: "string" },
     availableChoices: { type: "array", items: { type: "string" } },
     expectedUpside: { type: "string" },
-    risk: { type: "string" }
+    risk: { type: "string" },
+    targetEntity: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["type", "name"],
+          properties: {
+            type: { type: "string", enum: ["SIGNALCARE_PROSPECT"] },
+            name: { type: "string" }
+          }
+        },
+        { type: "null" }
+      ]
+    }
   }
 } as const;
 
@@ -360,7 +393,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       name: "pm_project_review",
       validator: pmOutputSchema,
       schema: pmJsonSchema,
-      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. When a prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. When an outreach_ready prospect's next highest-value action is external contact, set ownerNeeded=true with a transaction-specific SEND_EMAIL_OR_MESSAGE ownerDecision; approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
+      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When a prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, and use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
       payload: context
     });
     if (

@@ -5,6 +5,11 @@ import { evaluateAgentPolicy, type AgentActionCategory } from "@/lib/agent-polic
 import { prisma } from "@/lib/prisma";
 import type { OwnerDecisionPlan } from "@/server/agent/contracts";
 import { recordAgentEvent } from "@/server/agent/event-service";
+import {
+  evaluateSignalCareOutreachReadiness,
+  parseSignalCareDecisionTarget,
+  signalCareOutreachDecisionChoices
+} from "@/server/agent/signalcare-outreach-policy";
 
 type TransitionInput = {
   blocker?: string | null;
@@ -53,13 +58,50 @@ export async function createOwnerDecision(
   },
   db: PrismaClient = prisma
 ) {
+  let plan = input.plan;
   const policy = evaluateAgentPolicy({
-    category: input.plan.category,
+    category: plan.category,
     projectProfile: input.profile,
-    amountCents: input.plan.amountCents
+    amountCents: plan.amountCents
   });
   if (policy === "ALLOW") throw new Error("Owner decision cannot be used to gate an ALLOW action.");
   if (policy === "DENY") throw new Error("Denied actions cannot be converted into owner approvals.");
+
+  if (
+    input.profile === "SIGNALCARE_GM" &&
+    plan.category === "SEND_EMAIL_OR_MESSAGE"
+  ) {
+    if (plan.targetEntity?.type !== "SIGNALCARE_PROSPECT") {
+      throw new Error(
+        "SignalCare outreach requires a typed target prospect."
+      );
+    }
+    const readiness = await evaluateSignalCareOutreachReadiness(
+      input.userId,
+      input.projectId,
+      plan.targetEntity,
+      db
+    );
+    if (!readiness.ready) {
+      throw new Error(
+        `SignalCare outreach is not ready: ${readiness.reasons.join(" ")}`
+      );
+    }
+    plan = {
+      ...plan,
+      question: `Approve first outreach to ${readiness.target.name}?`,
+      context: `${plan.context}\n\nEvidence-backed internal outreach package:\n${JSON.stringify(readiness.package)}`,
+      recommendedChoice: "APPROVE",
+      availableChoices: [...signalCareOutreachDecisionChoices],
+      capability: "SEND_EMAIL_OR_MESSAGE",
+      boundedPayload: {
+        targetEntity: readiness.target,
+        qualificationActionId: readiness.qualificationActionId,
+        outreachPackage: readiness.package,
+        externalOutreachPerformed: false
+      }
+    };
+  }
 
   const decision = await db.agentDecision.upsert({
     where: { idempotencyKey: input.idempotencyKey },
@@ -70,24 +112,24 @@ export async function createOwnerDecision(
       originatingWorkItemId: input.workItemId ?? null,
       originatingRunId: input.runId ?? null,
       idempotencyKey: input.idempotencyKey,
-      category: input.plan.category,
-      question: input.plan.question,
-      context: input.plan.context,
-      recommendedChoice: input.plan.recommendedChoice,
-      availableChoices: JSON.stringify(input.plan.availableChoices),
-      expectedUpside: input.plan.expectedUpside,
-      risk: input.plan.risk,
-      amountCents: input.plan.amountCents ?? null,
-      currency: input.plan.currency ?? null
+      category: plan.category,
+      question: plan.question,
+      context: plan.context,
+      recommendedChoice: plan.recommendedChoice,
+      availableChoices: JSON.stringify(plan.availableChoices),
+      expectedUpside: plan.expectedUpside,
+      risk: plan.risk,
+      amountCents: plan.amountCents ?? null,
+      currency: plan.currency ?? null
     }
   });
 
-  if (input.workItemId && input.plan.createsActionRequest !== false) {
-    const boundedPayload = input.plan.boundedPayload ?? {
-      question: input.plan.question,
-      context: input.plan.context,
-      amountCents: input.plan.amountCents ?? null,
-      currency: input.plan.currency ?? null
+  if (input.workItemId && plan.createsActionRequest !== false) {
+    const boundedPayload = plan.boundedPayload ?? {
+      question: plan.question,
+      context: plan.context,
+      amountCents: plan.amountCents ?? null,
+      currency: plan.currency ?? null
     };
     const serializedPayload = JSON.stringify(boundedPayload);
     const actionFingerprint = createHash("sha256")
@@ -104,19 +146,19 @@ export async function createOwnerDecision(
         decisionId: decision.id,
         idempotencyKey: `action:${input.idempotencyKey}`,
         actionFingerprint,
-        category: input.plan.category,
-        capability: input.plan.capability ?? input.plan.category,
+        category: plan.category,
+        capability: plan.capability ?? plan.category,
         state: "AWAITING_OWNER_APPROVAL",
         boundedPayload: serializedPayload,
         authorizationBounds: JSON.stringify({
           oneTime: true,
           actionFingerprint,
-          amountCents: input.plan.amountCents ?? null,
-          currency: input.plan.currency ?? null
+          amountCents: plan.amountCents ?? null,
+          currency: plan.currency ?? null
         }),
-        amountCents: input.plan.amountCents ?? null,
-        currency: input.plan.currency ?? null,
-        expiresAt: input.plan.authorizationExpiresAt ?? null
+        amountCents: plan.amountCents ?? null,
+        currency: plan.currency ?? null,
+        expiresAt: plan.authorizationExpiresAt ?? null
       }
     });
   }
@@ -130,11 +172,11 @@ export async function createOwnerDecision(
       decisionId: decision.id,
       idempotencyKey: `decision-created:${decision.id}`,
       type: "OWNER_ESCALATION_CREATED",
-      summary: input.plan.question,
-      metadata: { category: input.plan.category, policy, movementKind:
-        input.plan.category === "SEND_EMAIL_OR_MESSAGE" ? "SIGNALCARE_OUTREACH_DECISION_READY" :
-        input.plan.category === "PURCHASE_INVENTORY" ? "RYKAS_PURCHASE_DECISION_READY" :
-        input.plan.category.startsWith("CCHCS_") ? "CCHCS_OWNER_DECISION_READY" : undefined }
+      summary: plan.question,
+      metadata: { category: plan.category, policy, movementKind:
+        plan.category === "SEND_EMAIL_OR_MESSAGE" ? "SIGNALCARE_OUTREACH_DECISION_READY" :
+        plan.category === "PURCHASE_INVENTORY" ? "RYKAS_PURCHASE_DECISION_READY" :
+        plan.category.startsWith("CCHCS_") ? "CCHCS_OWNER_DECISION_READY" : undefined }
     },
     db
   );
@@ -143,9 +185,10 @@ export async function createOwnerDecision(
 
 function resolutionState(choice: string): AgentWorkState {
   const normalized = choice.trim().toUpperCase().replace(/[_-]+/g, " ");
-  if (["PASS", "CANCEL", "CANCELLED", "DECLINE"].includes(normalized)) return "PARKED";
+  if (["APPROVE", "BUY"].includes(normalized)) return "AWAITING_EXECUTION";
+  if (["PASS", "CANCEL", "CANCELLED", "DECLINE", "REJECT"].includes(normalized)) return "PARKED";
   if (["MORE RESEARCH", "NEEDS MORE RESEARCH", "REVISE", "REVIEW DETAILS", "REDUCE"].includes(normalized)) return "QUEUED";
-  return "AWAITING_EXECUTION";
+  throw new Error("Selected owner choice has no safe deterministic resolution mapping.");
 }
 
 export async function resolveOwnerDecision(
@@ -166,6 +209,7 @@ export async function resolveOwnerDecision(
     (choice) => choice.toUpperCase() === selectedChoice.trim().toUpperCase()
   );
   if (!canonicalChoice) throw new Error("Selected choice is not available for this decision.");
+  const nextState = resolutionState(canonicalChoice);
 
   if (decision.actionRequest?.expiresAt && decision.actionRequest.expiresAt <= new Date()) {
     await db.agentActionRequest.update({
@@ -175,7 +219,35 @@ export async function resolveOwnerDecision(
     throw new Error("This transaction-specific authorization request has expired.");
   }
 
-  const nextState = resolutionState(canonicalChoice);
+  if (
+    nextState === "AWAITING_EXECUTION" &&
+    decision.category === "SEND_EMAIL_OR_MESSAGE"
+  ) {
+    const config = await db.agentProjectConfig.findUnique({
+      where: { projectId: decision.projectId }
+    });
+    if (config?.profile === "SIGNALCARE_GM") {
+      const target = parseSignalCareDecisionTarget(
+        decision.actionRequest?.boundedPayload
+      );
+      if (!target) {
+        throw new Error(
+          "SignalCare outreach authorization has no typed target prospect."
+        );
+      }
+      const readiness = await evaluateSignalCareOutreachReadiness(
+        userId,
+        decision.projectId,
+        target,
+        db
+      );
+      if (!readiness.ready) {
+        throw new Error(
+          `SignalCare outreach is no longer ready: ${readiness.reasons.join(" ")}`
+        );
+      }
+    }
+  }
   const resultingAction =
     nextState === "AWAITING_EXECUTION"
       ? "Transaction-specific owner authorization recorded. The action is awaiting an eligible executor; nothing external has occurred."

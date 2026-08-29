@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { evaluateAgentPolicy, type AgentActionCategory } from "@/lib/agent-policy";
 import { prisma } from "@/lib/prisma";
+import { signalCareApprovedOfferSchema } from "@/lib/signalcare-commercial-profile";
 import { recordAgentEvent } from "@/server/agent/event-service";
 
 type ToolContext = { userId: string; projectId: string; profile: string };
@@ -12,7 +13,11 @@ type ToolDefinition = { id: string; profiles: string[]; classification: "READ" |
 const emptyInput = z.object({}).strict();
 const signalOutput = z.object({ prospects: z.array(z.object({ name: z.string(), stage: z.string(), evidence: z.string().nullable(),
   domain: z.string().nullable(), verifiedFacts: z.array(z.object({ fact: z.string(), sourceUrls: z.array(z.string().url()) })),
-  sourceUrls: z.array(z.string().url()), evidenceConfidence: z.string().nullable(), nextAction: z.string().nullable(), stale: z.boolean() })), openOwnerDecisions: z.number() });
+  sourceUrls: z.array(z.string().url()), evidenceConfidence: z.string().nullable(), nextAction: z.string().nullable(), stale: z.boolean(),
+  hasProspectResearch: z.boolean(), hasProspectQualification: z.boolean(), qualificationRecommendation: z.string().nullable(),
+  approvedEntryOffer: signalCareApprovedOfferSchema.nullable(), likelyStakeholderRole: z.string().nullable(), conversationAngle: z.string().nullable(),
+  hasInternalDraft: z.boolean(), providerBackedProvenance: z.boolean(), externalOutreachPerformed: z.boolean().nullable(),
+  outreachReadinessComplete: z.boolean() })), openOwnerDecisions: z.number() });
 const rykasOutput = z.object({ backlog: z.number(), toShip: z.string().nullable(), listedToday: z.number(), sourcingAllowed: z.boolean(), blockers: z.array(z.string()) });
 const cchcsOutput = z.object({ commitments: z.array(z.object({ title: z.string(), status: z.string(), dueAt: z.string().nullable(), waitingOn: z.string().nullable(), blocked: z.boolean() })), overdueCount: z.number(), waitingCount: z.number() });
 
@@ -22,14 +27,30 @@ export const projectToolRegistry: Record<string, ToolDefinition> = {
       db.pipelineAction.findMany({ where: { userId: context.userId }, orderBy: { date: "desc" }, take: 50 }),
       db.queueItem.findMany({ where: { userId: context.userId, lane: { in: ["signalcare", "pipeline"] }, status: { not: "done" } }, orderBy: { createdAt: "asc" }, take: 50 }),
       db.agentDecision.count({ where: { userId: context.userId, projectId: context.projectId, status: "PENDING" } })]);
-      const now = Date.now(); return { prospects: queue.map((item) => { const evidence = actions.find((a) => a.withWhom?.toLowerCase() === item.recipient.toLowerCase());
+      const now = Date.now(); return { prospects: queue.map((item) => { const matching = actions.filter((a) => a.withWhom?.toLowerCase() === item.recipient.toLowerCase());
+        const research = matching.find((action) => action.type === "prospect_research");
+        const qualification = matching.find((action) => action.type === "prospect_qualification");
+        const evidence = qualification ?? research;
         let provenance: Record<string, unknown> = {}; try { provenance = evidence?.note ? JSON.parse(evidence.note) as Record<string, unknown> : {}; } catch { provenance = {}; }
         const verifiedFacts = Array.isArray(provenance.verifiedFacts) ? provenance.verifiedFacts : [];
         const sourceUrls = Array.isArray(provenance.sourceUrls) ? provenance.sourceUrls : [];
+        const approvedEntryOffer = signalCareApprovedOfferSchema.safeParse(provenance.recommendedEntryOffer ?? provenance.suggestedEntryOffer);
+        const likelyStakeholderRole = typeof provenance.likelyStakeholderRole === "string" ? provenance.likelyStakeholderRole : null;
+        const conversationAngle = typeof provenance.conversationAngle === "string" ? provenance.conversationAngle : null;
+        const hasInternalDraft = typeof provenance.draftOutreachLanguage === "string" && provenance.draftOutreachLanguage.trim().length > 0;
+        const providerBackedProvenance = provenance.providerBackedPublicSources === true && Array.isArray(provenance.providerSourceUrls) && provenance.providerSourceUrls.length > 0;
+        const externalOutreachPerformed = typeof provenance.externalOutreachPerformed === "boolean" ? provenance.externalOutreachPerformed : null;
         return { name: item.recipient, stage: item.status, evidence: evidence?.note ?? null,
           domain: typeof provenance.domain === "string" ? provenance.domain : null,
           verifiedFacts, sourceUrls, evidenceConfidence: typeof provenance.evidenceConfidence === "string" ? provenance.evidenceConfidence : null,
-          nextAction: item.nextAction || null, stale: now - item.createdAt.getTime() > 14 * 86400000 }; }), openOwnerDecisions: decisions }; } },
+          nextAction: item.nextAction || null, stale: now - item.createdAt.getTime() > 14 * 86400000,
+          hasProspectResearch: Boolean(research), hasProspectQualification: Boolean(qualification),
+          qualificationRecommendation: typeof provenance.recommendation === "string" ? provenance.recommendation : null,
+          approvedEntryOffer: approvedEntryOffer.success ? approvedEntryOffer.data : null, likelyStakeholderRole, conversationAngle,
+          hasInternalDraft, providerBackedProvenance, externalOutreachPerformed,
+          outreachReadinessComplete: item.status === "outreach_ready" && Boolean(qualification) && provenance.recommendation === "ADVANCE" &&
+            verifiedFacts.length > 0 && sourceUrls.length > 0 && providerBackedProvenance && Boolean(likelyStakeholderRole?.trim()) &&
+            approvedEntryOffer.success && Boolean(conversationAngle?.trim()) && hasInternalDraft && ["MEDIUM", "HIGH"].includes(String(provenance.confidence)) && externalOutreachPerformed === false }; }), openOwnerDecisions: decisions }; } },
   "rykas.operations.snapshot": { id: "rykas.operations.snapshot", profiles: ["RYKAS_GM"], classification: "READ", sensitivity: "STANDARD", policyCategory: "RESEARCH_READ_ONLY", timeoutMs: 5000, input: emptyInput, output: rykasOutput,
     async execute(context, _input, db) { const [day, tasks] = await Promise.all([db.rykasDay.findFirst({ where: { userId: context.userId }, orderBy: { date: "desc" } }), db.executionTask.findMany({ where: { userId: context.userId, domain: { slug: "rykas" }, status: { notIn: ["DONE", "DROPPED"] } }, take: 50 })]); const backlog = day?.backlogAfter ?? 0; return { backlog, toShip: day?.toShip ?? null, listedToday: day?.listedCount ?? 0, sourcingAllowed: backlog < 10, blockers: tasks.filter((t) => t.isBlocked || t.waitingOn).map((t) => `${t.title}${t.waitingOn ? ` — waiting on ${t.waitingOn}` : ""}`) }; } },
   "cchcs.commitments.snapshot": { id: "cchcs.commitments.snapshot", profiles: ["CCHCS_PM"], classification: "READ", sensitivity: "CCHCS_PHI_FREE", policyCategory: "CCHCS_PROJECT_MANAGEMENT", timeoutMs: 5000, input: emptyInput, output: cchcsOutput,

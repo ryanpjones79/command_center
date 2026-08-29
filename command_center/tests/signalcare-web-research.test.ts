@@ -22,19 +22,24 @@ import type { OrchestrationServices } from "@/server/agent/orchestration-service
 import { runAgentOrchestrationCycle } from "@/server/agent/orchestration-service";
 import { executeProjectTool } from "@/server/agent/project-tools";
 import { claimRunnerWork } from "@/server/agent/runner-service";
-import { resolveOwnerDecision } from "@/server/agent/work-service";
+import {
+  createOwnerDecision,
+  resolveOwnerDecision
+} from "@/server/agent/work-service";
 import {
   canonicalizeSignalCareSourceUrl,
   executeSignalCareHostedResearch,
   getSignalCareResearchLimit,
   normalizeProspectDomain,
   OpenAiSignalCareResearchClient,
+  recoverPrematureSignalCareOutreachDecisions,
   recoverFailedSignalCareProspectResearch,
   reclassifySignalCareProspectResearch,
   retainCitedSignalCareQualification,
   retainCitedSignalCareEvidence,
   scheduleSignalCareQualificationReviewOnce,
   serializeSignalCareResearchContext,
+  signalCareQualificationSchema,
   signalCareResearchCandidateSchema,
   type SignalCareQualification,
   type SignalCareResearchCandidate,
@@ -88,7 +93,7 @@ function candidate(
       "Multiple public locations suggest operational coordination worth qualifying.",
     hypothesis:
       "Centralized reporting may be useful, but no operational problem is asserted.",
-    suggestedEntryOffer: "Operational analytics diagnostic",
+    suggestedEntryOffer: "DENTAL_REVENUE_LEAKAGE_DIAGNOSTIC",
     evidenceConfidence: "HIGH",
     sourceUrls: [source],
     recommendedNextAction:
@@ -127,7 +132,7 @@ function qualification(
     ],
     hypothesis:
       "Cross-location reporting may be a useful conversation topic; no current problem is asserted.",
-    recommendedEntryOffer: "Operational analytics diagnostic",
+    recommendedEntryOffer: "DENTAL_REVENUE_LEAKAGE_DIAGNOSTIC",
     conversationAngle: "Compare scheduling visibility across locations.",
     draftOutreachLanguage:
       "Would a short conversation about multi-location scheduling visibility be useful?",
@@ -176,6 +181,39 @@ function modelClient(output: Record<string, unknown>): StructuredModelClient {
       return input.validator.parse(output);
     }
   } as StructuredModelClient;
+}
+
+async function createReadyProspect(name = "Existing Dental") {
+  const packageData = qualification(name);
+  const queueItem = await db.queueItem.create({
+    data: {
+      userId,
+      title: `${name} outreach package`,
+      lane: "signalcare",
+      recipient: name,
+      status: "outreach_ready",
+      nextAction: "Request Ryan approval for exact outreach package."
+    }
+  });
+  const action = await db.pipelineAction.create({
+    data: {
+      userId,
+      date: new Date(),
+      type: "prospect_qualification",
+      withWhom: name,
+      note: JSON.stringify({
+        kind: "signalcare_prospect_qualification_v1",
+        pipelineStatus: "outreach_ready",
+        ...packageData,
+        verifiedFacts: packageData.verifiedPublicFacts,
+        evidenceConfidence: packageData.confidence,
+        providerBackedPublicSources: true,
+        providerSourceUrls: packageData.sourceUrls,
+        externalOutreachPerformed: false
+      })
+    }
+  });
+  return { queueItem, action, packageData };
 }
 
 function providerSource(url: string): SignalCareProviderSource {
@@ -1268,7 +1306,11 @@ describe("SignalCare hosted public-web research", () => {
       recommendedChoice: "APPROVE",
       availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
       expectedUpside: "Open a qualified customer conversation.",
-      risk: "External communication represents Ryan."
+      risk: "External communication represents Ryan.",
+      targetEntity: {
+        type: "SIGNALCARE_PROSPECT",
+        name: "Existing Dental"
+      }
     };
     const output = modelOutput({
       ownerNeeded: true,
@@ -1308,6 +1350,12 @@ describe("SignalCare hosted public-web research", () => {
         ...output,
         ownerNeeded: false,
         ownerDecision
+      }).success
+    ).toBe(false);
+    expect(
+      pmOutputSchema.safeParse({
+        ...output,
+        ownerDecision: { ...ownerDecision, targetEntity: null }
       }).success
     ).toBe(false);
   });
@@ -1374,7 +1422,10 @@ describe("SignalCare hosted public-web research", () => {
         targetProspect: "Missing Dental"
       })
     });
-    const qualify = vi.fn().mockResolvedValue(qualification("Missing Dental"));
+    const qualify = vi.fn().mockResolvedValue({
+      qualification: qualification("Missing Dental"),
+      providerSourceUrls: qualification("Missing Dental").sourceUrls
+    });
     const result = await executeSignalCareHostedResearch(
       {
         userId,
@@ -1437,8 +1488,8 @@ describe("SignalCare hosted public-web research", () => {
         },
         {
           discover: vi.fn(),
-          qualify: vi.fn().mockResolvedValue(
-            qualification("Existing Dental", {
+          qualify: vi.fn().mockResolvedValue({
+            qualification: qualification("Existing Dental", {
               recommendation,
               confidence,
               ...(recommendation === "PASS"
@@ -1448,8 +1499,9 @@ describe("SignalCare hosted public-web research", () => {
                     nextResearchStep: null
                   }
                 : {})
-            })
-          )
+            }),
+            providerSourceUrls: qualification("Existing Dental").sourceUrls
+          })
         },
         db,
         now
@@ -1477,16 +1529,7 @@ describe("SignalCare hosted public-web research", () => {
   );
 
   it("turns an outreach-ready prospect into NEED RYAN without communicating externally", async () => {
-    await db.queueItem.create({
-      data: {
-        userId,
-        title: "Existing Dental outreach package",
-        lane: "signalcare",
-        recipient: "Existing Dental",
-        status: "outreach_ready",
-        nextAction: "Request Ryan approval for exact outreach package."
-      }
-    });
+    await createReadyProspect();
     const ownerDecision = {
       category: "SEND_EMAIL_OR_MESSAGE" as const,
       question: "Approve first outreach to Existing Dental?",
@@ -1494,7 +1537,11 @@ describe("SignalCare hosted public-web research", () => {
       recommendedChoice: "APPROVE",
       availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
       expectedUpside: "Open a qualified customer conversation.",
-      risk: "External communication represents Ryan."
+      risk: "External communication represents Ryan.",
+      targetEntity: {
+        type: "SIGNALCARE_PROSPECT",
+        name: "Existing Dental"
+      }
     };
     const { services } = modelServices({
       ...modelOutput({
@@ -1517,6 +1564,17 @@ describe("SignalCare hosted public-web research", () => {
 
     expect(result.projects[0]?.outcome).toBe("NEEDS_RYAN");
     expect(await db.agentDecision.count({ where: { userId } })).toBe(1);
+    const persistedDecision = await db.agentDecision.findFirstOrThrow({
+      where: { userId }
+    });
+    expect(persistedDecision.question).toBe(
+      "Approve first outreach to Existing Dental?"
+    );
+    expect(JSON.parse(persistedDecision.availableChoices)).toEqual([
+      "APPROVE",
+      "NEEDS_MORE_RESEARCH",
+      "PASS"
+    ]);
     expect(await db.agentActionRequest.count({ where: { userId } })).toBe(1);
     const actionRequest = await db.agentActionRequest.findFirstOrThrow({
       where: { userId }
@@ -1542,6 +1600,7 @@ describe("SignalCare hosted public-web research", () => {
   });
 
   it("returns NEEDS_MORE_RESEARCH outreach decisions to bounded work", async () => {
+    await createReadyProspect();
     const ownerDecision = {
       category: "SEND_EMAIL_OR_MESSAGE" as const,
       question: "Approve first outreach to Existing Dental?",
@@ -1549,7 +1608,11 @@ describe("SignalCare hosted public-web research", () => {
       recommendedChoice: "APPROVE",
       availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
       expectedUpside: "Open a qualified customer conversation.",
-      risk: "External communication represents Ryan."
+      risk: "External communication represents Ryan.",
+      targetEntity: {
+        type: "SIGNALCARE_PROSPECT",
+        name: "Existing Dental"
+      }
     };
     const { services } = modelServices({
       ...modelOutput({ ownerNeeded: true, ownerDecision }),
@@ -1640,5 +1703,383 @@ describe("SignalCare hosted public-web research", () => {
         })
       ).nextAgentReviewAt?.toISOString()
     ).toBe(now.toISOString());
+  });
+
+  it("converts a premature queued-prospect outreach escalation into qualification", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Qualify Caption Care",
+        lane: "signalcare",
+        recipient: "Caption Care",
+        status: "queued",
+        nextAction: "Requalify against the canonical commercial profile."
+      }
+    });
+    await db.pipelineAction.create({
+      data: {
+        userId,
+        date: new Date(),
+        type: "prospect_research",
+        withWhom: "Caption Care",
+        note: JSON.stringify({
+          suggestedEntryOffer: "HEALTHCARE_OPERATIONAL_VISIBILITY_WORKFLOW_DIAGNOSTIC",
+          verifiedFacts: qualification("Caption Care").verifiedPublicFacts,
+          sourceUrls: qualification("Caption Care").sourceUrls
+        })
+      }
+    });
+    const ownerDecision = {
+      category: "SEND_EMAIL_OR_MESSAGE" as const,
+      question: "Approve outreach to Caption Care?",
+      context: "The model proposed outreach before qualification.",
+      recommendedChoice: "APPROVE",
+      availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+      expectedUpside: "Potential conversation.",
+      risk: "Positioning is not yet verified.",
+      targetEntity: {
+        type: "SIGNALCARE_PROSPECT" as const,
+        name: "Caption Care"
+      }
+    };
+    const qualify = vi.fn().mockResolvedValue({
+      qualification: qualification("Caption Care", {
+        recommendation: "PASS",
+        confidence: "MEDIUM",
+        conversationAngle: null,
+        draftOutreachLanguage: null,
+        evidenceAgainstPursuit:
+          "Caption Care is a technology vendor and public evidence does not establish buyer fit.",
+        qualificationSummary:
+          "Caption Care is not currently a plausible customer for an approved SignalCare offer."
+      }),
+      providerSourceUrls: qualification("Caption Care").sourceUrls
+    });
+    const { services } = modelServices(
+      {
+        ...modelOutput({
+          ownerNeeded: true,
+          ownerDecision,
+          actionCategory: "SEND_EMAIL_OR_MESSAGE"
+        }),
+        disposition: "WAIT",
+        plannedBottleneck: "Caption Care has not been qualified."
+      } as Awaited<
+        ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+      >,
+      { discover: vi.fn(), qualify }
+    );
+
+    const result = await runAgentOrchestrationCycle(
+      new Date("2026-08-29T18:00:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+
+    expect(result.projects[0]?.outcome).toBe("COMPLETED");
+    expect(qualify).toHaveBeenCalledOnce();
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+    expect(
+      await db.queueItem.findFirstOrThrow({
+        where: { userId, recipient: "Caption Care" }
+      })
+    ).toMatchObject({ status: "passed" });
+    expect(
+      await db.agentEvent.count({
+        where: {
+          userId,
+          type: "PREMATURE_OWNER_ESCALATION_SUPPRESSED"
+        }
+      })
+    ).toBe(1);
+  });
+
+  it.each([
+    ["draftOutreachLanguage", null, "Internal draft outreach language is missing"],
+    ["providerBackedPublicSources", false, "Provider-backed public source provenance is missing"]
+  ] as const)(
+    "blocks outreach when qualification %s is incomplete",
+    async (field, value, expectedReason) => {
+      const { packageData } = await createReadyProspect();
+      const action = await db.pipelineAction.findFirstOrThrow({
+        where: { userId, type: "prospect_qualification" }
+      });
+      const evidence = {
+        ...JSON.parse(action.note ?? "{}"),
+        [field]: value
+      };
+      await db.pipelineAction.update({
+        where: { id: action.id },
+        data: { note: JSON.stringify(evidence) }
+      });
+      const work = await createWork(`incomplete-${field}`);
+      await db.agentWorkItem.update({
+        where: { id: work.id },
+        data: { state: "PLANNING" }
+      });
+      await expect(
+        createOwnerDecision(
+          {
+            userId,
+            projectId: signalProjectId,
+            workItemId: work.id,
+            idempotencyKey: `incomplete-decision-${field}`,
+            profile: "SIGNALCARE_GM",
+            plan: {
+              category: "SEND_EMAIL_OR_MESSAGE",
+              question: "Approve first outreach to Existing Dental?",
+              context: packageData.qualificationSummary,
+              recommendedChoice: "APPROVE",
+              availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+              expectedUpside: "Potential customer conversation.",
+              risk: "External representation.",
+              targetEntity: {
+                type: "SIGNALCARE_PROSPECT",
+                name: "Existing Dental"
+              }
+            }
+          },
+          db
+        )
+      ).rejects.toThrow(expectedReason);
+      expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+      expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+    }
+  );
+
+  it("cancels the known Caption Care escalation idempotently and schedules requalification", async () => {
+    const now = new Date("2026-08-29T19:00:00.000Z");
+    const queue = await db.queueItem.create({
+      data: {
+        userId,
+        title: "Caption Care outreach",
+        lane: "signalcare",
+        recipient: "Caption Care",
+        status: "queued",
+        nextAction: "Reach out to Caption Care"
+      }
+    });
+    const work = await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "unsafe-caption-care-work",
+        title: "Authorize Caption Care outreach",
+        objective: "Authorize premature outreach.",
+        expectedValue: "Unverified.",
+        acceptanceCriteria: "Owner decides.",
+        agentRole: "SIGNALCARE_GM",
+        actionCategory: "SEND_EMAIL_OR_MESSAGE",
+        requiredCapability: "REPOSITORY_READ",
+        state: "NEEDS_RYAN"
+      }
+    });
+    const decision = await db.agentDecision.create({
+      data: {
+        id: "cmtevqx9y0011qk0pf8pk56sz",
+        userId,
+        projectId: signalProjectId,
+        originatingWorkItemId: work.id,
+        idempotencyKey: "unsafe-caption-care-decision",
+        category: "SEND_EMAIL_OR_MESSAGE",
+        question: "Authorize sending outreach after a draft is prepared?",
+        context: "Incorrect monitoring-platform positioning.",
+        recommendedChoice: "Authorize outreach",
+        availableChoices: JSON.stringify([
+          "Authorize outreach",
+          "Do not authorize outreach; retain the prospect in queue."
+        ]),
+        risk: "Premature and incorrectly positioned outreach."
+      }
+    });
+    const action = await db.agentActionRequest.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        decisionId: decision.id,
+        idempotencyKey: "unsafe-caption-care-action",
+        actionFingerprint: "unsafe-caption-care-fingerprint",
+        category: "SEND_EMAIL_OR_MESSAGE",
+        capability: "SEND_EMAIL_OR_MESSAGE",
+        state: "AWAITING_OWNER_APPROVAL",
+        boundedPayload: JSON.stringify({ legacy: true }),
+        authorizationBounds: JSON.stringify({ oneTime: true })
+      }
+    });
+
+    expect(
+      await recoverPrematureSignalCareOutreachDecisions(userId, db, now)
+    ).toEqual([decision.id]);
+    expect(
+      await recoverPrematureSignalCareOutreachDecisions(userId, db, now)
+    ).toEqual([]);
+    expect(
+      await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    ).toMatchObject({ status: "CANCELLED" });
+    expect(
+      await db.agentActionRequest.findUniqueOrThrow({ where: { id: action.id } })
+    ).toMatchObject({ state: "CANCELLED", authorizedAt: null, executedAt: null });
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "PARKED" });
+    expect(
+      await db.queueItem.findUniqueOrThrow({ where: { id: queue.id } })
+    ).toMatchObject({
+      status: "queued",
+      nextAction:
+        "Requalify against canonical SignalCare commercial profile before outreach."
+    });
+    expect(
+      (
+        await db.agentProjectConfig.findUniqueOrThrow({
+          where: { projectId: signalProjectId }
+        })
+      ).nextAgentReviewAt?.toISOString()
+    ).toBe(now.toISOString());
+    expect(
+      await db.agentEvent.count({
+        where: {
+          userId,
+          type: "PREMATURE_OWNER_ESCALATION_CANCELLED"
+        }
+      })
+    ).toBe(1);
+  });
+
+  it.each([
+    "Do not authorize outreach; retain the prospect in queue.",
+    "Some unknown prose"
+  ])("fails closed for unmapped owner choice: %s", async (choice) => {
+    const work = await createWork(`unsafe-choice-work-${choice}`);
+    await db.agentWorkItem.update({
+      where: { id: work.id },
+      data: { state: "NEEDS_RYAN" }
+    });
+    const decision = await db.agentDecision.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        originatingWorkItemId: work.id,
+        idempotencyKey: `unsafe-choice-decision-${choice}`,
+        category: "SEND_EMAIL_OR_MESSAGE",
+        question: "Unsafe legacy decision",
+        context: "Legacy prose choices.",
+        availableChoices: JSON.stringify([choice]),
+        risk: "Unknown choice must fail closed."
+      }
+    });
+    const action = await db.agentActionRequest.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        decisionId: decision.id,
+        idempotencyKey: `unsafe-choice-action-${choice}`,
+        actionFingerprint: `unsafe-choice-fingerprint-${choice}`,
+        category: "SEND_EMAIL_OR_MESSAGE",
+        capability: "SEND_EMAIL_OR_MESSAGE",
+        state: "AWAITING_OWNER_APPROVAL",
+        boundedPayload: JSON.stringify({ legacy: true }),
+        authorizationBounds: JSON.stringify({ oneTime: true })
+      }
+    });
+    await expect(
+      resolveOwnerDecision(userId, decision.id, choice, db)
+    ).rejects.toThrow("no safe deterministic resolution mapping");
+    expect(
+      await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    ).toMatchObject({ status: "PENDING", selectedChoice: null });
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "NEEDS_RYAN" });
+    expect(
+      await db.agentActionRequest.findUniqueOrThrow({ where: { id: action.id } })
+    ).toMatchObject({ state: "AWAITING_OWNER_APPROVAL", authorizedAt: null });
+  });
+
+  it("maps PASS explicitly to PARKED", async () => {
+    await createReadyProspect();
+    const work = await createWork("pass-choice-work");
+    await db.agentWorkItem.update({
+      where: { id: work.id },
+      data: { state: "PLANNING" }
+    });
+    const decision = await createOwnerDecision(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        idempotencyKey: "pass-choice-decision",
+        profile: "SIGNALCARE_GM",
+        plan: {
+          category: "SEND_EMAIL_OR_MESSAGE",
+          question: "Approve first outreach to Existing Dental?",
+          context: "Complete evidence-backed package.",
+          recommendedChoice: "APPROVE",
+          availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+          expectedUpside: "Potential customer conversation.",
+          risk: "External representation.",
+          targetEntity: {
+            type: "SIGNALCARE_PROSPECT",
+            name: "Existing Dental"
+          }
+        }
+      },
+      db
+    );
+    await db.agentWorkItem.update({
+      where: { id: work.id },
+      data: { state: "NEEDS_RYAN" }
+    });
+    await resolveOwnerDecision(userId, decision.id, "PASS", db);
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "PARKED" });
+  });
+
+  it("rejects invented SignalCare offers and monitoring-platform positioning", () => {
+    expect(
+      signalCareResearchCandidateSchema.safeParse({
+        ...candidate(1),
+        suggestedEntryOffer: "POST_PROCEDURE_MONITORING_PLATFORM"
+      }).success
+    ).toBe(false);
+    expect(
+      signalCareResearchCandidateSchema.safeParse({
+        ...candidate(1),
+        signalCareFit:
+          "SignalCare's post-procedure patient monitoring platform would integrate with this vendor."
+      }).success
+    ).toBe(false);
+    expect(
+      signalCareQualificationSchema.safeParse({
+        ...qualification("Caption Care"),
+        recommendedEntryOffer: "post-procedure monitoring platform"
+      }).success
+    ).toBe(false);
+  });
+
+  it("exposes research, qualification, and deterministic readiness separately", async () => {
+    await createReadyProspect();
+    const snapshot = (await executeProjectTool(
+      { userId, projectId: signalProjectId, profile: "SIGNALCARE_GM" },
+      "signalcare.pipeline.snapshot",
+      {},
+      db
+    )) as {
+      prospects: Array<Record<string, unknown>>;
+    };
+    expect(snapshot.prospects[0]).toMatchObject({
+      stage: "outreach_ready",
+      hasProspectResearch: false,
+      hasProspectQualification: true,
+      qualificationRecommendation: "ADVANCE",
+      approvedEntryOffer: "DENTAL_REVENUE_LEAKAGE_DIAGNOSTIC",
+      providerBackedProvenance: true,
+      hasInternalDraft: true,
+      outreachReadinessComplete: true,
+      externalOutreachPerformed: false
+    });
   });
 });

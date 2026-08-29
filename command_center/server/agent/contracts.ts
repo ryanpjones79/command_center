@@ -51,6 +51,10 @@ export type OwnerDecisionPlan = {
   availableChoices: string[];
   expectedUpside: string;
   risk: string;
+  targetEntity?: {
+    type: "SIGNALCARE_PROSPECT";
+    name: string;
+  } | null;
   amountCents?: number;
   currency?: string;
   capability?: string;

@@ -18,6 +18,7 @@ import {
 } from "@/server/agent/mock-agents";
 import { ModelProjectManagerAgent } from "@/server/agent/model-agents";
 import { collectProjectEvidence, defaultToolsForProfile } from "@/server/agent/project-tools";
+import { evaluateSignalCareOutreachReadiness } from "@/server/agent/signalcare-outreach-policy";
 import {
   executeSignalCareHostedResearch,
   OpenAiSignalCareResearchClient,
@@ -115,7 +116,8 @@ async function recordModelPmDecision(
               category: plan.ownerDecision.category,
               question: plan.ownerDecision.question,
               recommendedChoice: plan.ownerDecision.recommendedChoice,
-              availableChoices: plan.ownerDecision.availableChoices
+              availableChoices: plan.ownerDecision.availableChoices,
+              targetEntity: plan.ownerDecision.targetEntity ?? null
             }
           : null
       }
@@ -151,6 +153,37 @@ function planFromPersistedWork(
     dependsOnWorkItemId: workItem.dependsOnWorkItemId ?? undefined,
     researchMode: signalCareContext?.researchMode ?? null,
     targetProspect: signalCareContext?.targetProspect ?? null
+  };
+}
+
+function signalCareQualificationPlan(
+  targetProspect: string,
+  originalPlan: AgentWorkPlan,
+  readinessReasons: string[]
+): AgentWorkPlan {
+  return {
+    disposition: "CREATE_WORK",
+    title: `Qualify ${targetProspect} against the canonical SignalCare commercial profile`,
+    objective: `Determine whether ${targetProspect} is a plausible customer for an approved SignalCare offer and prepare an internal outreach package only if public evidence supports it.`,
+    expectedValue:
+      "Replace premature outreach with evidence-backed customer qualification.",
+    acceptanceCriteria:
+      "Public provider-backed facts map the prospect to one approved SignalCare offer; the result is ADVANCE, NEED_MORE_RESEARCH, or PASS; no external communication occurs.",
+    agentRole: "SIGNALCARE_RESEARCHER",
+    actionCategory: "RESEARCH_READ_ONLY",
+    priority: "HIGH",
+    maxAttempts: Math.max(1, Math.min(3, originalPlan.maxAttempts)),
+    plannedBottleneck: `Qualification is incomplete for ${targetProspect}.`,
+    requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+    sandboxPolicy: "READ_ONLY",
+    networkPolicy: "ALLOWLIST",
+    operationalContext: `Resolve deterministic outreach-readiness gaps: ${readinessReasons.join(" ")}`,
+    evidence: originalPlan.evidence,
+    nextReviewMinutes: originalPlan.nextReviewMinutes,
+    ownerNeeded: false,
+    ownerDecision: null,
+    researchMode: "QUALIFY_EXISTING_PROSPECT",
+    targetProspect
   };
 }
 
@@ -277,6 +310,72 @@ async function processClaimedProject(
     assertOwnerDecisionConsistency(plan);
     if (services.projectManager.adapterKind === "MODEL") {
       await recordModelPmDecision(config, dueAnchor, plan, db);
+    }
+
+    if (
+      plan.ownerNeeded === true &&
+      plan.ownerDecision?.category === "SEND_EMAIL_OR_MESSAGE" &&
+      config.profile === "SIGNALCARE_GM"
+    ) {
+      const target = plan.ownerDecision.targetEntity;
+      const readiness =
+        target?.type === "SIGNALCARE_PROSPECT"
+          ? await evaluateSignalCareOutreachReadiness(
+              config.userId,
+              config.projectId,
+              target,
+              db
+            )
+          : null;
+      if (!readiness?.ready) {
+        const reasons = readiness?.reasons ?? [
+          "SignalCare outreach proposal has no typed target prospect."
+        ];
+        await recordAgentEvent(
+          {
+            userId: config.userId,
+            projectId: config.projectId,
+            idempotencyKey: `premature-outreach-suppressed:${config.projectId}:${dueAnchor.toISOString()}`,
+            type: "PREMATURE_OWNER_ESCALATION_SUPPRESSED",
+            summary:
+              "A premature SignalCare outreach escalation was suppressed before any owner decision or action request was created.",
+            metadata: {
+              targetProspect: readiness?.target.name ?? target?.name ?? null,
+              reasons,
+              externalOutreachPerformed: false
+            }
+          },
+          db
+        );
+        if (
+          readiness?.queueItemId &&
+          readiness.queueStatus !== "passed" &&
+          target
+        ) {
+          plan = signalCareQualificationPlan(
+            readiness.target.name,
+            plan,
+            reasons
+          );
+        } else {
+          await releaseProjectClaim(
+            config.id,
+            leaseToken,
+            now,
+            {
+              health: "NEEDS_ATTENTION",
+              currentBottleneck: "SignalCare outreach target is not eligible for approval.",
+              nextAgentReviewAt: nextReviewAt(now, plan.nextReviewMinutes)
+            },
+            db
+          );
+          return {
+            ...baseResult,
+            outcome: "WAITING",
+            detail: `Outreach escalation suppressed: ${reasons.join(" ")}`
+          };
+        }
+      }
     }
 
     if (plan.ownerNeeded === true && plan.ownerDecision) {
@@ -732,6 +831,67 @@ async function processClaimedProject(
       expectedUpside: current.expectedValue,
       risk: "Independent QA determined owner judgment is required."
     };
+    if (
+      config.profile === "SIGNALCARE_GM" &&
+      decisionPlan.category === "SEND_EMAIL_OR_MESSAGE"
+    ) {
+      const target = decisionPlan.targetEntity;
+      const readiness =
+        target?.type === "SIGNALCARE_PROSPECT"
+          ? await evaluateSignalCareOutreachReadiness(
+              config.userId,
+              config.projectId,
+              target,
+              db
+            )
+          : null;
+      if (!readiness?.ready) {
+        await transitionAgentWorkItem(config.userId, current.id, "DONE", {
+          blocker: null,
+          resultSummary: workerResult.operationalResultSummary,
+          evidenceSummary: verification.evidence
+        }, db);
+        await recordAgentEvent(
+          {
+            userId: config.userId,
+            projectId: config.projectId,
+            workItemId: current.id,
+            runId: qaRun.id,
+            idempotencyKey: `premature-qa-outreach-suppressed:${qaRun.id}`,
+            type: "PREMATURE_OWNER_ESCALATION_SUPPRESSED",
+            summary:
+              "QA-complete internal work did not create an outreach decision because deterministic readiness requirements were not met.",
+            metadata: {
+              targetProspect: target?.name ?? null,
+              reasons: readiness?.reasons ?? [
+                "SignalCare outreach proposal has no typed target prospect."
+              ],
+              externalOutreachPerformed: false
+            }
+          },
+          db
+        );
+        await releaseProjectClaim(
+          config.id,
+          leaseToken,
+          now,
+          {
+            health: "NEEDS_ATTENTION",
+            currentBottleneck:
+              "SignalCare prospect qualification must precede outreach approval.",
+            nextAgentReviewAt: now
+          },
+          db
+        );
+        return {
+          ...baseResult,
+          outcome: "COMPLETED",
+          workItemId: current.id,
+          detail:
+            "Internal work completed; premature outreach escalation was suppressed."
+        };
+      }
+    }
     const decision = await createOwnerDecision({
       userId: config.userId,
       projectId: config.projectId,

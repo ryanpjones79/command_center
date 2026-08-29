@@ -105,7 +105,7 @@ describe("Agent HQ durable orchestration", () => {
     expect(projects.find((project) => project.name === "CCHCS")?.agentConfig?.primaryKpi).toBeNull();
   });
 
-  it("runs all three seeded mock lifecycles through worker, QA, and NEED RYAN", async () => {
+  it("runs all three seeded mock lifecycles while suppressing premature SignalCare outreach", async () => {
     await db.agentProjectConfig.updateMany({
       where: { userId },
       data: { nextAgentReviewAt: cycleTime, leaseToken: null, leaseExpiresAt: null }
@@ -117,7 +117,9 @@ describe("Agent HQ durable orchestration", () => {
       "Rykas",
       "SignalCare"
     ]);
-    expect(result.projects.every((project) => project.outcome === "NEEDS_RYAN")).toBe(true);
+    expect(result.projects.find((project) => project.projectName === "CCHCS")?.outcome).toBe("NEEDS_RYAN");
+    expect(result.projects.find((project) => project.projectName === "Rykas")?.outcome).toBe("NEEDS_RYAN");
+    expect(result.projects.find((project) => project.projectName === "SignalCare")?.outcome).toBe("COMPLETED");
 
     const [work, runs, decisions, events] = await Promise.all([
       db.agentWorkItem.findMany({ where: { userId } }),
@@ -126,35 +128,39 @@ describe("Agent HQ durable orchestration", () => {
       db.agentEvent.findMany({ where: { userId } })
     ]);
     expect(work).toHaveLength(3);
-    expect(work.every((item) => item.state === "NEEDS_RYAN" && item.attemptCount === 1)).toBe(true);
+    expect(work.filter((item) => item.state === "NEEDS_RYAN")).toHaveLength(2);
+    expect(work.filter((item) => item.state === "DONE")).toHaveLength(1);
+    expect(work.every((item) => item.attemptCount === 1)).toBe(true);
     expect(runs).toHaveLength(6);
     expect(runs.every((run) => run.status === "SUCCEEDED")).toBe(true);
     expect(decisions.map((decision) => decision.project.name).sort()).toEqual([
       "CCHCS",
-      "Rykas",
-      "SignalCare"
+      "Rykas"
     ]);
     expect(events.some((event) => event.type === "WORK_COMPLETED")).toBe(true);
     expect(events.some((event) => event.type === "QA_PASSED")).toBe(true);
     expect(events.some((event) => event.type === "OWNER_ESCALATION_CREATED")).toBe(true);
+    expect(events.some((event) => event.type === "PREMATURE_OWNER_ESCALATION_SUPPRESSED")).toBe(true);
   });
 
   it("makes repeated scheduler invocation idempotent and prevents duplicate work", async () => {
     const before = await db.agentWorkItem.count({ where: { userId } });
     const repeated = await runAgentOrchestrationCycle(cycleTime, { userId, db });
     const after = await db.agentWorkItem.count({ where: { userId } });
-    expect(repeated.dueProjectCount).toBe(0);
+    expect(repeated.dueProjectCount).toBe(1);
+    expect(repeated.projects[0]?.projectName).toBe("SignalCare");
+    expect(repeated.projects[0]?.outcome).toBe("SKIPPED");
     expect(after).toBe(before);
   });
 
   it("creates and resolves owner decisions with per-user isolation", async () => {
     const decision = await db.agentDecision.findFirstOrThrow({
-      where: { userId, project: { name: "SignalCare" }, status: "PENDING" }
+      where: { userId, project: { name: "Rykas" }, status: "PENDING" }
     });
     await expect(resolveOwnerDecision(otherUserId, decision.id, "APPROVE", db)).rejects.toThrow(
       "not found for this user"
     );
-    const resolved = await resolveOwnerDecision(userId, decision.id, "APPROVE", db);
+    const resolved = await resolveOwnerDecision(userId, decision.id, "BUY", db);
     expect(resolved.status).toBe("RESOLVED");
     expect(resolved.resultingAction).toContain("nothing external");
     const work = await db.agentWorkItem.findUniqueOrThrow({ where: { id: decision.originatingWorkItemId! } });
