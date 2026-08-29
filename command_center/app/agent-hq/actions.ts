@@ -11,30 +11,38 @@ function revalidateAgentViews() {
   revalidatePath("/projects");
 }
 
+const entityIdSchema = z.string().min(1).max(191);
+
 export async function setAgentProjectPausedAction(formData: FormData) {
   const user = await requireUser();
-  const parsed = z.object({ projectId: z.string().cuid(), paused: z.enum(["true", "false"]) }).safeParse({
+  const parsed = z.object({ projectId: entityIdSchema, paused: z.enum(["true", "false"]) }).safeParse({
     projectId: formData.get("projectId"),
     paused: formData.get("paused")
   });
-  if (!parsed.success) return;
+  if (!parsed.success) {
+    console.error("Invalid agent pause/resume form", parsed.error.flatten());
+    return;
+  }
   await setAgentProjectPaused(user.id, parsed.data.projectId, parsed.data.paused === "true");
   revalidateAgentViews();
 }
 
 export async function resolveAgentDecisionAction(formData: FormData) {
   const user = await requireUser();
-  const parsed = z.object({ decisionId: z.string().cuid(), choice: z.string().min(1).max(80) }).safeParse({
+  const parsed = z.object({ decisionId: entityIdSchema, choice: z.string().min(1).max(80) }).safeParse({
     decisionId: formData.get("decisionId"),
     choice: formData.get("choice")
   });
-  if (!parsed.success) return;
+  if (!parsed.success) {
+    console.error("Invalid agent decision form", parsed.error.flatten());
+    return;
+  }
   await resolveOwnerDecision(user.id, parsed.data.decisionId, parsed.data.choice);
   revalidateAgentViews();
 }
 
 const configSchema = z.object({
-  projectId: z.string().cuid(),
+  projectId: entityIdSchema,
   operatingMode: z.enum(["SIMULATION", "LIVE_INTERNAL"]),
   objective: z.string().min(5).max(2000),
   primaryKpi: z.string().max(500).optional(),
@@ -64,11 +72,14 @@ export async function updateAgentProjectConfigAction(formData: FormData) {
     spendingThresholdDollars: formData.get("spendingThresholdDollars") || undefined,
     externalActionApproval: formData.get("externalActionApproval") || undefined
   });
-  if (!parsed.success) return;
+  if (!parsed.success) {
+    console.error("Invalid agent control form", parsed.error.flatten());
+    throw new Error("Agent control form validation failed. Check the server log for the invalid field.");
+  }
   const config = await prisma.agentProjectConfig.findFirst({
     where: { projectId: parsed.data.projectId, userId: user.id }
   });
-  if (!config) return;
+  if (!config) throw new Error("AgentProjectConfig not found for this user.");
   await prisma.agentProjectConfig.update({
     where: { id: config.id },
     data: {
