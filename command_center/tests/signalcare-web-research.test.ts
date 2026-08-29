@@ -904,6 +904,206 @@ describe("SignalCare hosted public-web research", () => {
     });
   });
 
+  it("completes successfully when the quality gate rejects every candidate", async () => {
+    const now = new Date("2026-08-29T12:00:00.000Z");
+    const work = await createWork("quality-gate-no-match");
+    const diagnostics = {
+      rawCandidateCount: 1,
+      providerSourceCount: 24,
+      candidatesAccepted: 0,
+      candidatesRejectedLowConfidence: 0,
+      candidatesRejectedNoProviderSource: 0,
+      candidatesRejectedQualityGate: 1,
+      factsRejectedNoProviderSource: 0
+    };
+    const client: SignalCareResearchClient = {
+      async discover() {
+        return {
+          candidates: [],
+          searchSummary:
+            "The only researched organization did not pass the deterministic quality gate.",
+          diagnostics
+        };
+      }
+    };
+    const { services, chooseNextWork } = waitingServices(client);
+
+    const cycle = await runAgentOrchestrationCycle(now, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+
+    expect(cycle.projects[0]).toMatchObject({
+      outcome: "COMPLETED",
+      workItemId: work.id,
+      detail:
+        "Discovery completed; 0 prospects passed the SignalCare quality gate. 1 candidate was rejected. Acquisition will continue on a later review."
+    });
+    expect(chooseNextWork).not.toHaveBeenCalled();
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "DONE", blocker: null });
+    const runs = await db.agentRun.findMany({
+      where: { workItemId: work.id },
+      orderBy: { startedAt: "asc" }
+    });
+    expect(runs).toHaveLength(2);
+    expect(runs).toEqual([
+      expect.objectContaining({
+        runType: "HOSTED_WEB_RESEARCH",
+        status: "SUCCEEDED"
+      }),
+      expect.objectContaining({
+        runType: "DETERMINISTIC_RESEARCH_QA",
+        status: "SUCCEEDED",
+        operationalResultSummary: "PASS"
+      })
+    ]);
+    expect(JSON.parse(runs[0]?.structuredOutcome ?? "{}")).toMatchObject({
+      discoveryOutcome: "NO_QUALIFIED_CANDIDATES",
+      created: [],
+      validationDiagnostics: diagnostics
+    });
+    expect(JSON.parse(runs[1]?.structuredOutcome ?? "{}")).toMatchObject({
+      outcome: "PASS",
+      discoveryOutcome: "NO_QUALIFIED_CANDIDATES",
+      validationDiagnostics: diagnostics
+    });
+    const event = await db.agentEvent.findFirstOrThrow({
+      where: {
+        userId,
+        workItemId: work.id,
+        type: "SIGNALCARE_DISCOVERY_NO_MATCH"
+      }
+    });
+    expect(JSON.parse(event.metadata ?? "{}")).toMatchObject({
+      ...diagnostics,
+      externalOutreachPerformed: false
+    });
+    expect(await db.queueItem.count({ where: { userId } })).toBe(0);
+    expect(
+      await db.pipelineAction.count({
+        where: { userId, type: "prospect_research" }
+      })
+    ).toBe(0);
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+    expect(
+      (
+        await db.agentProjectConfig.findUniqueOrThrow({
+          where: { projectId: signalProjectId }
+        })
+      ).nextAgentReviewAt?.toISOString()
+    ).toBe("2026-08-29T12:30:00.000Z");
+    const config = await db.agentProjectConfig.findUniqueOrThrow({
+      where: { projectId: signalProjectId }
+    });
+    expect(await recoverFailedSignalCareProspectResearch(config, db)).toEqual(
+      []
+    );
+  });
+
+  it("treats a valid provider response with zero raw candidates as a successful no-match", async () => {
+    const now = new Date("2026-08-29T13:00:00.000Z");
+    const work = await createWork("empty-provider-no-match");
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      {
+        async discover() {
+          return {
+            candidates: [],
+            searchSummary: "The bounded search found no plausible customers."
+          };
+        }
+      },
+      db,
+      now
+    );
+
+    expect(result).toMatchObject({
+      outcome: "COMPLETED",
+      created: [],
+      discoveryOutcome: "NO_QUALIFIED_CANDIDATES",
+      diagnostics: {
+        rawCandidateCount: 0,
+        candidatesAccepted: 0
+      }
+    });
+    expect(await db.queueItem.count({ where: { userId } })).toBe(0);
+    expect(await db.pipelineAction.count({ where: { userId } })).toBe(0);
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "DONE" });
+    expect(
+      (
+        await db.agentProjectConfig.findUniqueOrThrow({
+          where: { projectId: signalProjectId }
+        })
+      ).nextAgentReviewAt?.toISOString()
+    ).toBe("2026-08-29T13:30:00.000Z");
+  });
+
+  it("keeps provider and malformed-schema errors on the retry path", async () => {
+    const providerWork = await createWork("provider-error-remains-failure");
+    const providerResult = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: providerWork.id,
+        objective: providerWork.objective
+      },
+      {
+        async discover() {
+          throw new Error("Provider request failed (503).");
+        }
+      },
+      db
+    );
+    expect(providerResult).toMatchObject({
+      outcome: "RETRY",
+      error: "Provider request failed (503)."
+    });
+
+    const malformedWork = await createWork("malformed-schema-remains-failure");
+    const malformedResult = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: malformedWork.id,
+        objective: malformedWork.objective
+      },
+      {
+        async discover() {
+          return {
+            candidates: [{ organizationName: "Incomplete Candidate" }],
+            searchSummary: "Malformed candidate."
+          } as unknown as Awaited<
+            ReturnType<SignalCareResearchClient["discover"]>
+          >;
+        }
+      },
+      db
+    );
+    expect(malformedResult.outcome).toBe("RETRY");
+    const malformedRun = await db.agentRun.findFirstOrThrow({
+      where: {
+        workItemId: malformedWork.id,
+        runType: "HOSTED_WEB_RESEARCH"
+      }
+    });
+    expect(malformedRun).toMatchObject({ status: "FAILED" });
+    expect(JSON.parse(malformedRun.evidence ?? "{}")).toMatchObject({
+      failureStage: "result_validation"
+    });
+  });
+
   it("skips repeated discovery when an active prospect already exists", async () => {
     await db.queueItem.create({
       data: {

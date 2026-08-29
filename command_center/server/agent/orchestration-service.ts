@@ -567,9 +567,22 @@ async function processClaimedProject(
         workItemId: workItem.id, objective: workItem.objective },
         services.signalCareResearchClient ?? new OpenAiSignalCareResearchClient(), db, now);
       if (research.outcome === "COMPLETED") {
-        await releaseProjectClaim(config.id, leaseToken, now, { health: "ON_TRACK", currentBottleneck: plan.plannedBottleneck, nextAgentReviewAt: now }, db);
+        const noQualifiedCandidates =
+          "discoveryOutcome" in research &&
+          research.discoveryOutcome === "NO_QUALIFIED_CANDIDATES";
+        const configuredNextReviewAt = noQualifiedCandidates
+          ? await db.agentProjectConfig
+              .findUnique({
+                where: { projectId: config.projectId },
+                select: { nextAgentReviewAt: true }
+              })
+              .then((project) => project?.nextAgentReviewAt ?? now)
+          : now;
+        await releaseProjectClaim(config.id, leaseToken, now, { health: "ON_TRACK", currentBottleneck: plan.plannedBottleneck, nextAgentReviewAt: configuredNextReviewAt }, db);
         return { ...baseResult, outcome: "COMPLETED", workItemId: workItem.id,
-          detail: research.qualifiedProspect
+          detail: "detail" in research && typeof research.detail === "string"
+            ? research.detail
+            : research.qualifiedProspect
             ? `${research.qualifiedProspect} advanced to ${research.pipelineStatus}; PM is due to reevaluate.`
             : research.skippedBecauseProspectsExist ? "Existing prospects suppressed repeated discovery; PM is due to reevaluate." : `${research.created.length} evidence-backed prospect(s) entered the pipeline; PM is due to reevaluate.` };
       }

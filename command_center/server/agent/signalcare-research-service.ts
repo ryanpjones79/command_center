@@ -1335,6 +1335,7 @@ function isUsefulExistingProspect(item: {
 const priorProvenanceValidationFailure =
   "Hosted research returned no candidates with adequate cited evidence";
 const provenanceRecoveryVersion = "canonical-provenance-v2";
+export const SIGNALCARE_NO_MATCH_REVIEW_MINUTES = 30;
 
 function isPriorProvenanceValidationFailure(blocker: string | null) {
   return blocker
@@ -1360,6 +1361,16 @@ function researchDiagnosticsSummary(
   return Object.entries(diagnostics)
     .map(([key, value]) => `${key}=${value}`)
     .join(", ");
+}
+
+function noQualifiedCandidatesSummary(
+  diagnostics: SignalCareResearchDiagnostics
+) {
+  const rejectedCount = Math.max(
+    0,
+    diagnostics.rawCandidateCount - diagnostics.candidatesAccepted
+  );
+  return `Discovery completed; 0 prospects passed the SignalCare quality gate. ${rejectedCount} candidate${rejectedCount === 1 ? " was" : "s were"} rejected. Acquisition will continue on a later review.`;
 }
 
 export async function recoverFailedSignalCareProspectResearch(
@@ -2408,15 +2419,23 @@ export async function executeSignalCareHostedResearch(
       candidatesRejectedQualityGate: 0,
       factsRejectedNoProviderSource: 0
     };
-    if (
+    const noQualifiedCandidates =
       sufficientExistingProspects.length === 0 &&
-      boundedCandidates.length === 0
+      boundedCandidates.length === 0;
+    if (
+      noQualifiedCandidates &&
+      researchDiagnostics.candidatesRejectedNoProviderSource > 0
     ) {
       failureStage = "evidence_validation";
       throw new Error(
         `${priorProvenanceValidationFailure}. ${researchDiagnosticsSummary(researchDiagnostics)}.`
       );
     }
+    const discoveryOutcome = noQualifiedCandidates
+      ? ("NO_QUALIFIED_CANDIDATES" as const)
+      : sufficientExistingProspects.length > 0
+        ? ("SKIPPED_EXISTING_PROSPECTS" as const)
+        : ("PROSPECTS_CREATED" as const);
     failureStage = "candidate_persistence";
     const created = await persistCandidates(
       input.userId,
@@ -2424,23 +2443,27 @@ export async function executeSignalCareHostedResearch(
       db,
       now
     );
+    const operationalSummary = noQualifiedCandidates
+      ? noQualifiedCandidatesSummary(researchDiagnostics)
+      : sufficientExistingProspects.length > 0
+        ? validated.searchSummary
+        : `Created ${created.length} evidence-backed SignalCare prospect(s).`;
     await db.agentRun.update({
       where: { id: run.id },
       data: {
         status: "SUCCEEDED",
-        operationalResultSummary:
-          sufficientExistingProspects.length > 0
-            ? validated.searchSummary
-            : `Created ${created.length} evidence-backed SignalCare prospect(s).`,
+        operationalResultSummary: operationalSummary,
         evidence: JSON.stringify({
           created,
           candidateCount: boundedCandidates.length,
           summary: validated.searchSummary,
+          discoveryOutcome,
           validationDiagnostics: researchDiagnostics
         }),
         structuredOutcome: JSON.stringify({
           ...validated,
           created,
+          discoveryOutcome,
           validationDiagnostics: researchDiagnostics
         }),
         completedAt: now
@@ -2451,8 +2474,10 @@ export async function executeSignalCareHostedResearch(
       work.id,
       "VERIFYING",
       {
-        resultSummary: validated.searchSummary,
-        evidenceSummary: `${created.length} deduplicated prospect(s) persisted with public source provenance.`
+        resultSummary: operationalSummary,
+        evidenceSummary: noQualifiedCandidates
+          ? `No prospect was persisted; deterministic filters rejected all candidates. ${researchDiagnosticsSummary(researchDiagnostics)}.`
+          : `${created.length} deduplicated prospect(s) persisted with public source provenance.`
       },
       db
     );
@@ -2470,8 +2495,15 @@ export async function executeSignalCareHostedResearch(
         providerIdentifier: "ryanos",
         executorIdentifier: "signalcare-evidence-validator",
         operationalResultSummary: "PASS",
-        evidence: `${boundedCandidates.length} candidate(s) passed schema, source, confidence, limit, and deduplication checks.`,
-        structuredOutcome: JSON.stringify({ outcome: "PASS", created }),
+        evidence: noQualifiedCandidates
+          ? `The bounded discovery completed successfully and persisted no weak prospects. ${researchDiagnosticsSummary(researchDiagnostics)}.`
+          : `${boundedCandidates.length} candidate(s) passed schema, source, confidence, limit, and deduplication checks.`,
+        structuredOutcome: JSON.stringify({
+          outcome: "PASS",
+          discoveryOutcome,
+          created,
+          validationDiagnostics: researchDiagnostics
+        }),
         completedAt: now
       }
     });
@@ -2481,11 +2513,10 @@ export async function executeSignalCareHostedResearch(
       "DONE",
       {
         blocker: null,
-        resultSummary:
-          sufficientExistingProspects.length > 0
-            ? validated.searchSummary
-            : `Created ${created.length} evidence-backed SignalCare prospect(s).`,
-        evidenceSummary: `${created.length} prospect(s) persisted with verified facts and public source URLs.`
+        resultSummary: operationalSummary,
+        evidenceSummary: noQualifiedCandidates
+          ? `No prospect advanced; diagnostics were preserved and no external action occurred.`
+          : `${created.length} prospect(s) persisted with verified facts and public source URLs.`
       },
       db
     );
@@ -2496,14 +2527,21 @@ export async function executeSignalCareHostedResearch(
         workItemId: work.id,
         runId: qaRun.id,
         idempotencyKey: `signalcare-research-completed:${work.id}:${attempt}`,
-        type: "QA_PASSED",
+        type: noQualifiedCandidates
+          ? "SIGNALCARE_DISCOVERY_NO_MATCH"
+          : "QA_PASSED",
         summary:
-          sufficientExistingProspects.length > 0
+          noQualifiedCandidates
+            ? "Hosted discovery completed successfully; no candidates passed the deterministic prospect-quality gate."
+            : sufficientExistingProspects.length > 0
             ? "Existing SignalCare prospects prevented unnecessary repeated discovery."
             : `${created.length} evidence-backed prospect(s) entered the existing SignalCare pipeline.`,
         metadata: {
-          movementKind: "SIGNALCARE_PROSPECTS_ADVANCED",
+          movementKind: noQualifiedCandidates
+            ? "SIGNALCARE_DISCOVERY_NO_MATCH"
+            : "SIGNALCARE_PROSPECTS_ADVANCED",
           createdCount: created.length,
+          ...researchDiagnostics,
           externalOutreachPerformed: false
         }
       },
@@ -2511,12 +2549,22 @@ export async function executeSignalCareHostedResearch(
     );
     await db.agentProjectConfig.update({
       where: { projectId: input.projectId },
-      data: { nextAgentReviewAt: now }
+      data: {
+        nextAgentReviewAt: noQualifiedCandidates
+          ? new Date(
+              now.getTime() +
+                SIGNALCARE_NO_MATCH_REVIEW_MINUTES * 60 * 1000
+            )
+          : now
+      }
     });
     return {
       outcome: "COMPLETED" as const,
       created,
-      skippedBecauseProspectsExist: sufficientExistingProspects.length > 0
+      skippedBecauseProspectsExist: sufficientExistingProspects.length > 0,
+      discoveryOutcome,
+      diagnostics: researchDiagnostics,
+      detail: operationalSummary
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
