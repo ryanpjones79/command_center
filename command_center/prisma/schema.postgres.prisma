@@ -87,13 +87,53 @@ enum SeasonStatus {
   ARCHIVED
 }
 
+enum AgentWorkState {
+  QUEUED
+  PLANNING
+  RUNNING
+  VERIFYING
+  RETRY
+  NEEDS_RYAN
+  AWAITING_EXECUTION
+  READY_FOR_REVIEW
+  DONE
+  FAILED
+  PARKED
+}
+
+enum AgentActionState {
+  PROPOSED
+  AWAITING_OWNER_APPROVAL
+  AUTHORIZED
+  AWAITING_EXECUTION
+  EXECUTING
+  VERIFYING
+  COMPLETED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+enum AgentDecisionStatus {
+  PENDING
+  RESOLVED
+  CANCELLED
+}
+
+enum AgentRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
 model User {
-  id                String               @id @default(cuid())
-  email             String               @unique
+  id                String                   @id @default(cuid())
+  email             String                   @unique
   passwordHash      String
   name              String?
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
   settings          UserSettings?
   watchlist         WatchlistTicker[]
   savedFilters      SavedSignalFilter[]
@@ -112,6 +152,13 @@ model User {
   wisdomEntries     WisdomEntry[]
   wisdomReflections WisdomReflection[]
   seasons           Season[]
+  agentConfigs      AgentProjectConfig[]
+  machineWork       AgentWorkItem[]
+  agentRuns         AgentRun[]
+  ownerDecisions    AgentDecision[]
+  agentEvents       AgentEvent[]
+  agentActions      AgentActionRequest[]
+  agentRunners      AgentRunner[]
 }
 
 model UserSettings {
@@ -247,10 +294,277 @@ model ExecutionProject {
   season          Season?                @relation(fields: [seasonId], references: [id], onDelete: SetNull)
   tasks           ExecutionTask[]
   notebookEntries NotebookEntryIndex[]
+  agentConfig     AgentProjectConfig?
+  agentWorkItems  AgentWorkItem[]
+  agentRuns       AgentRun[]
+  agentDecisions  AgentDecision[]
+  agentEvents     AgentEvent[]
+  agentActions    AgentActionRequest[]
 
   @@unique([userId, name])
   @@index([userId, activeStatus, weeklyFocus, priority])
   @@index([userId, seasonId])
+}
+
+model AgentProjectConfig {
+  id                         String           @id @default(cuid())
+  userId                     String
+  projectId                  String           @unique
+  profile                    String           @default("GENERIC_PM")
+  operatingMode              String           @default("SIMULATION")
+  enabled                    Boolean          @default(true)
+  pausedAt                   DateTime?
+  objective                  String
+  primaryKpi                 String?
+  currentBottleneck          String?
+  projectManagerInstructions String
+  autonomyPolicy             String
+  escalationPolicy           String
+  maxConcurrentWorkItems     Int              @default(2)
+  workspaceIdentifier        String?
+  lastAgentReviewAt          DateTime?
+  nextAgentReviewAt          DateTime?
+  health                     String           @default("UNKNOWN")
+  spendingThresholdCents     Int?
+  externalActionApproval     String?
+  leaseToken                 String?
+  leaseExpiresAt             DateTime?
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
+  user                       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project                    ExecutionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, enabled, nextAgentReviewAt])
+  @@index([leaseExpiresAt])
+}
+
+model AgentWorkItem {
+  id                   String               @id @default(cuid())
+  userId               String
+  projectId            String
+  parentWorkItemId     String?
+  idempotencyKey       String
+  title                String
+  objective            String
+  expectedValue        String
+  acceptanceCriteria   String
+  agentRole            String
+  actionCategory       String               @default("RESEARCH_READ_ONLY")
+  requiredCapability   String               @default("REPOSITORY_READ")
+  sandboxPolicy        String               @default("READ_ONLY")
+  networkPolicy        String               @default("OFF")
+  operationalContext   String?
+  priority             ExecutionPriority    @default(MEDIUM)
+  state                AgentWorkState       @default(QUEUED)
+  attemptCount         Int                  @default(0)
+  maxAttempts          Int                  @default(3)
+  blocker              String?
+  resultSummary        String?
+  evidenceSummary      String?
+  executorIdentifier   String?
+  providerIdentifier   String?
+  externalThreadId     String?
+  externalRunId        String?
+  workspaceIdentifier  String?
+  repositoryIdentifier String?
+  claimToken           String?
+  leaseExpiresAt       DateTime?
+  heartbeatAt          DateTime?
+  nextEligibleRunAt    DateTime?
+  createdAt            DateTime             @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  updatedAt            DateTime             @updatedAt
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project              ExecutionProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentWorkItem       AgentWorkItem?       @relation("AgentWorkTree", fields: [parentWorkItemId], references: [id], onDelete: SetNull)
+  childWorkItems       AgentWorkItem[]      @relation("AgentWorkTree")
+  runs                 AgentRun[]
+  decisions            AgentDecision[]
+  events               AgentEvent[]
+  actionRequests       AgentActionRequest[]
+
+  @@unique([projectId, idempotencyKey])
+  @@index([userId, state, nextEligibleRunAt])
+  @@index([projectId, state, priority])
+  @@index([parentWorkItemId])
+  @@index([leaseExpiresAt])
+}
+
+model AgentRun {
+  id                       String               @id @default(cuid())
+  userId                   String
+  workItemId               String
+  projectId                String
+  retryOfRunId             String?
+  idempotencyKey           String               @unique
+  role                     String
+  runType                  String
+  status                   AgentRunStatus       @default(RUNNING)
+  providerIdentifier       String?
+  modelIdentifier          String?
+  executorIdentifier       String?
+  externalThreadId         String?
+  externalRunId            String?
+  operationalResultSummary String?
+  evidence                 String?
+  error                    String?
+  structuredOutcome        String?
+  workspaceIdentifier      String?
+  repositoryIdentifier     String?
+  commitSha                String?
+  pullRequestUrl           String?
+  testOutcome              String?
+  qaFeedback               String?
+  startedAt                DateTime             @default(now())
+  completedAt              DateTime?
+  createdAt                DateTime             @default(now())
+  user                     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workItem                 AgentWorkItem        @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  project                  ExecutionProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  retryOfRun               AgentRun?            @relation("AgentRunRetry", fields: [retryOfRunId], references: [id], onDelete: SetNull)
+  retryRuns                AgentRun[]           @relation("AgentRunRetry")
+  decisions                AgentDecision[]
+  events                   AgentEvent[]
+  actionRequests           AgentActionRequest[]
+
+  @@index([userId, startedAt])
+  @@index([workItemId, startedAt])
+  @@index([projectId, status])
+  @@index([retryOfRunId])
+}
+
+model AgentDecision {
+  id                    String              @id @default(cuid())
+  userId                String
+  projectId             String
+  originatingWorkItemId String?
+  originatingRunId      String?
+  idempotencyKey        String              @unique
+  category              String
+  question              String
+  context               String
+  recommendedChoice     String?
+  availableChoices      String
+  expectedUpside        String?
+  risk                  String
+  amountCents           Int?
+  currency              String?
+  status                AgentDecisionStatus @default(PENDING)
+  selectedChoice        String?
+  resultingAction       String?
+  createdAt             DateTime            @default(now())
+  resolvedAt            DateTime?
+  updatedAt             DateTime            @updatedAt
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project               ExecutionProject    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  originatingWorkItem   AgentWorkItem?      @relation(fields: [originatingWorkItemId], references: [id], onDelete: SetNull)
+  originatingRun        AgentRun?           @relation(fields: [originatingRunId], references: [id], onDelete: SetNull)
+  events                AgentEvent[]
+  actionRequest         AgentActionRequest?
+
+  @@index([userId, status, createdAt])
+  @@index([projectId, status])
+  @@index([originatingWorkItemId])
+  @@index([originatingRunId])
+}
+
+model AgentEvent {
+  id             String           @id @default(cuid())
+  userId         String
+  projectId      String
+  workItemId     String?
+  runId          String?
+  decisionId     String?
+  idempotencyKey String           @unique
+  type           String
+  summary        String
+  metadata       String?
+  createdAt      DateTime         @default(now())
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project        ExecutionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workItem       AgentWorkItem?   @relation(fields: [workItemId], references: [id], onDelete: SetNull)
+  run            AgentRun?        @relation(fields: [runId], references: [id], onDelete: SetNull)
+  decision       AgentDecision?   @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([workItemId, createdAt])
+}
+
+model AgentActionRequest {
+  id                  String           @id @default(cuid())
+  userId              String
+  projectId           String
+  workItemId          String
+  originatingRunId    String?
+  decisionId          String?          @unique
+  idempotencyKey      String           @unique
+  actionFingerprint   String           @unique
+  category            String
+  capability          String
+  state               AgentActionState @default(PROPOSED)
+  boundedPayload      String
+  authorizationBounds String
+  amountCents         Int?
+  currency            String?
+  expiresAt           DateTime?
+  authorizedAt        DateTime?
+  executionStartedAt  DateTime?
+  executedAt          DateTime?
+  verifiedAt          DateTime?
+  cancelledAt         DateTime?
+  executorIdentifier  String?
+  externalExecutionId String?
+  executionEvidence   String?
+  failure             String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project             ExecutionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workItem            AgentWorkItem    @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  originatingRun      AgentRun?        @relation(fields: [originatingRunId], references: [id], onDelete: SetNull)
+  decision            AgentDecision?   @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, state, createdAt])
+  @@index([projectId, state])
+  @@index([workItemId])
+}
+
+model AgentRunner {
+  id                  String               @id @default(cuid())
+  userId              String
+  keyId               String               @unique
+  name                String
+  enabled             Boolean              @default(true)
+  version             String?
+  capabilities        String               @default("[]")
+  status              String               @default("OFFLINE")
+  currentWorkItemId   String?
+  lastHeartbeatAt     DateTime?
+  lastSuccessfulRunAt DateTime?
+  recentFailure       String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestNonces       RunnerRequestNonce[]
+
+  @@index([userId, enabled])
+  @@index([lastHeartbeatAt])
+}
+
+model RunnerRequestNonce {
+  id        String      @id @default(cuid())
+  runnerId  String
+  requestId String      @unique
+  timestamp DateTime
+  bodyHash  String
+  expiresAt DateTime
+  createdAt DateTime    @default(now())
+  runner    AgentRunner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+
+  @@index([runnerId, createdAt])
+  @@index([expiresAt])
 }
 
 model ExecutionTask {
@@ -443,23 +757,23 @@ model Notebook {
 }
 
 model NotebookEntryIndex {
-  id         String            @id @default(cuid())
-  userId     String
-  notebookId String
-  date       DateTime?
-  pageNumber Int
-  title      String
-  summary    String?
-  domainId   String?
-  projectId  String?
-  entryType  String
-  photoUrl   String?
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
-  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  notebook   Notebook          @relation(fields: [notebookId], references: [id], onDelete: Cascade)
-  domain     ExecutionDomain?  @relation(fields: [domainId], references: [id], onDelete: SetNull)
-  project    ExecutionProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  id            String            @id @default(cuid())
+  userId        String
+  notebookId    String
+  date          DateTime?
+  pageNumber    Int
+  title         String
+  summary       String?
+  domainId      String?
+  projectId     String?
+  entryType     String
+  photoUrl      String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notebook      Notebook          @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  domain        ExecutionDomain?  @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  project       ExecutionProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   wisdomEntries WisdomEntry[]
 
   @@index([userId, date])
@@ -470,29 +784,29 @@ model NotebookEntryIndex {
 }
 
 model WisdomEntry {
-  id              String             @id @default(cuid())
+  id              String              @id @default(cuid())
   userId          String
   title           String
   idea            String
   takeaway        String?
   application     String?
-  sourceType      String             @default("other")
+  sourceType      String              @default("other")
   sourceName      String?
   author          String?
   reference       String?
-  category        String             @default("Other")
-  capturedAt      DateTime           @default(now())
-  favorite        Boolean            @default(false)
-  active          Boolean            @default(false)
+  category        String              @default("Other")
+  capturedAt      DateTime            @default(now())
+  favorite        Boolean             @default(false)
+  active          Boolean             @default(false)
   tags            String?
   photoUrl        String?
-  status          String             @default("library")
+  status          String              @default("library")
   notebookEntryId String?
   lastShownAt     DateTime?
   archivedAt      DateTime?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   notebookEntry   NotebookEntryIndex? @relation(fields: [notebookEntryId], references: [id], onDelete: SetNull)
   reflections     WisdomReflection[]
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Settings } from "lucide-react";
+import { Bot, Settings } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { logoutAction } from "@/app/actions";
 import { WisdomQuickCapture } from "@/components/library/wisdom-quick-capture";
@@ -54,6 +54,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
+          <Button
+            aria-current={pathname?.startsWith("/agent-hq") ? "page" : undefined}
+            className={cn(
+              "h-9 shrink-0 px-3 text-xs sm:text-sm",
+              pathname?.startsWith("/agent-hq") && "bg-cyan-500/15 text-cyan-300 ring-1 ring-cyan-400/30"
+            )}
+            variant="outline"
+            asChild
+          >
+            <Link href="/agent-hq"><Bot aria-hidden="true" className="mr-1.5 h-4 w-4" /> Agent HQ</Link>
+          </Button>
           <WisdomQuickCapture />
           <Button
             aria-label="Settings"

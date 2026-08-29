@@ -615,6 +615,19 @@ export async function getProjectMaintenanceData(userId: string) {
       include: {
         domain: true,
         season: true,
+        agentConfig: true,
+        agentWorkItems: {
+          orderBy: { updatedAt: "desc" },
+          take: 8
+        },
+        agentDecisions: {
+          orderBy: { createdAt: "desc" },
+          take: 8
+        },
+        agentEvents: {
+          orderBy: { createdAt: "desc" },
+          take: 12
+        },
         tasks: {
           where: { status: { notIn: ["DONE", "DROPPED"] } },
           take: 8

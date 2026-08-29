@@ -25,6 +25,10 @@ That keeps production simple now and avoids trying to replay SQLite-native SQL o
 
 ## 2. Set shared environment variables
 
+For Agent HQ Phase 2A, keep `FEATURE_AGENT_MODELS`, `FEATURE_RUNNER_EXECUTION`, and `FEATURE_CODEX_EXECUTION` false through migration and smoke testing. Then configure the Chief/PM/QA model names, invocation caps, `OPENAI_API_KEY` (Railway planning only), and `RYANOS_RUNNER_HMAC_KEYS` as a JSON key-ID-to-secret map. Register that key ID for the owner using `RYANOS_RUNNER_OWNER_EMAIL` and `npm run agent:register-runner`. The Windows workspace registry and Codex credentials stay only on Windows. The existing agent cron remains the orchestration trigger; the Windows runner polls `/api/runner/*` outbound.
+
+Operational rollback is to disable the three feature flags and pause project autonomy. Preserve the durable work, authorization, execution, and audit history.
+
 Set these at the project or production-environment level so both `web` and `cron` can read them:
 
 ```env
@@ -86,6 +90,8 @@ Why every 15 minutes:
 - the route is idempotent through `DailyBriefDispatch`, so it only sends once inside the local send window
 
 This keeps `6:30 AM Pacific` stable through daylight saving changes without hard-coding UTC offsets.
+
+The same cron process also calls `/api/cron/agents`. Agent HQ performs its own due-project checks, atomic leases, WIP enforcement, and idempotent work creation. Set `FEATURE_AGENT_ORCHESTRATION=false` for an operational kill switch without deleting durable agent history.
 
 ## 5. First deployment check
 

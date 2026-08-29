@@ -60,6 +60,7 @@ The app folder includes:
 - build command in [netlify.toml](../../netlify.toml): `npm run netlify:build`
 - Next.js support via Netlify's OpenNext adapter
 - a scheduled function in [daily-brief-scheduled.ts](../netlify/functions/daily-brief-scheduled.ts)
+- a separate idempotent Agent HQ scheduled function in `netlify/functions/agent-orchestration-scheduled.ts`
 - `@netlify/neon` in `package.json`, which allows Netlify to auto-provision the database during build
 
 `npm run netlify:build` does three things:

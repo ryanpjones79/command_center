@@ -11,6 +11,7 @@ export const primaryRyanOsRoutes = [
 ] as const;
 
 export const secondaryRyanOsRoutes = ["/dashboard", "/print/action-sheet"] as const;
+export const agentHqRoute = "/agent-hq" as const;
 
 export const temporaryLegacyToolRoutes = [
   "/chart",

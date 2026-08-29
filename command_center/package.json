@@ -16,6 +16,8 @@
     "prisma:deploy:bootstrap": "npm run prisma:db:push && npm run prisma:seed",
     "prisma:seed": "node scripts/prisma-command.mjs generate && tsx prisma/seed.ts",
     "migrate:legacy-execution": "tsx scripts/migrate-legacy-execution.ts",
+    "simulate:agent-hq": "tsx scripts/simulate-agent-lifecycle.ts",
+    "agent:register-runner": "tsx scripts/register-agent-runner.ts",
     "google:auth": "node --env-file=.env scripts/google-auth-bootstrap.mjs",
     "netlify:build": "npm run prisma:deploy:bootstrap && npm run build",
     "vercel:build": "npm run prisma:deploy:bootstrap && npm run build",

@@ -13,40 +13,35 @@ if (!secret) {
   process.exit(1);
 }
 
-const endpoint = new URL("/api/cron/daily-brief", ensureTrailingSlash(baseUrl));
-const controller = new AbortController();
-const timeoutId = setTimeout(() => controller.abort(), 60_000);
+const paths = ["/api/cron/daily-brief", "/api/cron/agents"];
 
-console.log(`[railway-cron] Triggering ${endpoint.toString()}`);
+for (const path of paths) {
+  const endpoint = new URL(path, ensureTrailingSlash(baseUrl));
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60_000);
+  console.log(`[railway-cron] Triggering ${endpoint.toString()}`);
 
-try {
-  const response = await fetch(endpoint, {
-    method: "GET",
-    headers: {
-      authorization: `Bearer ${secret}`,
-      accept: "application/json"
-    },
-    signal: controller.signal
-  });
-
-  const body = await response.text();
-  if (body) {
-    console.log(body);
-  }
-
-  if (!response.ok) {
-    console.error(`[railway-cron] Request failed with status ${response.status}.`);
+  try {
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${secret}`,
+        accept: "application/json"
+      },
+      signal: controller.signal
+    });
+    const body = await response.text();
+    if (body) console.log(body);
+    if (!response.ok) {
+      console.error(`[railway-cron] ${path} failed with status ${response.status}.`);
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error(`[railway-cron] ${path}: ${error instanceof Error ? error.message : "Unknown cron failure."}`);
     process.exit(1);
+  } finally {
+    clearTimeout(timeoutId);
   }
-} catch (error) {
-  if (error instanceof Error) {
-    console.error(`[railway-cron] ${error.message}`);
-  } else {
-    console.error("[railway-cron] Unknown cron failure.");
-  }
-  process.exit(1);
-} finally {
-  clearTimeout(timeoutId);
 }
 
 function ensureTrailingSlash(value) {

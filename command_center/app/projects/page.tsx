@@ -4,6 +4,7 @@ import {
 } from "@/app/execution-actions";
 import { CreateDomainForm } from "@/components/execution/create-domain-form";
 import { CreateProjectForm } from "@/components/execution/create-project-form";
+import { AgentProjectSection } from "@/components/agent/agent-project-section";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { executionSelectOptions, formatExecutionLabel } from "@/lib/execution-options";
@@ -11,6 +12,7 @@ import { formatNotebookTitle } from "@/lib/notebook-format";
 import { formatNotebookEntryType } from "@/lib/notebook-options";
 import { requireUser } from "@/lib/session";
 import { getProjectMaintenanceData } from "@/server/execution-service";
+import { ensureInitialAgentProjects } from "@/server/agent/setup-service";
 
 function formatNotebookEntryDate(value: Date | null) {
   if (!value) return "No date";
@@ -19,6 +21,7 @@ function formatNotebookEntryDate(value: Date | null) {
 
 export default async function ProjectsPage() {
   const user = await requireUser();
+  await ensureInitialAgentProjects(user.id);
   const { projects, domains, seasons } = await getProjectMaintenanceData(user.id);
 
   return (
@@ -104,6 +107,20 @@ export default async function ProjectsPage() {
                 </div>
 
                 {project.note && <p className="text-sm text-muted-foreground">{project.note}</p>}
+
+                <AgentProjectSection
+                  projectId={project.id}
+                  config={
+                    project.agentConfig
+                      ? {
+                          ...project.agentConfig,
+                          projectWorkItems: project.agentWorkItems,
+                          projectDecisions: project.agentDecisions,
+                          projectEvents: project.agentEvents
+                        }
+                      : null
+                  }
+                />
 
                 {project.tasks.length > 0 && (
                   <div>

@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
+import { ensureInitialAgentProjects } from "../server/agent/setup-service";
 
 if (!process.env.DATABASE_URL && process.env.NETLIFY_DATABASE_URL) {
   process.env.DATABASE_URL = process.env.NETLIFY_DATABASE_URL;
@@ -51,7 +52,9 @@ async function main() {
     });
   }
 
-  console.log(`Seeded user: ${user.email}`);
+  await ensureInitialAgentProjects(user.id, prisma);
+
+  console.log(`Seeded user, execution domains, and Agent HQ projects: ${user.email}`);
 }
 
 main()

@@ -1,0 +1,20 @@
+{
+  "workspaces": {
+    "signalcare-repo": {
+      "canonicalPath": "C:\\src\\signalcare",
+      "projectSlug": "signalcare",
+      "capabilities": ["REPOSITORY_READ", "REPOSITORY_CHANGE", "RUN_TESTS", "CODEX_IMPLEMENTATION", "CODEX_REVIEW"],
+      "networkPolicy": "OFF",
+      "sensitivity": "STANDARD",
+      "testCommands": [{ "command": "npm.cmd", "args": ["test"] }]
+    },
+    "cchcs-phi-free-repo": {
+      "canonicalPath": "C:\\src\\cchcs-phi-free",
+      "projectSlug": "cchcs",
+      "capabilities": ["REPOSITORY_READ", "REPOSITORY_CHANGE", "RUN_TESTS", "CODEX_IMPLEMENTATION", "CODEX_REVIEW"],
+      "networkPolicy": "OFF",
+      "sensitivity": "CCHCS_PHI_FREE",
+      "testCommands": []
+    }
+  }
+}

@@ -4,6 +4,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 const primaryDestinations = [
   {
+    title: "Agent HQ",
+    description: "Oversee autonomous project movement, QA, WIP, and NEED RYAN decisions.",
+    href: "/agent-hq"
+  },
+  {
     title: "Tasks",
     description: "Create, triage, schedule, park, or close next actions.",
     href: "/tasks"
