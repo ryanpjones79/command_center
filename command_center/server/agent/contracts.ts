@@ -1,4 +1,5 @@
 import type { AgentActionCategory } from "@/lib/agent-policy";
+import type { RykasReadRequest } from "@/lib/rykas-truth-contract";
 
 export type PortfolioProjectSnapshot = {
   projectId: string;
@@ -78,6 +79,7 @@ export type AgentWorkPlan = {
   sandboxPolicy?: "READ_ONLY" | "WORKSPACE_WRITE";
   networkPolicy?: "OFF" | "ALLOWLIST";
   operationalContext?: string;
+  rykasReadRequest?: RykasReadRequest | null;
   dependsOnWorkItemId?: string;
   evidence?: string;
   nextReviewMinutes?: number;

@@ -5,7 +5,11 @@ import {
   phase2AllowedCapabilities,
   SIGNALCARE_WEB_RESEARCH_CAPABILITY
 } from "@/lib/agent-capabilities";
-import { RYKAS_READ_CAPABILITY, rykasReadRequestSchema } from "@/lib/rykas-truth-contract";
+import {
+  RYKAS_READ_CAPABILITY,
+  rykasReadRequestSchema,
+  serializeRykasReadRequest
+} from "@/lib/rykas-truth-contract";
 import type {
   AgentVerifier,
   ChiefPortfolioAgent,
@@ -224,6 +228,7 @@ export const pmOutputSchema = z
     sandboxPolicy: z.enum(["READ_ONLY", "WORKSPACE_WRITE"]),
     networkPolicy: z.enum(["OFF", "ALLOWLIST"]),
     operationalContext: z.string(),
+    rykasReadRequest: rykasReadRequestSchema.nullable().default(null),
     researchMode: z
       .enum(["DISCOVER_PROSPECTS", "QUALIFY_EXISTING_PROSPECT"])
       .nullable(),
@@ -250,6 +255,15 @@ export const pmOutputSchema = z
         code: z.ZodIssueCode.custom,
         path: ["ownerDecision", "targetEntity"],
         message: "SignalCare outreach requires a typed target prospect."
+      });
+    }
+    const rykasRead = value.requiredCapability === RYKAS_READ_CAPABILITY;
+    if (rykasRead !== (value.rykasReadRequest !== null)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rykasReadRequest"],
+        message:
+          "RYKAS_OPERATIONS_READ requires one typed Rykas request, and all other capabilities require null."
       });
     }
     // An owner escalation is targeted by ownerDecision.targetEntity. Providers
@@ -328,6 +342,93 @@ const ownerDecisionJsonSchema = {
   }
 } as const;
 
+const rykasReadRequestJsonSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["version", "operation", "input"],
+      properties: {
+        version: { type: "integer", enum: [1] },
+        operation: { type: "string", enum: ["OPERATIONS_SNAPSHOT"] },
+        input: {
+          type: "object",
+          additionalProperties: false,
+          required: ["limit"],
+          properties: { limit: { type: "integer", minimum: 1, maximum: 25 } }
+        }
+      }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["version", "operation", "input"],
+      properties: {
+        version: { type: "integer", enum: [1] },
+        operation: { type: "string", enum: ["SOURCING_OPPORTUNITIES"] },
+        input: {
+          type: "object",
+          additionalProperties: false,
+          required: ["view", "limit"],
+          properties: {
+            view: {
+              type: "string",
+              enum: [
+                "TOP",
+                "OWNER_ACTION_NEEDED",
+                "PURCHASE_READY",
+                "NEEDS_DATA",
+                "BLOCKED",
+                "STALE_EVIDENCE"
+              ]
+            },
+            limit: { type: "integer", minimum: 1, maximum: 25 }
+          }
+        }
+      }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["version", "operation", "input"],
+      properties: {
+        version: { type: "integer", enum: [1] },
+        operation: { type: "string", enum: ["OPPORTUNITY_DETAIL"] },
+        input: {
+          type: "object",
+          additionalProperties: false,
+          required: ["opportunityId"],
+          properties: {
+            opportunityId: {
+              type: "string",
+              pattern: "^US:[A-Z0-9]{10}$"
+            }
+          }
+        }
+      }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["version", "operation", "input"],
+      properties: {
+        version: { type: "integer", enum: [1] },
+        operation: {
+          type: "string",
+          enum: ["PURCHASE_CANDIDATES", "OPERATIONS_BLOCKERS"]
+        },
+        input: {
+          type: "object",
+          additionalProperties: false,
+          required: ["limit"],
+          properties: { limit: { type: "integer", minimum: 1, maximum: 25 } }
+        }
+      }
+    },
+    { type: "null" }
+  ]
+} as const;
+
 const pmJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -347,6 +448,7 @@ const pmJsonSchema = {
     "sandboxPolicy",
     "networkPolicy",
     "operationalContext",
+    "rykasReadRequest",
     "researchMode",
     "targetProspect",
     "nextReviewMinutes",
@@ -375,6 +477,7 @@ const pmJsonSchema = {
     },
     networkPolicy: { type: "string", enum: ["OFF", "ALLOWLIST"] },
     operationalContext: { type: "string" },
+    rykasReadRequest: rykasReadRequestJsonSchema,
     researchMode: {
       type: ["string", "null"],
       enum: ["DISCOVER_PROSPECTS", "QUALIFY_EXISTING_PROSPECT", null]
@@ -400,18 +503,21 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       name: "pm_project_review",
       validator: pmOutputSchema,
       schema: pmJsonSchema,
-      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. For RYKAS_GM, Rykas owns economics: use only realTruth values, treat null as UNKNOWN, and never derive landed cost, profit, ROI, margin, max/ideal cost, score, or quantity. Prioritize purchase-decision-ready profitable candidates, then high-value missing evidence, inventory/listing flow, and stale tied-up capital. Stale evidence requires refresh/research, never BUY. BUY is authorization only and cannot purchase. RYKAS_OPERATIONS_READ is RYKAS_GM-only and operationalContext must be exactly one versioned predefined JSON request; it cannot contain SQL, shell, URLs, or paths. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. SignalCare passed prospects are terminal audit history: never qualify them, propose outreach to them, or resurrect them unless Ryan explicitly reopens them. When signalcare.pipeline.snapshot has zero actionable prospects, normally continue customer acquisition with bounded DISCOVER_PROSPECTS while honoring passedProspects as permanent discovery exclusions. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When an actionable prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
+      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. For RYKAS_GM, Rykas owns economics: use only realTruth values, treat null as UNKNOWN, and never derive landed cost, profit, ROI, margin, max/ideal cost, score, or quantity. Prioritize purchase-decision-ready profitable candidates, then high-value missing evidence, inventory/listing flow, and stale tied-up capital. Stale evidence requires refresh/research, never BUY. BUY is authorization only and cannot purchase. For RYKAS_OPERATIONS_READ, choose exactly one predefined business read and bounded arguments in the typed rykasReadRequest field; use null for every other capability. Do not add schemaVersion, readOnly, SQL, shell, URLs, paths, or other protocol metadata. Application code enforces and serializes the read-only wire contract; operationalContext is only a concise business note. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. SignalCare passed prospects are terminal audit history: never qualify them, propose outreach to them, or resurrect them unless Ryan explicitly reopens them. When signalcare.pipeline.snapshot has zero actionable prospects, normally continue customer acquisition with bounded DISCOVER_PROSPECTS while honoring passedProspects as permanent discovery exclusions. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When an actionable prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
       payload: context
     });
     const ownerEscalation = result.ownerNeeded && result.ownerDecision !== null;
     const researchMode = ownerEscalation ? null : result.researchMode;
     const targetProspect = ownerEscalation ? null : result.targetProspect;
+    const rykasReadRequest =
+      result.requiredCapability === RYKAS_READ_CAPABILITY
+        ? rykasReadRequestSchema.parse(result.rykasReadRequest)
+        : null;
+    const operationalContext = rykasReadRequest
+      ? serializeRykasReadRequest(rykasReadRequest)
+      : result.operationalContext;
     if (result.requiredCapability === RYKAS_READ_CAPABILITY) {
       if (context.profile !== "RYKAS_GM") throw new Error("Rykas truth reads are eligible only for RYKAS_GM.");
-      let request: unknown;
-      try { request = JSON.parse(result.operationalContext); }
-      catch { throw new Error("Rykas truth operationalContext must be strict JSON."); }
-      rykasReadRequestSchema.parse(request);
     }
     if (
       !ownerEscalation &&
@@ -470,6 +576,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
         networkPolicy: "ALLOWLIST" as const,
         operationalContext:
           "Run bounded discovery and exclude all passed organizations and domains from the snapshot.",
+        rykasReadRequest: null,
         evidence: result.evidence,
         nextReviewMinutes: result.nextReviewMinutes,
         ownerNeeded: false,
@@ -494,6 +601,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
         sandboxPolicy: "READ_ONLY" as const,
         networkPolicy: "OFF" as const,
         operationalContext: "Passed prospect proposal deterministically suppressed.",
+        rykasReadRequest: null,
         evidence: result.evidence,
         nextReviewMinutes: result.nextReviewMinutes,
         ownerNeeded: false,
@@ -526,6 +634,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
         networkPolicy: "OFF" as const,
         operationalContext:
           "Repeated discovery deterministically suppressed because prospects already exist.",
+        rykasReadRequest: null,
         evidence: result.evidence,
         nextReviewMinutes: result.nextReviewMinutes,
         ownerNeeded: false,
@@ -567,7 +676,8 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
         result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY
           ? "ALLOWLIST"
           : result.networkPolicy,
-      operationalContext: result.operationalContext,
+      operationalContext,
+      rykasReadRequest,
       evidence: result.evidence,
       nextReviewMinutes: result.nextReviewMinutes,
       ownerNeeded: result.ownerNeeded,

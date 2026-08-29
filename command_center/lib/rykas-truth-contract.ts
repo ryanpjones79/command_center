@@ -12,6 +12,10 @@ export const rykasReadRequestSchema = z.discriminatedUnion("operation", [
 ]);
 export type RykasReadRequest = z.infer<typeof rykasReadRequestSchema>;
 
+export function serializeRykasReadRequest(request: unknown) {
+  return JSON.stringify(rykasReadRequestSchema.parse(request));
+}
+
 const nullableNumber = z.number().finite().nullable();
 const freshnessSchema = z.object({ observedAt: z.string().datetime(), authoritativeSource: z.string().min(1).max(500), sourceUpdatedAt: z.string().datetime().nullable(), classification: z.enum(["CURRENT", "STALE", "UNKNOWN"]), stale: z.boolean() }).strict();
 export const rykasOpportunitySchema = z.object({ opportunityId: z.string().regex(/^US:[A-Z0-9]{10}$/), asin: z.string().regex(/^[A-Z0-9]{10}$/), vendorSku: z.string().max(200).nullable(), brand: z.string().max(400).nullable(), title: z.string().max(1000).nullable(), supplier: z.string().max(500).nullable(), discoverySource: z.string().max(200).nullable(), discoveryStrategy: z.string().max(200).nullable(), currentBuyBox: nullableNumber, buyBox90: nullableNumber, observedOrReferenceCost: nullableNumber, maxLandedCost: nullableNumber, idealLandedCost: nullableNumber, profitPerUnit: nullableNumber, expectedProfit: nullableNumber, expectedMonthlyContribution: nullableNumber, roi: nullableNumber, margin: nullableNumber, estimatedMonthlyUnits: nullableNumber, units30: nullableNumber, units90: nullableNumber, sellerCount: z.number().int().nonnegative().nullable(), amazonOos90: nullableNumber, opportunityScore: nullableNumber, decision: z.string().max(80).nullable(), actionState: z.string().max(100), recommendationStatus: z.string().max(100).nullable(), recommendedUnits: z.number().int().nonnegative().nullable(), recommendedCases: nullableNumber, expectedSpend: nullableNumber, eligibilityStatus: z.string().max(100).nullable(), requiredAction: z.string().max(200).nullable(), sourceStatus: z.string().max(100).nullable(), reasonCodes: z.array(z.string().max(200)).max(100), missingEvidence: z.array(z.string().max(200)).max(50), blockers: z.array(z.string().max(500)).max(50), freshness: freshnessSchema }).strict();

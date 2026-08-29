@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RunnerConfig } from "../src/config.js";
 import { RykasTruthAdapter } from "../src/rykas-adapter.js";
+import { rykasReadRequestSchema } from "../src/rykas-contracts.js";
 
 const config = { FEATURE_RYKAS_TRUTH_READ: "true", RYKAS_TRUTH_BASE_URL: "http://127.0.0.1:8765", RYKAS_TRUTH_TIMEOUT_MS: 1000 } as RunnerConfig;
 const summary = { actions: [{ action_bucket: "BUY NOW", action_count: 1, top_opportunity_score: 91 }], capital: { reliable: false, status: "BLOCKED", reason: "PO truth stale", actionRequired: "Confirm PO ledger", asOf: "2026-08-29", openCommitments: 0, purchaseOrderRows: 0, openPurchaseOrderLines: 0, poLedgerStatus: "NOT VERIFIED", poCertificationState: "NOT VERIFIED", poCertifiedAt: "2026-08-20T00:00:00Z", poTruthCurrent: false, safeInventoryCapital: null } };
@@ -34,6 +35,13 @@ describe("bounded deterministic Rykas truth adapter", () => {
     await expect(adapter.execute({ version: 1, operation: "OPERATIONS_SNAPSHOT", input: { limit: 2, sql: "SELECT *" } })).rejects.toThrow();
     await expect(adapter.execute({ version: 1, operation: "OPPORTUNITY_DETAIL", input: { opportunityId: "US:B000000001", shell: "whoami" } })).rejects.toThrow();
     await expect(adapter.execute({ version: 1, operation: "OPPORTUNITY_DETAIL", input: { opportunityId: "Ultra Pro" } })).rejects.toThrow();
+  });
+  it("accepts the exact canonical PM wire contract and rejects the invented production wrapper", async () => {
+    const wire = JSON.stringify({ version: 1, operation: "OPERATIONS_SNAPSHOT", input: { limit: 10 } });
+    const request = rykasReadRequestSchema.parse(JSON.parse(wire));
+    const result = await new RykasTruthAdapter(config, fetcher()).execute(request);
+    expect(result).toMatchObject({ operation: "OPERATIONS_SNAPSHOT", readOnly: true, purchaseAuthorized: false, purchaseExecuted: false });
+    await expect(new RykasTruthAdapter(config, fetcher()).execute({ schemaVersion: "RYKAS_TRUTH_READ_V1", readOnly: true, operation: "OPERATIONS_SNAPSHOT" })).rejects.toThrow();
   });
   it("fails closed for a non-loopback endpoint and SQL/service failure", async () => {
     expect(() => new RykasTruthAdapter({ ...config, RYKAS_TRUTH_BASE_URL: "https://example.com" }, fetcher())).toThrow("loopback");

@@ -4,6 +4,10 @@ import { executorForCapability } from "@/lib/agent-capabilities";
 import { activeAgentWorkStates } from "@/lib/agent-state-machine";
 import { evaluateAgentPolicy } from "@/lib/agent-policy";
 import { prisma } from "@/lib/prisma";
+import {
+  RYKAS_READ_CAPABILITY,
+  serializeRykasReadRequest
+} from "@/lib/rykas-truth-contract";
 import type {
   AgentVerifier,
   AgentWorker,
@@ -34,6 +38,29 @@ import { createOwnerDecision, transitionAgentWorkItem } from "@/server/agent/wor
 const reviewIntervalMs = 15 * 60 * 1000;
 const retryDelayMs = 5 * 60 * 1000;
 const leaseDurationMs = 5 * 60 * 1000;
+
+function serializePlanOperationalContext(
+  plan: AgentWorkPlan,
+  capability: string,
+  profile: string
+) {
+  if (capability === RYKAS_READ_CAPABILITY) {
+    if (profile !== "RYKAS_GM")
+      throw new Error("Rykas truth reads are eligible only for RYKAS_GM.");
+    if (!plan.rykasReadRequest)
+      throw new Error("RYKAS_OPERATIONS_READ requires a typed Rykas request.");
+    return serializeRykasReadRequest(plan.rykasReadRequest);
+  }
+  if (plan.rykasReadRequest != null)
+    throw new Error("Only RYKAS_OPERATIONS_READ may include a Rykas request.");
+  if (capability === "SIGNALCARE_PUBLIC_WEB_RESEARCH")
+    return serializeSignalCareResearchContext({
+      researchMode: plan.researchMode ?? "DISCOVER_PROSPECTS",
+      targetProspect: plan.targetProspect,
+      instructions: plan.operationalContext
+    });
+  return plan.operationalContext;
+}
 
 export type OrchestrationServices = {
   projectManager: ProjectManagerAgent;
@@ -407,7 +434,11 @@ async function processClaimedProject(
           requiredCapability: plan.requiredCapability ?? "REPOSITORY_READ",
           sandboxPolicy: "READ_ONLY",
           networkPolicy: "OFF",
-          operationalContext: plan.operationalContext,
+          operationalContext: serializePlanOperationalContext(
+            plan,
+            plan.requiredCapability ?? "REPOSITORY_READ",
+            config.profile
+          ),
           priority: plan.priority,
           maxAttempts: plan.maxAttempts
         }
@@ -492,14 +523,11 @@ async function processClaimedProject(
         requiredCapability: plannedCapability,
         sandboxPolicy: plan.sandboxPolicy ?? (plan.actionCategory === "REVERSIBLE_REPOSITORY_WORK" ? "WORKSPACE_WRITE" : "READ_ONLY"),
         networkPolicy: plan.networkPolicy ?? "OFF",
-        operationalContext:
-          plannedCapability === "SIGNALCARE_PUBLIC_WEB_RESEARCH"
-            ? serializeSignalCareResearchContext({
-                researchMode: plan.researchMode ?? "DISCOVER_PROSPECTS",
-                targetProspect: plan.targetProspect,
-                instructions: plan.operationalContext
-              })
-            : plan.operationalContext,
+        operationalContext: serializePlanOperationalContext(
+          plan,
+          plannedCapability,
+          config.profile
+        ),
         dependsOnWorkItemId: plan.dependsOnWorkItemId,
         priority: plan.priority,
         maxAttempts: plan.maxAttempts,

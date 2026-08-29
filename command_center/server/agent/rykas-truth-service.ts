@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { activeAgentWorkStates } from "@/lib/agent-state-machine";
-import { RYKAS_READ_CAPABILITY, rykasReadRequestSchema, rykasTruthResultSchema, type RykasReadRequest, type RykasTruthResult } from "@/lib/rykas-truth-contract";
+import { RYKAS_READ_CAPABILITY, rykasReadRequestSchema, rykasTruthResultSchema, serializeRykasReadRequest, type RykasTruthResult } from "@/lib/rykas-truth-contract";
 import { recordAgentEvent } from "@/server/agent/event-service";
 
 type Context = { userId: string; projectId: string; profile: string };
 export type RykasReadEnvelope = { status: "READY" | "PENDING" | "BLOCKED" | "DISABLED"; result: RykasTruthResult | null; workItemId: string | null; blockers: string[] };
 
 function cacheMs() { const raw = Number(process.env.AGENT_RYKAS_TRUTH_CACHE_MS ?? 15 * 60_000); return Number.isFinite(raw) ? Math.max(60_000, Math.min(raw, 60 * 60_000)) : 15 * 60_000; }
-function requestJson(request: RykasReadRequest) { return JSON.stringify(rykasReadRequestSchema.parse(request)); }
 
 export async function getOrQueueRykasTruth(context: Context, rawRequest: unknown, db: PrismaClient, now = new Date()): Promise<RykasReadEnvelope> {
   const request = rykasReadRequestSchema.parse(rawRequest);
@@ -16,7 +15,7 @@ export async function getOrQueueRykasTruth(context: Context, rawRequest: unknown
   if (process.env.FEATURE_RYKAS_TRUTH_READ !== "true") return { status: "DISABLED", result: null, workItemId: null, blockers: ["Rykas truth connector is disabled."] };
   const config = await db.agentProjectConfig.findFirst({ where: { userId: context.userId, projectId: context.projectId } });
   if (!config || config.profile !== "RYKAS_GM" || config.workspaceIdentifier !== "rykas-repo") return { status: "BLOCKED", result: null, workItemId: null, blockers: ["Rykas project must use the fixed rykas-repo workspace before truth reads can run."] };
-  const operationalContext = requestJson(request);
+  const operationalContext = serializeRykasReadRequest(request);
   const latestRun = await db.agentRun.findFirst({ where: { userId: context.userId, projectId: context.projectId, status: "SUCCEEDED", workItem: { requiredCapability: RYKAS_READ_CAPABILITY, operationalContext } }, orderBy: { completedAt: "desc" } });
   if (latestRun?.structuredOutcome && latestRun.completedAt && now.getTime() - latestRun.completedAt.getTime() <= cacheMs()) {
     let persisted: unknown;
