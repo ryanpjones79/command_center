@@ -1336,7 +1336,9 @@ describe("SignalCare hosted public-web research", () => {
       evidence: "The prospect is outreach-ready.",
       nextReviewMinutes: 180,
       ownerNeeded: true,
-      ownerDecision
+      ownerDecision,
+      researchMode: null,
+      targetProspect: null
     });
     expect(
       pmOutputSchema.safeParse({
@@ -1357,6 +1359,97 @@ describe("SignalCare hosted public-web research", () => {
         ...output,
         ownerDecision: { ...ownerDecision, targetEntity: null }
       }).success
+    ).toBe(false);
+  });
+
+  it("normalizes stale qualification fields away from an owner outreach proposal", async () => {
+    const ownerDecision = {
+      category: "SEND_EMAIL_OR_MESSAGE",
+      question: "Approve first outreach to Caption Care?",
+      context: "The complete internal outreach package is ready for review.",
+      recommendedChoice: "APPROVE",
+      availableChoices: ["APPROVE", "NEEDS_MORE_RESEARCH", "PASS"],
+      expectedUpside: "Open a qualified customer conversation.",
+      risk: "External communication represents Ryan.",
+      targetEntity: {
+        type: "SIGNALCARE_PROSPECT",
+        name: "Caption Care"
+      }
+    };
+    const output = modelOutput({
+      ownerNeeded: true,
+      ownerDecision,
+      actionCategory: "SEND_EMAIL_OR_MESSAGE",
+      researchMode: "QUALIFY_EXISTING_PROSPECT",
+      targetProspect: "Caption Care"
+    });
+
+    expect(pmOutputSchema.safeParse(output).success).toBe(true);
+
+    const plan = await new ModelProjectManagerAgent(
+      modelClient(output)
+    ).chooseNextWork({
+      profile: "SIGNALCARE_GM",
+      projectId: signalProjectId,
+      projectName: "SignalCare",
+      objective: "Generate profitable customer engagements.",
+      primaryKpi: null,
+      currentBottleneck: "Owner authorization",
+      instructions: "Advance acquisition.",
+      autonomyPolicy: "Internal work only.",
+      escalationPolicy: "External outreach needs Ryan.",
+      existingWorkTitles: [],
+      toolEvidence: []
+    });
+
+    expect(plan).toMatchObject({
+      ownerNeeded: true,
+      ownerDecision,
+      researchMode: null,
+      targetProspect: null
+    });
+    expect(plan.ownerDecision?.targetEntity).toEqual({
+      type: "SIGNALCARE_PROSPECT",
+      name: "Caption Care"
+    });
+  });
+
+  it("keeps non-owner hosted research fields strict", () => {
+    expect(
+      pmOutputSchema.safeParse(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY
+        })
+      ).success
+    ).toBe(false);
+    expect(
+      pmOutputSchema.safeParse(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          researchMode: "QUALIFY_EXISTING_PROSPECT"
+        })
+      ).success
+    ).toBe(false);
+    expect(
+      pmOutputSchema.safeParse(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          researchMode: "DISCOVER_PROSPECTS",
+          targetProspect: "Existing Dental"
+        })
+      ).success
+    ).toBe(false);
+    expect(
+      pmOutputSchema.safeParse(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          researchMode: "QUALIFY_EXISTING_PROSPECT",
+          targetProspect: "Existing Dental"
+        })
+      ).success
     ).toBe(false);
   });
 

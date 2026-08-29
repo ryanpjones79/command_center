@@ -251,6 +251,12 @@ export const pmOutputSchema = z
         message: "SignalCare outreach requires a typed target prospect."
       });
     }
+    // An owner escalation is targeted by ownerDecision.targetEntity. Providers
+    // may echo stale research context; the adapter normalizes those fields away
+    // before the plan reaches orchestration.
+    if (value.ownerNeeded && value.ownerDecision !== null) {
+      return;
+    }
     const hostedResearch =
       value.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY;
     if (hostedResearch !== (value.researchMode !== null)) {
@@ -393,10 +399,14 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       name: "pm_project_review",
       validator: pmOutputSchema,
       schema: pmJsonSchema,
-      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When a prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, and use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
+      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When a prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
       payload: context
     });
+    const ownerEscalation = result.ownerNeeded && result.ownerDecision !== null;
+    const researchMode = ownerEscalation ? null : result.researchMode;
+    const targetProspect = ownerEscalation ? null : result.targetProspect;
     if (
+      !ownerEscalation &&
       result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
       context.profile !== "SIGNALCARE_GM"
     ) {
@@ -413,8 +423,9 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       (prospect) => prospect.stage.toLowerCase() !== "passed"
     );
     if (
+      !ownerEscalation &&
       result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
-      result.researchMode === "DISCOVER_PROSPECTS" &&
+      researchMode === "DISCOVER_PROSPECTS" &&
       actionableProspects.length > 0
     ) {
       return {
@@ -444,11 +455,12 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       };
     }
     if (
+      !ownerEscalation &&
       result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
-      result.researchMode === "QUALIFY_EXISTING_PROSPECT" &&
+      researchMode === "QUALIFY_EXISTING_PROSPECT" &&
       !actionableProspects.some(
         (prospect) =>
-          prospect.name.toLowerCase() === result.targetProspect?.toLowerCase()
+          prospect.name.toLowerCase() === targetProspect?.toLowerCase()
       )
     ) {
       throw new Error(
@@ -480,8 +492,8 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       nextReviewMinutes: result.nextReviewMinutes,
       ownerNeeded: result.ownerNeeded,
       ownerDecision: result.ownerDecision,
-      researchMode: result.researchMode,
-      targetProspect: result.targetProspect
+      researchMode,
+      targetProspect
     };
   }
 }
