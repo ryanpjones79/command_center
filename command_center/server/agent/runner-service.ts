@@ -44,6 +44,12 @@ export async function claimRunnerWork(runner: AgentRunner, input: { capabilities
     include: { project: { include: { agentConfig: true } } }, orderBy: [{ priority: "desc" }, { createdAt: "asc" }], take: 20
   });
   for (const item of candidates) {
+    if (
+      item.project.agentConfig?.profile === "SIGNALCARE_GM" &&
+      item.actionCategory === "RESEARCH_READ_ONLY"
+    ) {
+      continue;
+    }
     if (!item.workspaceIdentifier) continue;
     assertLocalRunnerCapability(item.requiredCapability);
     if (item.requiredCapability === RYKAS_READ_CAPABILITY && item.project.agentConfig?.profile !== "RYKAS_GM") continue;

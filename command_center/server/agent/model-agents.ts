@@ -515,12 +515,16 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       name: "pm_project_review",
       validator: pmOutputSchema,
       schema: pmJsonSchema,
-      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. For RYKAS_GM, Rykas owns economics: use only realTruth values, treat null as UNKNOWN, and never derive landed cost, profit, ROI, margin, max/ideal cost, score, or quantity. Prioritize purchase-decision-ready profitable candidates, then high-value missing evidence, inventory/listing flow, and stale tied-up capital. Stale evidence requires refresh/research, never BUY. BUY is authorization only and cannot purchase. For RYKAS_OPERATIONS_READ, choose exactly one predefined business read and bounded arguments in the typed rykasReadRequest field; use null for every other capability. Do not add schemaVersion, readOnly, SQL, shell, URLs, paths, or other protocol metadata. Application code enforces and serializes the read-only wire contract; operationalContext is only a concise business note. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. SignalCare passed prospects are terminal audit history: never qualify them, propose outreach to them, or resurrect them unless Ryan explicitly reopens them. When signalcare.pipeline.snapshot has zero actionable prospects, normally continue customer acquisition with bounded DISCOVER_PROSPECTS while honoring passedProspects as permanent discovery exclusions. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When an actionable prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
+      instructions: `You are a bounded RyanOS PM/GM. Do not create work merely to stay busy: choose WAIT or PARK when no valuable action exists. Favor business movement over cosmetic optimization. Propose only a registered capability. For RYKAS_GM, Rykas owns economics: use only realTruth values, treat null as UNKNOWN, and never derive landed cost, profit, ROI, margin, max/ideal cost, score, or quantity. Prioritize purchase-decision-ready profitable candidates, then high-value missing evidence, inventory/listing flow, and stale tied-up capital. Stale evidence requires refresh/research, never BUY. BUY is authorization only and cannot purchase. For RYKAS_OPERATIONS_READ, choose exactly one predefined business read and bounded arguments in the typed rykasReadRequest field; use null for every other capability. Do not add schemaVersion, readOnly, SQL, shell, URLs, paths, or other protocol metadata. Application code enforces and serializes the read-only wire contract; operationalContext is only a concise business note. SIGNALCARE_PUBLIC_WEB_RESEARCH has exactly two modes: DISCOVER_PROSPECTS only when no worthwhile pipeline prospect exists, or QUALIFY_EXISTING_PROSPECT for exactly one target name present in signalcare.pipeline.snapshot. All SignalCare commercial prospect discovery, public research, qualification, buyer/contact verification, and public provenance-gap resolution must use SIGNALCARE_PUBLIC_WEB_RESEARCH, never a repository capability. Repository capabilities are only for genuine SignalCare software/repository work and should use REVERSIBLE_REPOSITORY_WORK. SignalCare passed prospects are terminal audit history: never qualify them, propose outreach to them, or resurrect them unless Ryan explicitly reopens them. When signalcare.pipeline.snapshot has zero actionable prospects, normally continue customer acquisition with bounded DISCOVER_PROSPECTS while honoring passedProspects as permanent discovery exclusions. A queued or qualified SignalCare prospect must be qualified before outreach approval; prospect existence alone never implies readiness. When an actionable prospect exists, qualify the highest-value actionable prospect instead of repeating discovery. Only when snapshot evidence says the exact prospect is outreach_ready with prospect_qualification evidence may external contact be proposed. Then set ownerNeeded=true, use SEND_EMAIL_OR_MESSAGE, include targetEntity={type:"SIGNALCARE_PROSPECT",name:<exact snapshot name>}, use canonical choices APPROVE, NEEDS_MORE_RESEARCH, PASS, and set researchMode=null and targetProspect=null. ownerDecision.targetEntity is the canonical prospect for owner authorization. Do not request additional research unless the evidence actually requires it. Approval is authorization only and no communication will be sent. Do not use ownerNeeded for uncertainty or an ALLOW action. Public research may prepare internal draft language but cannot contact anyone, submit forms, change pricing, commit, spend, deploy, or send outreach. ${signalCareCommercialProfileInstructions()} CCHCS is PHI-free; never propose sensitive data access. Return operational summaries and evidence only, never hidden reasoning.`,
       payload: context
     });
     const ownerEscalation = result.ownerNeeded && result.ownerDecision !== null;
-    const researchMode = ownerEscalation ? null : result.researchMode;
-    const targetProspect = ownerEscalation ? null : result.targetProspect;
+    let requiredCapability = result.requiredCapability;
+    let researchMode = ownerEscalation ? null : result.researchMode;
+    let targetProspect = ownerEscalation ? null : result.targetProspect;
+    let sandboxPolicy = result.sandboxPolicy;
+    let networkPolicy = result.networkPolicy;
+    let maxAttempts = result.maxAttempts;
     const rykasReadRequest =
       result.requiredCapability === RYKAS_READ_CAPABILITY
         ? rykasReadRequestSchema.parse(result.rykasReadRequest)
@@ -552,6 +556,78 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       (prospect) => prospect.stage.toLowerCase() !== "passed"
     );
     const passedProspects = signalCareSnapshot?.passedProspects ?? [];
+    const proposalText = [
+      result.title,
+      result.objective,
+      result.acceptanceCriteria,
+      result.evidence,
+      result.currentBottleneck,
+      result.operationalContext
+    ]
+      .join(" ")
+      .toLowerCase();
+    const mentionedActionableProspects = actionableProspects.filter(
+      (prospect) =>
+        proposalText.includes(prospect.name.trim().toLowerCase())
+    );
+    const mentionedPassedProspects = passedProspects.filter((prospect) =>
+      proposalText.includes(prospect.name.trim().toLowerCase())
+    );
+    const commercialResearchProposal =
+      context.profile === "SIGNALCARE_GM" &&
+      !ownerEscalation &&
+      result.disposition === "CREATE_WORK" &&
+      result.actionCategory === "RESEARCH_READ_ONLY" &&
+      (result.agentRole === "SIGNALCARE_RESEARCHER" ||
+        /\b(prospect|qualification|buyer|contact|public evidence|provenance)\b/.test(
+          proposalText
+        ));
+    const needsSignalCareCapabilityCorrection =
+      commercialResearchProposal &&
+      requiredCapability !== SIGNALCARE_WEB_RESEARCH_CAPABILITY;
+    if (
+      needsSignalCareCapabilityCorrection &&
+      mentionedPassedProspects.length > 0
+    ) {
+      requiredCapability = SIGNALCARE_WEB_RESEARCH_CAPABILITY;
+      researchMode = "QUALIFY_EXISTING_PROSPECT";
+      targetProspect = mentionedPassedProspects[0]!.name;
+      sandboxPolicy = "READ_ONLY";
+      networkPolicy = "ALLOWLIST";
+      maxAttempts = 1;
+    } else if (
+      needsSignalCareCapabilityCorrection &&
+      mentionedActionableProspects.length === 1
+    ) {
+      requiredCapability = SIGNALCARE_WEB_RESEARCH_CAPABILITY;
+      researchMode = "QUALIFY_EXISTING_PROSPECT";
+      targetProspect = mentionedActionableProspects[0]!.name;
+      sandboxPolicy = "READ_ONLY";
+      networkPolicy = "ALLOWLIST";
+      maxAttempts = 1;
+    } else if (
+      needsSignalCareCapabilityCorrection &&
+      actionableProspects.length === 0 &&
+      /\b(discover|discovery|find|identify|shortlist|new prospect)\b/.test(
+        proposalText
+      )
+    ) {
+      requiredCapability = SIGNALCARE_WEB_RESEARCH_CAPABILITY;
+      researchMode = "DISCOVER_PROSPECTS";
+      targetProspect = null;
+      sandboxPolicy = "READ_ONLY";
+      networkPolicy = "ALLOWLIST";
+      maxAttempts = Math.max(1, Math.min(2, result.maxAttempts));
+    } else if (
+      needsSignalCareCapabilityCorrection &&
+      /\b(qualify|qualification|buyer|contact|public evidence|provenance)\b/.test(
+        proposalText
+      )
+    ) {
+      throw new Error(
+        "SignalCare commercial qualification must identify exactly one existing actionable prospect."
+      );
+    }
     const proposedSignalCareTarget = ownerEscalation
       ? result.ownerDecision?.targetEntity?.name ?? null
       : targetProspect;
@@ -566,7 +642,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       ((ownerEscalation &&
         result.ownerDecision?.category === "SEND_EMAIL_OR_MESSAGE") ||
         (!ownerEscalation &&
-          result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
+          requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
           researchMode === "QUALIFY_EXISTING_PROSPECT"));
     if (targetsPassedProspect && actionableProspects.length === 0) {
       return {
@@ -624,7 +700,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
     }
     if (
       !ownerEscalation &&
-      result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
+      requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
       researchMode === "DISCOVER_PROSPECTS" &&
       actionableProspects.length > 0
     ) {
@@ -657,7 +733,7 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
     }
     if (
       !ownerEscalation &&
-      result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
+      requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY &&
       researchMode === "QUALIFY_EXISTING_PROSPECT" &&
       !actionableProspects.some(
         (prospect) =>
@@ -677,17 +753,17 @@ export class ModelProjectManagerAgent implements ProjectManagerAgent {
       agentRole: result.agentRole,
       actionCategory: result.actionCategory,
       priority: result.priority,
-      maxAttempts: result.maxAttempts,
+      maxAttempts,
       plannedBottleneck: result.currentBottleneck,
-      requiredCapability: result.requiredCapability,
+      requiredCapability,
       sandboxPolicy:
-        result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY
+        requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY
           ? "READ_ONLY"
-          : result.sandboxPolicy,
+          : sandboxPolicy,
       networkPolicy:
-        result.requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY
+        requiredCapability === SIGNALCARE_WEB_RESEARCH_CAPABILITY
           ? "ALLOWLIST"
-          : result.networkPolicy,
+          : networkPolicy,
       operationalContext,
       rykasReadRequest,
       evidence: result.evidence,

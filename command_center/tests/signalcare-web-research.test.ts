@@ -38,6 +38,7 @@ import {
   getSignalCareResearchLimit,
   normalizeProspectDomain,
   OpenAiSignalCareResearchClient,
+  parseSignalCareResearchContext,
   recoverPrematureSignalCareOutreachDecisions,
   recoverSignalCareOwnerPassContinuation,
   recoverFailedSignalCareProspectResearch,
@@ -1242,6 +1243,118 @@ describe("SignalCare hosted public-web research", () => {
     expect(updated.networkPolicy).toBe("ALLOWLIST");
   });
 
+  it("idempotently recovers the stuck Heritage Provider Network qualification route", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Heritage Provider Network qualification",
+        lane: "signalcare",
+        recipient: "Heritage Provider Network",
+        status: "qualified",
+        nextAction: "Resolve missing public provider provenance."
+      }
+    });
+    const stuck = await db.agentWorkItem.create({
+      data: {
+        id: "cmtf1at7r002ho40pnokqp4np",
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "heritage-invalid-repository-route",
+        title: "Resolve qualification evidence for Heritage Provider Network",
+        objective:
+          "Resolve public qualification evidence for Heritage Provider Network.",
+        expectedValue: "Determine whether the prospect should advance.",
+        acceptanceCriteria:
+          "Provider-backed public evidence supports a bounded qualification outcome.",
+        agentRole: "SIGNALCARE_GM",
+        actionCategory: "RESEARCH_READ_ONLY",
+        requiredCapability: "REPOSITORY_READ",
+        sandboxPolicy: "READ_ONLY",
+        networkPolicy: "OFF",
+        workspaceIdentifier: null,
+        operationalContext: null,
+        priority: "HIGH",
+        maxAttempts: 3
+      }
+    });
+    const config = await db.agentProjectConfig.findUniqueOrThrow({
+      where: { projectId: signalProjectId }
+    });
+
+    expect(await reclassifySignalCareProspectResearch(config, db)).toEqual([
+      stuck.id
+    ]);
+    expect(await reclassifySignalCareProspectResearch(config, db)).toEqual([]);
+    const recovered = await db.agentWorkItem.findUniqueOrThrow({
+      where: { id: stuck.id }
+    });
+    expect(recovered).toMatchObject({
+      state: "QUEUED",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      workspaceIdentifier: null,
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "ALLOWLIST",
+      maxAttempts: 1
+    });
+    expect(parseSignalCareResearchContext(recovered.operationalContext)).toEqual(
+      expect.objectContaining({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Heritage Provider Network"
+      })
+    );
+
+    const runner = await db.agentRunner.create({
+      data: { userId, keyId: "heritage-runner", name: "Heritage runner test" }
+    });
+    await expect(
+      claimRunnerWork(
+        runner,
+        { capabilities: ["REPOSITORY_READ"], version: "test" },
+        db
+      )
+    ).resolves.toBeNull();
+  });
+
+  it("allows genuine SignalCare repository-development work to use the local runner", async () => {
+    const work = await db.agentWorkItem.create({
+      data: {
+        userId,
+        projectId: signalProjectId,
+        idempotencyKey: "signalcare-genuine-repository-work",
+        title: "Review SignalCare repository test coverage",
+        objective: "Inspect repository code and identify a bounded test gap.",
+        expectedValue: "Improve SignalCare software reliability.",
+        acceptanceCriteria: "Repository findings are evidence-backed.",
+        agentRole: "CODE_REVIEWER",
+        actionCategory: "REVERSIBLE_REPOSITORY_WORK",
+        requiredCapability: "REPOSITORY_READ",
+        sandboxPolicy: "READ_ONLY",
+        networkPolicy: "OFF",
+        workspaceIdentifier: "signalcare-repo",
+        priority: "MEDIUM",
+        maxAttempts: 1
+      }
+    });
+    const runner = await db.agentRunner.create({
+      data: {
+        userId,
+        keyId: "signalcare-code-runner",
+        name: "SignalCare code runner"
+      }
+    });
+
+    const claim = await claimRunnerWork(
+      runner,
+      { capabilities: ["REPOSITORY_READ"], version: "test" },
+      db
+    );
+    expect(claim).toMatchObject({
+      workItemId: work.id,
+      allowedCapability: "REPOSITORY_READ",
+      workspaceIdentifier: "signalcare-repo"
+    });
+  });
+
   it("creates one bounded replacement for the prior provenance failure", async () => {
     const failed = await db.agentWorkItem.create({
       data: {
@@ -1913,6 +2026,183 @@ describe("SignalCare hosted public-web research", () => {
     });
   });
 
+  it("deterministically corrects repository-routed commercial qualification to hosted research", async () => {
+    const context = {
+      profile: "SIGNALCARE_GM",
+      projectId: signalProjectId,
+      projectName: "SignalCare",
+      objective: "Generate profitable customer engagements.",
+      primaryKpi: null,
+      currentBottleneck: "Heritage Provider Network lacks adequate provenance.",
+      instructions: "Advance acquisition.",
+      autonomyPolicy: "Internal work only.",
+      escalationPolicy: "External outreach needs Ryan.",
+      existingWorkTitles: [],
+      toolEvidence: [
+        {
+          toolId: "signalcare.pipeline.snapshot",
+          summary: "Current pipeline",
+          output: {
+            prospects: [
+              { name: "Heritage Provider Network", stage: "qualified" }
+            ],
+            passedProspects: [],
+            openOwnerDecisions: 0
+          }
+        }
+      ]
+    };
+    const agent = new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          title: "Resolve qualification evidence for Heritage Provider Network",
+          objective:
+            "Resolve public qualification evidence for Heritage Provider Network.",
+          evidence:
+            "The prior hosted qualification lacked adequate provider provenance.",
+          acceptanceCriteria:
+            "Provider-backed facts support a bounded qualification outcome.",
+          agentRole: "SIGNALCARE_GM",
+          actionCategory: "RESEARCH_READ_ONLY",
+          requiredCapability: "REPOSITORY_READ",
+          sandboxPolicy: "READ_ONLY",
+          networkPolicy: "OFF",
+          operationalContext: "",
+          researchMode: null,
+          targetProspect: null,
+          maxAttempts: 4
+        })
+      )
+    );
+
+    await expect(agent.chooseNextWork(context)).resolves.toMatchObject({
+      disposition: "CREATE_WORK",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      researchMode: "QUALIFY_EXISTING_PROSPECT",
+      targetProspect: "Heritage Provider Network",
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "ALLOWLIST",
+      maxAttempts: 1
+    });
+  });
+
+  it("corrects public evidence discovery but preserves genuine repository-development routing", async () => {
+    const emptyPipelineContext = {
+      profile: "SIGNALCARE_GM",
+      projectId: signalProjectId,
+      projectName: "SignalCare",
+      objective: "Generate profitable customer engagements.",
+      primaryKpi: null,
+      currentBottleneck: "No actionable prospects.",
+      instructions: "Advance acquisition.",
+      autonomyPolicy: "Internal work only.",
+      escalationPolicy: "External outreach needs Ryan.",
+      existingWorkTitles: [],
+      toolEvidence: [
+        {
+          toolId: "signalcare.pipeline.snapshot",
+          summary: "Current pipeline",
+          output: {
+            prospects: [],
+            passedProspects: [],
+            openOwnerDecisions: 0
+          }
+        }
+      ]
+    };
+    const discovery = new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          title: "Discover a new evidence-backed SignalCare prospect",
+          objective: "Identify a plausible customer from public evidence.",
+          agentRole: "SIGNALCARE_RESEARCHER",
+          actionCategory: "RESEARCH_READ_ONLY",
+          requiredCapability: "REPOSITORY_READ",
+          researchMode: null,
+          targetProspect: null
+        })
+      )
+    );
+    await expect(discovery.chooseNextWork(emptyPipelineContext)).resolves.toMatchObject({
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      researchMode: "DISCOVER_PROSPECTS",
+      targetProspect: null,
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "ALLOWLIST"
+    });
+
+    const repository = new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          title: "Add a bounded regression test to the SignalCare repository",
+          objective: "Improve software test coverage.",
+          agentRole: "CODE_WORKER",
+          actionCategory: "REVERSIBLE_REPOSITORY_WORK",
+          requiredCapability: "CODEX_IMPLEMENTATION",
+          sandboxPolicy: "WORKSPACE_WRITE",
+          networkPolicy: "OFF",
+          researchMode: null,
+          targetProspect: null
+        })
+      )
+    );
+    await expect(repository.chooseNextWork(emptyPipelineContext)).resolves.toMatchObject({
+      requiredCapability: "CODEX_IMPLEMENTATION",
+      researchMode: null,
+      targetProspect: null,
+      sandboxPolicy: "WORKSPACE_WRITE",
+      networkPolicy: "OFF"
+    });
+  });
+
+  it("denies commercial qualification that does not match an actionable prospect", async () => {
+    const agent = new ModelProjectManagerAgent(
+      modelClient(
+        modelOutput({
+          disposition: "CREATE_WORK",
+          title: "Resolve qualification evidence for Missing Dental",
+          objective: "Verify buyer and public provenance evidence.",
+          evidence: "The proposed target is not in the actionable pipeline.",
+          agentRole: "SIGNALCARE_GM",
+          actionCategory: "RESEARCH_READ_ONLY",
+          requiredCapability: "REPOSITORY_READ",
+          researchMode: null,
+          targetProspect: null
+        })
+      )
+    );
+    const context = {
+      profile: "SIGNALCARE_GM",
+      projectId: signalProjectId,
+      projectName: "SignalCare",
+      objective: "Generate profitable customer engagements.",
+      primaryKpi: null,
+      currentBottleneck: "Qualification evidence is incomplete.",
+      instructions: "Advance acquisition.",
+      autonomyPolicy: "Internal work only.",
+      escalationPolicy: "External outreach needs Ryan.",
+      existingWorkTitles: [],
+      toolEvidence: [
+        {
+          toolId: "signalcare.pipeline.snapshot",
+          summary: "Current pipeline",
+          output: {
+            prospects: [{ name: "Existing Dental", stage: "qualified" }],
+            passedProspects: [],
+            openOwnerDecisions: 0
+          }
+        }
+      ]
+    };
+
+    await expect(agent.chooseNextWork(context)).rejects.toThrow(
+      "must identify exactly one existing actionable prospect"
+    );
+  });
+
   it("requires an existing prospect target and provider-backed qualification provenance", async () => {
     const work = await createWork("missing-qualification-target", signalProjectId, {
       operationalContext: serializeSignalCareResearchContext({
@@ -1941,6 +2231,153 @@ describe("SignalCare hosted public-web research", () => {
     expect(() =>
       retainCitedSignalCareQualification(unbacked, [])
     ).toThrow("inadequate provider provenance");
+  });
+
+  it("keeps a prospect qualified when hosted follow-up provenance is inadequate", async () => {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Heritage Provider Network qualification",
+        lane: "signalcare",
+        recipient: "Heritage Provider Network",
+        status: "qualified",
+        nextAction: "Resolve missing public provenance."
+      }
+    });
+    const work = await createWork("heritage-inadequate-followup", signalProjectId, {
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Heritage Provider Network"
+      })
+    });
+    await db.agentWorkItem.update({
+      where: { id: work.id },
+      data: { maxAttempts: 1 }
+    });
+    const qualify = vi.fn().mockResolvedValue({
+      qualification: qualification("Heritage Provider Network"),
+      providerSourceUrls: ["https://unrelated.example/evidence"]
+    });
+
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      { discover: vi.fn(), qualify },
+      db
+    );
+
+    expect(result.outcome).toBe("FAILED");
+    expect(result.error).toContain("inadequate provider provenance");
+    expect(
+      await db.queueItem.findFirstOrThrow({
+        where: { userId, recipient: "Heritage Provider Network" }
+      })
+    ).toMatchObject({ status: "qualified" });
+    expect(
+      await db.pipelineAction.count({
+        where: {
+          userId,
+          type: "prospect_qualification",
+          withWhom: "Heritage Provider Network"
+        }
+      })
+    ).toBe(0);
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+  });
+
+  it("stops creating qualification follow-ups after two bounded failures", async () => {
+    const now = new Date("2026-08-29T16:00:00.000Z");
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: "Heritage Provider Network qualification",
+        lane: "signalcare",
+        recipient: "Heritage Provider Network",
+        status: "qualified",
+        nextAction: "Resolve missing public provenance."
+      }
+    });
+    for (const suffix of ["original", "followup"]) {
+      await db.agentWorkItem.create({
+        data: {
+          userId,
+          projectId: signalProjectId,
+          idempotencyKey: `heritage-failed-${suffix}`,
+          title: `Qualify Heritage Provider Network ${suffix}`,
+          objective: "Resolve public evidence.",
+          expectedValue: "Determine customer fit.",
+          acceptanceCriteria: "Provider-backed qualification.",
+          agentRole: "SIGNALCARE_RESEARCHER",
+          actionCategory: "RESEARCH_READ_ONLY",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          sandboxPolicy: "READ_ONLY",
+          networkPolicy: "ALLOWLIST",
+          operationalContext: serializeSignalCareResearchContext({
+            researchMode: "QUALIFY_EXISTING_PROSPECT",
+            targetProspect: "Heritage Provider Network"
+          }),
+          state: "FAILED",
+          attemptCount: 1,
+          maxAttempts: 1,
+          blocker: "SignalCare qualification returned inadequate provider provenance.",
+          completedAt: now
+        }
+      });
+    }
+    await db.agentProjectConfig.update({
+      where: { projectId: signalProjectId },
+      data: { nextAgentReviewAt: now }
+    });
+    const { services } = modelServices({
+      disposition: "CREATE_WORK",
+      title: "Resolve qualification evidence for Heritage Provider Network",
+      objective: "Resolve public evidence for Heritage Provider Network.",
+      expectedValue: "Determine whether the prospect should advance.",
+      acceptanceCriteria: "Provider-backed facts support qualification.",
+      agentRole: "SIGNALCARE_RESEARCHER",
+      actionCategory: "RESEARCH_READ_ONLY",
+      priority: "HIGH",
+      maxAttempts: 1,
+      plannedBottleneck: "Public provenance remains inadequate.",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "ALLOWLIST",
+      operationalContext: "One more qualification follow-up.",
+      researchMode: "QUALIFY_EXISTING_PROSPECT",
+      targetProspect: "Heritage Provider Network",
+      ownerNeeded: false,
+      ownerDecision: null
+    });
+
+    const cycle = await runAgentOrchestrationCycle(now, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+
+    expect(cycle.projects[0]).toMatchObject({
+      outcome: "WAITING",
+      detail:
+        "Bounded SignalCare qualification follow-up exhausted; no repository work or outreach was created."
+    });
+    expect(
+      await db.agentWorkItem.count({ where: { projectId: signalProjectId } })
+    ).toBe(2);
+    expect(
+      (
+        await db.agentProjectConfig.findUniqueOrThrow({
+          where: { projectId: signalProjectId }
+        })
+      ).nextAgentReviewAt?.toISOString()
+    ).toBe("2026-08-29T16:30:00.000Z");
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
   });
 
   it("removes unrelated entity sources from qualification provenance", () => {

@@ -29,6 +29,7 @@ import {
   parseSignalCareResearchContext,
   recoverFailedSignalCareProspectResearch,
   reclassifySignalCareProspectResearch,
+  SIGNALCARE_NO_MATCH_REVIEW_MINUTES,
   serializeSignalCareResearchContext,
   signalCareWebResearchEnabled,
   type SignalCareResearchClient
@@ -218,6 +219,35 @@ function signalCareQualificationPlan(
   };
 }
 
+async function failedSignalCareQualificationCount(
+  userId: string,
+  projectId: string,
+  targetProspect: string,
+  db: PrismaClient
+) {
+  const failed = await db.agentWorkItem.findMany({
+    where: {
+      userId,
+      projectId,
+      requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+      state: "FAILED"
+    },
+    select: { operationalContext: true }
+  });
+  return failed.filter((item) => {
+    try {
+      const context = parseSignalCareResearchContext(item.operationalContext);
+      return (
+        context.researchMode === "QUALIFY_EXISTING_PROSPECT" &&
+        context.targetProspect.trim().toLowerCase() ===
+          targetProspect.trim().toLowerCase()
+      );
+    } catch {
+      return false;
+    }
+  }).length;
+}
+
 async function releaseProjectClaim(
   configId: string,
   leaseToken: string,
@@ -348,6 +378,55 @@ async function processClaimedProject(
     assertOwnerDecisionConsistency(plan);
     if (services.projectManager.adapterKind === "MODEL") {
       await recordModelPmDecision(config, dueAnchor, plan, db);
+    }
+
+    if (
+      config.profile === "SIGNALCARE_GM" &&
+      plan.requiredCapability === "SIGNALCARE_PUBLIC_WEB_RESEARCH" &&
+      plan.researchMode === "QUALIFY_EXISTING_PROSPECT" &&
+      plan.targetProspect &&
+      (await failedSignalCareQualificationCount(
+        config.userId,
+        config.projectId,
+        plan.targetProspect,
+        db
+      )) >= 2
+    ) {
+      await recordAgentEvent(
+        {
+          userId: config.userId,
+          projectId: config.projectId,
+          idempotencyKey: `signalcare-qualification-followup-exhausted:${config.projectId}:${plan.targetProspect.toLowerCase()}:${dueAnchor.toISOString()}`,
+          type: "WORK_WAITING",
+          summary: `No further automatic qualification work was created for ${plan.targetProspect}; two bounded attempts already failed without adequate public evidence.`,
+          metadata: {
+            targetProspect: plan.targetProspect,
+            externalOutreachPerformed: false
+          }
+        },
+        db
+      );
+      await releaseProjectClaim(
+        config.id,
+        leaseToken,
+        now,
+        {
+          health: "NEEDS_ATTENTION",
+          currentBottleneck:
+            "Public evidence remains inadequate after bounded qualification attempts.",
+          nextAgentReviewAt: nextReviewAt(
+            now,
+            SIGNALCARE_NO_MATCH_REVIEW_MINUTES
+          )
+        },
+        db
+      );
+      return {
+        ...baseResult,
+        outcome: "WAITING",
+        detail:
+          "Bounded SignalCare qualification follow-up exhausted; no repository work or outreach was created."
+      };
     }
 
     if (
@@ -608,6 +687,53 @@ async function processClaimedProject(
         detail: research.error ?? "Hosted SignalCare research did not complete." };
     }
     if (executor === "LOCAL_RUNNER") {
+      if (
+        config.profile === "SIGNALCARE_GM" &&
+        workItem.actionCategory === "RESEARCH_READ_ONLY"
+      ) {
+        await db.agentWorkItem.update({
+          where: { id: workItem.id },
+          data: {
+            blocker:
+              "SignalCare commercial research cannot be routed to the local repository runner."
+          }
+        });
+        await recordAgentEvent(
+          {
+            userId: config.userId,
+            projectId: config.projectId,
+            workItemId: workItem.id,
+            idempotencyKey: `signalcare-local-runner-routing-blocked:${workItem.id}`,
+            type: "POLICY_BLOCKED_ACTION",
+            summary:
+              "SignalCare commercial research was blocked from local-runner dispatch; no claim or external action occurred.",
+            metadata: { externalOutreachPerformed: false }
+          },
+          db
+        );
+        await releaseProjectClaim(
+          config.id,
+          leaseToken,
+          now,
+          {
+            health: "NEEDS_ATTENTION",
+            currentBottleneck:
+              "SignalCare commercial research requires the hosted public-web executor.",
+            nextAgentReviewAt: nextReviewAt(
+              now,
+              SIGNALCARE_NO_MATCH_REVIEW_MINUTES
+            )
+          },
+          db
+        );
+        return {
+          ...baseResult,
+          outcome: "WAITING",
+          workItemId: workItem.id,
+          detail:
+            "Invalid local-runner route suppressed for SignalCare commercial research."
+        };
+      }
       await recordAgentEvent({ userId: config.userId, projectId: config.projectId, workItemId: workItem.id,
         idempotencyKey: `runner-queued:${workItem.id}:${workItem.attemptCount + 1}`, type: "WORK_QUEUED_FOR_RUNNER",
         summary: `${workItem.title} is queued for a registered outbound local runner.` }, db);

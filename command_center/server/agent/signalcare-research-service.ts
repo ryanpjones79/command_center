@@ -1241,6 +1241,52 @@ function isSignalCareProspectShortlistDescription(
   );
 }
 
+const repositoryCapabilities = new Set([
+  "REPOSITORY_READ",
+  "REPOSITORY_CHANGE",
+  "CODEX_IMPLEMENTATION",
+  "CODEX_REVIEW"
+]);
+const knownCommercialResearchTargets: Record<string, string> = {
+  cmtf1at7r002ho40pnokqp4np: "Heritage Provider Network"
+};
+
+function normalizedSignalCareName(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function referencedActiveProspect(
+  work: Pick<
+    AgentWorkItem,
+    "id" | "title" | "objective" | "acceptanceCriteria" | "blocker"
+  >,
+  activeProspects: string[]
+) {
+  const knownTarget = knownCommercialResearchTargets[work.id];
+  if (
+    knownTarget &&
+    activeProspects.some(
+      (name) => normalizedSignalCareName(name) === normalizedSignalCareName(knownTarget)
+    )
+  ) {
+    return activeProspects.find(
+      (name) => normalizedSignalCareName(name) === normalizedSignalCareName(knownTarget)
+    ) ?? null;
+  }
+  const description = [
+    work.title,
+    work.objective,
+    work.acceptanceCriteria,
+    work.blocker ?? ""
+  ]
+    .join(" ")
+    .toLowerCase();
+  const matches = activeProspects.filter((name) =>
+    description.includes(normalizedSignalCareName(name))
+  );
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 export function isLegacySignalCareProspectResearch(
   work: LegacyResearchWork,
   profile: string | null | undefined
@@ -1254,19 +1300,91 @@ export function isLegacySignalCareProspectResearch(
 
 export async function reclassifySignalCareProspectResearch(
   config: Pick<AgentProjectConfig, "userId" | "projectId" | "profile">,
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  now = new Date()
 ) {
   if (config.profile !== "SIGNALCARE_GM") return [];
-  const workItems = await db.agentWorkItem.findMany({
-    where: {
-      userId: config.userId,
-      projectId: config.projectId,
-      state: { in: ["QUEUED", "RETRY"] }
-    }
-  });
+  const [workItems, pipelineItems] = await Promise.all([
+    db.agentWorkItem.findMany({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        state: { in: ["QUEUED", "RETRY"] }
+      }
+    }),
+    db.queueItem.findMany({
+      where: {
+        userId: config.userId,
+        lane: { in: ["signalcare", "pipeline"] }
+      },
+      select: { recipient: true, status: true }
+    })
+  ]);
+  const activeProspects = pipelineItems
+    .filter(
+      (item) =>
+        !["done", "killed", "passed"].includes(
+          item.status.trim().toLowerCase()
+        )
+    )
+    .map((item) => item.recipient);
   const reclassified: string[] = [];
   for (const work of workItems) {
-    if (!isLegacySignalCareProspectResearch(work, config.profile)) continue;
+    const legacyDiscovery = isLegacySignalCareProspectResearch(
+      work,
+      config.profile
+    );
+    const targetProspect = referencedActiveProspect(work, activeProspects);
+    const commercialQualification =
+      work.actionCategory === "RESEARCH_READ_ONLY" &&
+      repositoryCapabilities.has(work.requiredCapability) &&
+      targetProspect !== null;
+    if (!legacyDiscovery && !commercialQualification) continue;
+    const researchMode = commercialQualification
+      ? ("QUALIFY_EXISTING_PROSPECT" as const)
+      : ("DISCOVER_PROSPECTS" as const);
+    if (commercialQualification && work.attemptCount >= work.maxAttempts) {
+      const parked = await db.agentWorkItem.updateMany({
+        where: {
+          id: work.id,
+          userId: config.userId,
+          state: { in: ["QUEUED", "RETRY"] }
+        },
+        data: {
+          state: "PARKED",
+          blocker:
+            "SignalCare public-evidence follow-up exhausted its bounded retry allowance; normal PM review will decide whether to wait or pass.",
+          completedAt: now
+        }
+      });
+      if (parked.count !== 1) continue;
+      await db.agentProjectConfig.update({
+        where: { projectId: config.projectId },
+        data: {
+          nextAgentReviewAt: new Date(
+            now.getTime() + SIGNALCARE_NO_MATCH_REVIEW_MINUTES * 60 * 1000
+          )
+        }
+      });
+      await recordAgentEvent(
+        {
+          userId: config.userId,
+          projectId: config.projectId,
+          workItemId: work.id,
+          idempotencyKey: `signalcare-commercial-routing-exhausted:${work.id}`,
+          type: "WORK_PARKED",
+          summary:
+            "Invalid SignalCare repository routing was suppressed, but no bounded qualification retry remained.",
+          metadata: {
+            targetProspect,
+            externalOutreachPerformed: false
+          }
+        },
+        db
+      );
+      reclassified.push(work.id);
+      continue;
+    }
     const changed = await db.agentWorkItem.updateMany({
       where: {
         id: work.id,
@@ -1279,7 +1397,16 @@ export async function reclassifySignalCareProspectResearch(
         sandboxPolicy: "READ_ONLY",
         networkPolicy: "ALLOWLIST",
         workspaceIdentifier: null,
-        blocker: null
+        blocker: null,
+        nextEligibleRunAt: null,
+        operationalContext: serializeSignalCareResearchContext({
+          researchMode,
+          targetProspect,
+          instructions: work.objective.slice(0, 4000)
+        }),
+        maxAttempts: commercialQualification
+          ? Math.max(1, work.attemptCount + 1)
+          : work.maxAttempts
       }
     });
     if (changed.count !== 1) continue;
@@ -1292,10 +1419,16 @@ export async function reclassifySignalCareProspectResearch(
         idempotencyKey: `signalcare-research-reclassified:${work.id}`,
         type: "WORK_RECLASSIFIED",
         summary:
-          "SignalCare prospect discovery reclassified from local repository work to bounded hosted public-web research.",
+          researchMode === "QUALIFY_EXISTING_PROSPECT"
+            ? `SignalCare public-evidence work for ${targetProspect} reclassified from local repository work to bounded hosted qualification.`
+            : "SignalCare prospect discovery reclassified from local repository work to bounded hosted public-web research.",
         metadata: {
           fromCapability: work.requiredCapability,
-          toCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY
+          toCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          researchMode,
+          targetProspect,
+          localRunnerEligible: false,
+          externalOutreachPerformed: false
         }
       },
       db
