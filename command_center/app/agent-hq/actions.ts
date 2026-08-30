@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
-import { resolveOwnerDecision, setAgentProjectPaused, submitRykasOwnerFinancialUpdate } from "@/server/agent/work-service";
+import { RYKAS_OWNER_DATA_CAPABILITY } from "@/lib/rykas-owner-financial-contract";
+import { safeRykasOwnerUpdateError, type RykasOwnerUpdateStatus } from "@/lib/rykas-financial-draft";
+import { resolveOwnerDecision, retryRykasOwnerFinancialUpdate, setAgentProjectPaused, submitRykasOwnerFinancialUpdate } from "@/server/agent/work-service";
 
 function revalidateAgentViews() {
   revalidatePath("/agent-hq");
@@ -49,7 +51,7 @@ function optionalNumber(formData: FormData, name: string) {
   return value;
 }
 
-export async function saveRykasFinancialTruthAction(formData: FormData) {
+async function queueRykasFinancialTruth(formData: FormData) {
   const user = await requireUser();
   const decisionId = entityIdSchema.parse(formData.get("decisionId"));
   const cash = optionalNumber(formData, "businessCash");
@@ -109,8 +111,57 @@ export async function saveRykasFinancialTruthAction(formData: FormData) {
     ownerPolicy: reserve === null && discretionaryPct === null ? null : { minimumOperatingReserve: reserve, minimumDebtPaymentBuffer: optionalNumber(formData, "minimumDebtPaymentBuffer"), desiredMonthlyExtraDebtPayment: optionalNumber(formData, "desiredMonthlyExtraDebtPayment"), percentOfExcessCashToDebt: optionalNumber(formData, "percentOfExcessCashToDebt") === null ? null : optionalNumber(formData, "percentOfExcessCashToDebt")! / 100, maximumDiscretionaryInventoryPercent: discretionaryPct === null ? null : discretionaryPct / 100, maximumBrandConcentrationPercent: optionalNumber(formData, "maximumBrandConcentrationPercent") === null ? null : optionalNumber(formData, "maximumBrandConcentrationPercent")! / 100, coreReplenishmentPriority: "CORE_FIRST", speculativeTestBudgetCap: optionalNumber(formData, "speculativeTestBudgetCap"), debtStrategy: String(formData.get("debtStrategy") ?? "HIGHEST_APR"), notes: null },
     poCertification: String(formData.get("poCertification") ?? "").trim() || null
   };
-  await submitRykasOwnerFinancialUpdate(user.id, decisionId, payload);
+  const queued = await submitRykasOwnerFinancialUpdate(user.id, decisionId, payload);
   revalidateAgentViews();
+  return queued;
+}
+
+export type RykasFinancialTruthActionState = {
+  status: "IDLE" | "QUEUED" | "ERROR";
+  message: string;
+  workItemId?: string;
+};
+
+export async function saveRykasFinancialTruthAction(
+  _previousState: RykasFinancialTruthActionState,
+  formData: FormData
+): Promise<RykasFinancialTruthActionState> {
+  try {
+    const queued = await queueRykasFinancialTruth(formData);
+    return { status: "QUEUED", message: "Saving owner financial truth in Rykas…", workItemId: queued.workItemId };
+  } catch (error) {
+    return { status: "ERROR", message: safeRykasOwnerUpdateError(error) };
+  }
+}
+
+export async function getRykasOwnerUpdateStatusAction(decisionId: string): Promise<{ status: RykasOwnerUpdateStatus; message: string }> {
+  const user = await requireUser();
+  const id = entityIdSchema.parse(decisionId);
+  const decision = await prisma.agentDecision.findFirst({ where: { id, userId: user.id }, include: { originatingWorkItem: true } });
+  if (!decision) return { status: "NEEDS_ATTENTION", message: "The financial truth update could not be located. Your browser draft remains preserved." };
+  if (decision.status === "RESOLVED" && decision.selectedChoice === "UPDATED_AND_RECHECK") {
+    return { status: "SAVED", message: "Rykas confirmed SAVED. A fresh financial read was queued." };
+  }
+  const work = decision.originatingWorkItem;
+  if (!work || work.requiredCapability !== RYKAS_OWNER_DATA_CAPABILITY) return { status: "IDLE", message: "Ready for owner financial truth." };
+  if (["FAILED", "PARKED"].includes(work.state)) {
+    return { status: "NEEDS_ATTENTION", message: safeRykasOwnerUpdateError(work.blocker ?? "save failed") };
+  }
+  if (work.state === "RETRY") {
+    return { status: "NEEDS_ATTENTION", message: "The save needs attention. Your exact submission is preserved and can be retried without re-entry." };
+  }
+  return { status: "PROCESSING", message: "Rykas is processing the bounded owner update. No financial action is authorized." };
+}
+
+export async function retryRykasOwnerFinancialUpdateAction(decisionId: string): Promise<{ status: "QUEUED" | "ERROR"; message: string }> {
+  try {
+    const user = await requireUser();
+    await retryRykasOwnerFinancialUpdate(user.id, entityIdSchema.parse(decisionId));
+    revalidateAgentViews();
+    return { status: "QUEUED", message: "Retry queued with the exact preserved submission." };
+  } catch (error) {
+    return { status: "ERROR", message: safeRykasOwnerUpdateError(error) };
+  }
 }
 
 const configSchema = z.object({

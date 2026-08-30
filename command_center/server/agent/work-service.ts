@@ -70,12 +70,48 @@ export async function submitRykasOwnerFinancialUpdate(
   if (!parseRykasTruthReconciliation(decision.context)) throw new Error("Decision is not a Rykas financial truth update.");
   if (decision.actionRequest) throw new Error("Financial data maintenance must not create an action request.");
   const work = decision.originatingWorkItem;
-  if (!work || work.state !== "NEEDS_RYAN") throw new Error("Rykas financial truth work is not awaiting owner input.");
+  if (!work) throw new Error("Rykas financial truth work was not found.");
+  const serializedUpdate = serializeRykasOwnerFinancialUpdate(update);
+  if (work.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY && work.operationalContext) {
+    if (work.operationalContext !== serializedUpdate) {
+      throw new Error("A Rykas financial truth update is already processing. Retry the preserved submission or wait for it to finish.");
+    }
+    return { queued: true, workItemId: work.id };
+  }
+  if (work.state !== "NEEDS_RYAN") throw new Error("Rykas financial truth work is not awaiting owner input.");
   const now = new Date();
-  await db.agentDecision.update({ where: { id: decision.id }, data: { status: "RESOLVED", selectedChoice: "UPDATED_AND_RECHECK", resultingAction: "Bounded owner facts queued for the Rykas manual truth layer. No purchase, payment, or commitment occurred.", resolvedAt: now } });
+  await db.agentDecision.update({ where: { id: decision.id }, data: { status: "PENDING", selectedChoice: null, resultingAction: "PROCESSING: bounded owner facts are queued for the Rykas manual truth layer. The form remains pending until Rykas confirms SAVED.", resolvedAt: null } });
   await transitionAgentWorkItem(userId, work.id, "QUEUED", { blocker: null, nextEligibleRunAt: now }, db);
-  await db.agentWorkItem.update({ where: { id: work.id }, data: { title: "Save Rykas financial truth update", objective: "Persist only the owner-confirmed financial facts into the existing Rykas manual truth layer.", expectedValue: "Refresh the deterministic financial checklist without copying authoritative truth into RyanOS.", acceptanceCriteria: "The local Rykas API accepts the strict bounded payload, returns a schema-valid save receipt, and performs no purchase, payment, or financial commitment.", agentRole: "RYKAS_OWNER_DATA_STEWARD", actionCategory: "RESEARCH_READ_ONLY", requiredCapability: RYKAS_OWNER_DATA_CAPABILITY, sandboxPolicy: "WORKSPACE_WRITE", networkPolicy: "LOCALHOST_ONLY", operationalContext: serializeRykasOwnerFinancialUpdate(update), workspaceIdentifier: "rykas-repo", attemptCount: 0, maxAttempts: 2, resultSummary: null, evidenceSummary: null, completedAt: null } });
+  await db.agentWorkItem.update({ where: { id: work.id }, data: { title: "Save Rykas financial truth update", objective: "Persist only the owner-confirmed financial facts into the existing Rykas manual truth layer.", expectedValue: "Refresh the deterministic financial checklist without copying authoritative truth into RyanOS.", acceptanceCriteria: "The local Rykas API accepts the strict bounded payload, returns a schema-valid save receipt, and performs no purchase, payment, or financial commitment.", agentRole: "RYKAS_OWNER_DATA_STEWARD", actionCategory: "RESEARCH_READ_ONLY", requiredCapability: RYKAS_OWNER_DATA_CAPABILITY, sandboxPolicy: "WORKSPACE_WRITE", networkPolicy: "LOCALHOST_ONLY", operationalContext: serializedUpdate, workspaceIdentifier: "rykas-repo", attemptCount: 0, maxAttempts: 2, resultSummary: null, evidenceSummary: null, completedAt: null } });
   await recordAgentEvent({ userId, projectId: decision.projectId, workItemId: work.id, idempotencyKey: `rykas-owner-data-queued:${decision.id}`, type: "RYKAS_OWNER_DATA_UPDATE_QUEUED", summary: "Consolidated owner financial facts queued for the bounded Rykas manual truth update.", metadata: { purchaseAuthorized: false, purchaseExecuted: false, debtPaymentAuthorized: false, debtPaymentExecuted: false } }, db);
+  return { queued: true, workItemId: work.id };
+}
+
+export async function retryRykasOwnerFinancialUpdate(
+  userId: string,
+  decisionId: string,
+  db: PrismaClient = prisma
+) {
+  const decision = await loadDecisionForResolution(userId, decisionId, db);
+  if (!decision || decision.status !== "PENDING") throw new Error("Pending Rykas financial truth decision not found.");
+  if (!parseRykasTruthReconciliation(decision.context)) throw new Error("Decision is not a Rykas financial truth update.");
+  if (decision.actionRequest) throw new Error("Financial data maintenance must not create an action request.");
+  const work = decision.originatingWorkItem;
+  if (!work || work.requiredCapability !== RYKAS_OWNER_DATA_CAPABILITY || !work.operationalContext) {
+    throw new Error("No preserved Rykas financial truth submission is available to retry.");
+  }
+  rykasOwnerFinancialUpdateSchema.parse(JSON.parse(work.operationalContext));
+  if (work.state === "FAILED") {
+    // This narrowly scoped recovery is permitted only after the owner-update capability and payload are revalidated above.
+    await db.agentWorkItem.update({ where: { id: work.id }, data: { state: "RETRY", blocker: "Retry requested with the preserved owner submission.", nextEligibleRunAt: new Date(), completedAt: null } });
+  } else if (work.state === "PARKED") {
+    await transitionAgentWorkItem(userId, work.id, "QUEUED", { blocker: "Retry requested with the preserved owner submission.", nextEligibleRunAt: new Date() }, db);
+  } else if (!["QUEUED", "RETRY"].includes(work.state)) {
+    throw new Error("The Rykas financial truth update is already processing.");
+  }
+  await db.agentWorkItem.update({ where: { id: work.id }, data: { maxAttempts: Math.max(work.maxAttempts, work.attemptCount + 1), claimToken: null, leaseExpiresAt: null, heartbeatAt: null, completedAt: null, nextEligibleRunAt: new Date(), resultSummary: null, evidenceSummary: null } });
+  await db.agentDecision.update({ where: { id: decision.id }, data: { resultingAction: "PROCESSING: retrying the preserved bounded owner update. No form re-entry or financial action is required." } });
+  await recordAgentEvent({ userId, projectId: decision.projectId, workItemId: work.id, type: "RYKAS_OWNER_DATA_RETRY_QUEUED", summary: "The exact preserved owner financial truth payload was queued for retry.", metadata: { payloadPreserved: true, purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false } }, db);
   return { queued: true, workItemId: work.id };
 }
 

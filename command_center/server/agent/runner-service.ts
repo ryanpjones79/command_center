@@ -104,14 +104,16 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
   if (item.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY && result.status === "SUCCEEDED") {
     if (result.providerIdentifier !== "rykas-local-owner-data" || !result.rykasOwnerFinancialUpdateResult) throw new Error("Rykas owner-data work requires a schema-valid deterministic adapter result.");
     const saved = rykasOwnerFinancialUpdateResultSchema.parse(result.rykasOwnerFinancialUpdateResult);
+    const pendingDecision = await db.agentDecision.findFirst({ where: { originatingWorkItemId: item.id, userId: item.userId, status: "PENDING" } });
+    const readRequest = serializeRykasReadRequest({ version: 1, operation: "FINANCIAL_SNAPSHOT", input: {} });
     await db.$transaction([
       db.agentRun.update({ where: { id: run.id }, data: { status: "SUCCEEDED", providerIdentifier: result.providerIdentifier, executorIdentifier: runner.keyId, operationalResultSummary: result.summary, evidence: result.evidence, structuredOutcome: JSON.stringify(saved), testOutcome: result.testResults, completedAt: now } }),
       db.agentWorkItem.update({ where: { id: item.id }, data: { state: "DONE", resultSummary: result.summary, evidenceSummary: result.evidence, integrationStatus: "NOT_REQUIRED", blocker: null, claimToken: null, leaseExpiresAt: null, heartbeatAt: null, completedAt: now } }),
       db.agentRunner.update({ where: { id: runner.id }, data: { currentWorkItemId: null, lastHeartbeatAt: now, lastSuccessfulRunAt: now, recentFailure: null } }),
-      db.agentProjectConfig.update({ where: { projectId: item.projectId }, data: { nextAgentReviewAt: now } })
+      db.agentProjectConfig.update({ where: { projectId: item.projectId }, data: { nextAgentReviewAt: now } }),
+      ...(pendingDecision ? [db.agentDecision.update({ where: { id: pendingDecision.id }, data: { status: "RESOLVED", selectedChoice: "UPDATED_AND_RECHECK", resultingAction: "Rykas confirmed the bounded owner financial truth update as SAVED. A fresh deterministic read is queued. No purchase, payment, or commitment occurred.", resolvedAt: now } })] : []),
+      db.agentWorkItem.upsert({ where: { projectId_idempotencyKey: { projectId: item.projectId, idempotencyKey: `rykas-financial-recheck:${item.id}` } }, update: {}, create: { userId: item.userId, projectId: item.projectId, idempotencyKey: `rykas-financial-recheck:${item.id}`, title: "Recheck Rykas financial truth", objective: "Recalculate the deterministic financial checklist and capital plan after the bounded owner-data save.", expectedValue: "Return a current or explicitly blocked capital plan from Rykas truth.", acceptanceCriteria: "The local adapter returns FINANCIAL_SNAPSHOT; missing values remain null and no purchase, payment, or commitment occurs.", agentRole: "RYKAS_CFO_CAPITAL_STEWARD", actionCategory: "RESEARCH_READ_ONLY", requiredCapability: RYKAS_READ_CAPABILITY, sandboxPolicy: "READ_ONLY", networkPolicy: "LOCALHOST_ONLY", operationalContext: readRequest, workspaceIdentifier: "rykas-repo", priority: "HIGH", maxAttempts: 2 } })
     ]);
-    const readRequest = serializeRykasReadRequest({ version: 1, operation: "FINANCIAL_SNAPSHOT", input: {} });
-    await db.agentWorkItem.upsert({ where: { projectId_idempotencyKey: { projectId: item.projectId, idempotencyKey: `rykas-financial-recheck:${item.id}` } }, update: {}, create: { userId: item.userId, projectId: item.projectId, idempotencyKey: `rykas-financial-recheck:${item.id}`, title: "Recheck Rykas financial truth", objective: "Recalculate the deterministic financial checklist and capital plan after the bounded owner-data save.", expectedValue: "Return a current or explicitly blocked capital plan from Rykas truth.", acceptanceCriteria: "The local adapter returns FINANCIAL_SNAPSHOT; missing values remain null and no purchase, payment, or commitment occurs.", agentRole: "RYKAS_CFO_CAPITAL_STEWARD", actionCategory: "RESEARCH_READ_ONLY", requiredCapability: RYKAS_READ_CAPABILITY, sandboxPolicy: "READ_ONLY", networkPolicy: "LOCALHOST_ONLY", operationalContext: readRequest, workspaceIdentifier: "rykas-repo", priority: "HIGH", maxAttempts: 2 } });
     await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-owner-data-saved:${run.id}`, type: "RYKAS_OWNER_DATA_SAVED", summary: "Bounded owner financial facts were saved to Rykas manual truth and a fresh read was queued.", metadata: { writes: saved.writes, purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false } }, db);
     return { duplicate: false, state: "DONE" as const };
   }
@@ -151,7 +153,9 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
   await db.agentRunner.update({ where: { id: runner.id }, data: { currentWorkItemId: null, lastHeartbeatAt: now,
     lastSuccessfulRunAt: nextState === "READY_FOR_REVIEW" ? now : runner.lastSuccessfulRunAt,
     recentFailure: nextState === "FAILED" ? result.summary : null } });
-  await db.agentProjectConfig.update({ where: { projectId: item.projectId }, data: { nextAgentReviewAt: now } });
+  await db.agentProjectConfig.update({ where: { projectId: item.projectId }, data: item.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY
+    ? { nextAgentReviewAt: now, health: "NEEDS_ATTENTION", currentBottleneck: "The Rykas owner financial truth save needs attention. The preserved submission can be retried without re-entry." }
+    : { nextAgentReviewAt: now } });
   if (nextState === "NEEDS_RYAN") {
     await createOwnerDecision({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id,
       idempotencyKey: `runner-qa-escalation:${item.id}:${item.attemptCount}`, plan: { category: "BINDING_COMMITMENT",
@@ -164,6 +168,7 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
     summary: nextState === "READY_FOR_REVIEW" ? "Independent local QA passed; branch is ready for owner review and was not merged." : result.qaFeedback ?? result.summary,
     metadata: nextState === "READY_FOR_REVIEW" ? { movementKind: "CODE_READY_FOR_REVIEW", integrationStatus: "PENDING_REVIEW" } : undefined }, db);
   if (item.requiredCapability === RYKAS_READ_CAPABILITY) await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-read-failed:${run.id}`, type: "RYKAS_DATA_BLOCKED", summary: "The bounded Rykas truth read failed closed; no substitute values were created.", metadata: { retryEligible: nextState === "RETRY", purchaseExecuted: false } }, db);
+  if (item.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY) await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-owner-save-failed:${run.id}`, type: "RYKAS_OWNER_DATA_SAVE_FAILED", summary: "The bounded owner financial truth save did not receive a confirmed SAVED receipt. The decision remains pending and the exact submission is preserved for retry.", metadata: { retryEligible: ["RETRY", "FAILED"].includes(nextState), payloadPreserved: true, purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false } }, db);
   return { duplicate: false, state: nextState };
 }
 

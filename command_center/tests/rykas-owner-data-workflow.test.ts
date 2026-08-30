@@ -12,8 +12,11 @@ import {
   BROKEN_RYKAS_OWNER_DATA_DECISION_ID,
   createOwnerDecision,
   recoverBrokenRykasOwnerDataDecision,
-  resolveOwnerDecision
+  resolveOwnerDecision,
+  retryRykasOwnerFinancialUpdate,
+  submitRykasOwnerFinancialUpdate
 } from "@/server/agent/work-service";
+import { claimRunnerWork, submitRunnerResult } from "@/server/agent/runner-service";
 
 const databasePath = path.join(
   process.cwd(),
@@ -134,6 +137,68 @@ async function createReconciliationDecision(key: string) {
 }
 
 describe("Rykas owner-data reconciliation", () => {
+  it("keeps the decision pending across failure, retries the exact payload, and resolves only after SAVED", async () => {
+    const { work, decision } = await createReconciliationDecision("reliable-owner-save");
+    const debts = Array.from({ length: 13 }, (_, index) => ({
+      displayName: `Synthetic debt ${index + 1}`, debtType: "OTHER", pricingType: index === 0 ? "FIXED_FEE" : "APR",
+      currentBalance: 1000 + index, apr: index === 0 ? null : 0.2, minimumPayment: 25,
+      nextDueDate: null, promotionalRateEnd: null, ownerPriority: index + 1,
+      remainingFinancingFee: index === 0 ? 100 : null, remainingTotalRepayment: null,
+      paymentCadence: "MONTHLY", requiredPeriodicPayment: 25, notes: null
+    }));
+    const payload = {
+      version: 1 as const, observedAt: "2026-08-29T12:00:00.000Z",
+      businessCash: { label: "Synthetic cash", amount: 30000 },
+      debts: { status: "CURRENT_ROWS_LOADED" as const, items: debts, note: null },
+      obligations: { status: "CURRENT_NONE" as const, items: [], note: null },
+      ownerCertifiedOpenCommitments: { totalOpenCommitments: 22161, note: "Synthetic aggregate" },
+      localInventorySnapshots: { status: "NOT_AVAILABLE" as const, items: [], note: "Synthetic" },
+      ownerPolicy: { minimumOperatingReserve: 7000, minimumDebtPaymentBuffer: 1000, desiredMonthlyExtraDebtPayment: 0, percentOfExcessCashToDebt: 0, maximumDiscretionaryInventoryPercent: 0, maximumBrandConcentrationPercent: null, coreReplenishmentPriority: "CORE_FIRST", speculativeTestBudgetCap: 0, debtStrategy: "OWNER_DEFINED_ORDER" as const, notes: null },
+      poCertification: null
+    };
+    await submitRykasOwnerFinancialUpdate(userId, decision.id, payload, db);
+    const queued = await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } });
+    const exactContext = queued.operationalContext;
+    expect(queued).toMatchObject({ state: "QUEUED", requiredCapability: "RYKAS_OWNER_DATA_UPDATE" });
+    expect((await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe("PENDING");
+    expect(await db.agentActionRequest.count({ where: { decisionId: decision.id } })).toBe(0);
+
+    const runner = await db.agentRunner.create({ data: { userId, keyId: `rykas-owner-reliability-${process.pid}`, name: "Rykas owner reliability runner" } });
+    const previousFeature = process.env.FEATURE_RUNNER_EXECUTION;
+    process.env.FEATURE_RUNNER_EXECUTION = "true";
+    try {
+      const firstClaim = await claimRunnerWork(runner, { capabilities: ["RYKAS_OWNER_DATA_UPDATE"], version: "test" }, db);
+      expect(firstClaim?.operationalContext).toBe(exactContext);
+      await submitRunnerResult(runner, work.id, firstClaim!.claimToken, {
+        status: "FAILED", summary: "Rykas truth unavailable (503).", filesChanged: [], testsRun: [], testResults: "",
+        unresolvedIssues: ["Service unavailable"], evidence: "No SAVED receipt was received.", acceptanceCriteriaSatisfied: false,
+        recommendedQaAction: "REPAIR", qaFeedback: "Rykas truth unavailable (503).", providerIdentifier: "rykas-local-owner-data"
+      }, db);
+      expect((await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe("PENDING");
+      expect((await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } }))).toMatchObject({ state: "RETRY", operationalContext: exactContext });
+
+      await retryRykasOwnerFinancialUpdate(userId, decision.id, db);
+      const retried = await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } });
+      expect(retried.operationalContext).toBe(exactContext);
+      expect(retried.attemptCount).toBe(1);
+      const secondClaim = await claimRunnerWork(runner, { capabilities: ["RYKAS_OWNER_DATA_UPDATE"], version: "test" }, db);
+      expect(secondClaim?.operationalContext).toBe(exactContext);
+      await submitRunnerResult(runner, work.id, secondClaim!.claimToken, {
+        status: "SUCCEEDED", summary: "Rykas confirmed SAVED.", filesChanged: [], testsRun: [], testResults: "schema valid",
+        unresolvedIssues: [], evidence: "Deterministic owner-data receipt.", acceptanceCriteriaSatisfied: true,
+        recommendedQaAction: "PASS", providerIdentifier: "rykas-local-owner-data",
+        rykasOwnerFinancialUpdateResult: { schemaVersion: "RYKAS_OWNER_FINANCIAL_TRUTH_UPDATE_V1", status: "SAVED", writes: { businessCash: 1, debts: 13, obligations: 0, ownerPolicy: 1, poCertification: 0, ownerCertifiedOpenCommitments: 1, localInventorySnapshots: 1 }, observedAt: payload.observedAt, purchaseAuthorized: false, purchaseExecuted: false, debtPaymentAuthorized: false, debtPaymentExecuted: false, financialCommitmentCreated: false }
+      }, db);
+      const savedDecision = await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } });
+      expect(savedDecision).toMatchObject({ status: "RESOLVED", selectedChoice: "UPDATED_AND_RECHECK" });
+      expect((await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })).state).toBe("DONE");
+      expect(await db.agentWorkItem.count({ where: { idempotencyKey: `rykas-financial-recheck:${work.id}` } })).toBe(1);
+      expect(await db.agentActionRequest.count({ where: { decisionId: decision.id } })).toBe(0);
+    } finally {
+      process.env.FEATURE_RUNNER_EXECUTION = previousFeature;
+    }
+  });
+
   it("rejects unsupported production choices before persistence", async () => {
     const before = await db.agentDecision.count();
     await expect(

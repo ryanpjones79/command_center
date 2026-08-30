@@ -8,6 +8,7 @@ import {
   rykasReadRequestSchema
 } from "@/lib/rykas-truth-contract";
 import { projectToolRegistry } from "@/server/agent/project-tools";
+import { clearRykasFinancialDraftAfterConfirmedSave, loadRykasFinancialDraft, saveRykasFinancialDraft } from "@/lib/rykas-financial-draft";
 
 const observedAt = "2026-08-29T12:00:00.000Z";
 
@@ -167,5 +168,23 @@ describe("Rykas Capital Steward safety contracts", () => {
     expect(result.obligations?.items).toHaveLength(2);
     expect(result.debts?.items[0]?.apr).toBeNull();
     expect(rykasOwnerFinancialUpdateSchema.safeParse({ ...result, amazonSales: 123 }).success).toBe(false);
+  });
+
+  it("preserves owner form drafts through failure and clears only after confirmed SAVED", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); }
+    };
+    const key = "rykas-financial-draft:synthetic-decision";
+    const draft = { version: 1 as const, debtCount: 13, obligationCount: 2, fields: { businessCash: ["30000"], debtDisplayName: Array.from({ length: 13 }, (_, index) => `Debt ${index + 1}`), ownerCertifiedOpenCommitments: ["22161"] } };
+    saveRykasFinancialDraft(storage, key, draft);
+    clearRykasFinancialDraftAfterConfirmedSave(storage, key, "NEEDS_ATTENTION");
+    expect(loadRykasFinancialDraft(storage, key)).toEqual(draft);
+    clearRykasFinancialDraftAfterConfirmedSave(storage, key, "PROCESSING");
+    expect(loadRykasFinancialDraft(storage, key)).toEqual(draft);
+    clearRykasFinancialDraftAfterConfirmedSave(storage, key, "SAVED");
+    expect(loadRykasFinancialDraft(storage, key)).toBeNull();
   });
 });

@@ -1,20 +1,105 @@
 "use client";
 
-import { useState } from "react";
-import { saveRykasFinancialTruthAction } from "@/app/agent-hq/actions";
+import { useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { getRykasOwnerUpdateStatusAction, retryRykasOwnerFinancialUpdateAction, saveRykasFinancialTruthAction, type RykasFinancialTruthActionState } from "@/app/agent-hq/actions";
 import { Button } from "@/components/ui/button";
+import { clearRykasFinancialDraftAfterConfirmedSave, loadRykasFinancialDraft, rykasFinancialDraftKey, saveRykasFinancialDraft, type RykasFinancialDraft, type RykasOwnerUpdateStatus } from "@/lib/rykas-financial-draft";
 
 const input = "mt-1 w-full rounded-md border bg-background px-3 py-2";
 const label = "text-sm";
 const section = "space-y-3 rounded-md border p-3";
 
 export function RykasFinancialTruthForm({ decisionId }: { decisionId: string }) {
+  const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
+  const restoredDraft = useRef<RykasFinancialDraft | null>(null);
   const [debts, setDebts] = useState<number[]>([]);
   const [obligations, setObligations] = useState<number[]>([]);
+  const [workflow, setWorkflow] = useState<{ status: RykasOwnerUpdateStatus; message: string }>({ status: "IDLE", message: "" });
+  const [pollVersion, setPollVersion] = useState(0);
+  const [retryPending, startRetry] = useTransition();
+  const initialState: RykasFinancialTruthActionState = { status: "IDLE", message: "" };
+  const [actionState, formAction, actionPending] = useActionState(saveRykasFinancialTruthAction, initialState);
+  const draftKey = rykasFinancialDraftKey(decisionId);
   const add = (rows: number[], setRows: (value: number[]) => void) => setRows([...rows, (rows.at(-1) ?? 0) + 1]);
 
+  const persistDraft = useCallback(() => {
+    const form = formRef.current;
+    if (!form) return;
+    const fields: Record<string, string[]> = {};
+    for (const element of Array.from(form.elements)) {
+      if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) || !element.name) continue;
+      const value = element instanceof HTMLInputElement && element.type === "checkbox" ? String(element.checked) : element.value;
+      (fields[element.name] ??= []).push(value);
+    }
+    saveRykasFinancialDraft(window.localStorage, draftKey, { version: 1, debtCount: debts.length, obligationCount: obligations.length, fields });
+  }, [debts.length, draftKey, obligations.length]);
+
+  useEffect(() => {
+    const draft = loadRykasFinancialDraft(window.localStorage, draftKey);
+    if (!draft) return;
+    restoredDraft.current = draft;
+    setDebts(Array.from({ length: draft.debtCount }, (_, index) => index + 1));
+    setObligations(Array.from({ length: draft.obligationCount }, (_, index) => index + 1));
+  }, [draftKey]);
+
+  useEffect(() => {
+    const draft = restoredDraft.current;
+    const form = formRef.current;
+    if (!draft || !form || debts.length !== draft.debtCount || obligations.length !== draft.obligationCount) return;
+    for (const [name, values] of Object.entries(draft.fields)) {
+      const elements = Array.from(form.elements).filter((element): element is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
+        (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) && element.name === name
+      );
+      elements.forEach((element, index) => {
+        const value = values[index] ?? "";
+        if (element instanceof HTMLInputElement && element.type === "checkbox") element.checked = value === "true";
+        else element.value = value;
+      });
+    }
+    restoredDraft.current = null;
+  }, [debts.length, obligations.length]);
+
+  useEffect(() => {
+    if (restoredDraft.current) return;
+    persistDraft();
+  }, [debts.length, obligations.length, persistDraft]);
+
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      let status: { status: RykasOwnerUpdateStatus; message: string };
+      try {
+        status = await getRykasOwnerUpdateStatusAction(decisionId);
+      } catch {
+        status = { status: "NEEDS_ATTENTION", message: "The save status could not be checked. Your entries remain preserved; retry after the service is healthy." };
+      }
+      if (!active) return;
+      setWorkflow(status);
+      clearRykasFinancialDraftAfterConfirmedSave(window.localStorage, draftKey, status.status);
+      if (status.status === "SAVED") {
+        router.refresh();
+        return;
+      }
+      if (status.status === "PROCESSING") timer = setTimeout(poll, 2000);
+    };
+    void poll();
+    return () => { active = false; if (timer) clearTimeout(timer); };
+  }, [actionState.status, decisionId, draftKey, pollVersion, router]);
+
+  const retry = () => startRetry(async () => {
+    const result = await retryRykasOwnerFinancialUpdateAction(decisionId);
+    setWorkflow(result.status === "QUEUED" ? { status: "PROCESSING", message: result.message } : { status: "NEEDS_ATTENTION", message: result.message });
+    if (result.status === "QUEUED") setPollVersion((value) => value + 1);
+  });
+
+  const displayedMessage = actionState.status === "ERROR" ? actionState.message : workflow.message || actionState.message;
+  const attention = actionState.status === "ERROR" || workflow.status === "NEEDS_ATTENTION";
+
   return (
-    <form action={saveRykasFinancialTruthAction} className="space-y-4 rounded-lg border bg-background/60 p-4">
+    <form action={formAction} className="space-y-4 rounded-lg border bg-background/60 p-4" onChange={persistDraft} onInput={persistDraft} ref={formRef}>
       <input name="decisionId" type="hidden" value={decisionId} />
       <section className={section}>
         <h4 className="text-sm font-semibold">Cash</h4>
@@ -99,7 +184,11 @@ export function RykasFinancialTruthForm({ decisionId }: { decisionId: string }) 
           <label className={label}>Debt strategy<select className={input} name="debtStrategy" defaultValue="HIGHEST_APR"><option value="HIGHEST_APR">Highest comparable APR</option><option value="OWNER_DEFINED_ORDER">Owner-defined</option></select></label>
         </div>
       </section>
-      <Button type="submit">SAVE &amp; RECHECK</Button>
+      {displayedMessage && <p className={attention ? "rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm" : "rounded-md border p-3 text-sm"} role={attention ? "alert" : "status"}>{displayedMessage}</p>}
+      <div className="flex flex-wrap gap-2">
+        <Button disabled={actionPending || workflow.status === "PROCESSING"} type="submit">{actionPending || workflow.status === "PROCESSING" ? "SAVING…" : "SAVE & RECHECK"}</Button>
+        {workflow.status === "NEEDS_ATTENTION" && <Button disabled={retryPending} onClick={retry} type="button" variant="outline">{retryPending ? "RETRYING…" : "RETRY SAVED SUBMISSION"}</Button>}
+      </div>
       <p className="text-xs text-muted-foreground">Saves only owner-confirmed planning facts in Rykas. It cannot place an order, move money, pay debt, or create a commitment.</p>
     </form>
   );
