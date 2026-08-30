@@ -7,6 +7,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buildAgentDecisionPresentation } from "@/lib/agent-decision-display";
+import { operatorIssue } from "@/lib/agent-operator-summary";
 import { rykasOwnerChoiceLabel } from "@/lib/rykas-owner-data-contract";
 import { parseDecisionChoices } from "@/server/agent/hq-service";
 
@@ -61,12 +62,14 @@ export function AgentProjectSection({ projectId, config }: AgentProjectSectionPr
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Machine work</p>
           <div className="mt-2 space-y-2">
             {config.projectWorkItems.length === 0 && <p className="text-sm text-muted-foreground">No machine work yet.</p>}
-            {config.projectWorkItems.slice(0, 6).map((item) => (
-              <div className="rounded-lg border bg-background/40 p-2" key={item.id}>
+            {config.projectWorkItems.slice(0, 6).map((item) => {
+              const issue = operatorIssue(item.blocker);
+              return <div className="rounded-lg border bg-background/40 p-2" key={item.id}>
                 <div className="flex items-start justify-between gap-2"><p className="text-sm font-medium">{item.title}</p><Badge variant="outline">{item.state.replaceAll("_", " ")}</Badge></div>
-                <p className="mt-1 text-xs text-muted-foreground">Attempt {item.attemptCount}/{item.maxAttempts}{item.blocker ? ` · ${item.blocker}` : ""}</p>
-              </div>
-            ))}
+                <p className="mt-1 text-xs text-muted-foreground">Attempt {item.attemptCount}/{item.maxAttempts}{item.blocker ? ` · ${issue.summary}` : ""}</p>
+                {issue.technicalEvidence && <details className="mt-1 text-xs text-muted-foreground"><summary>Technical evidence</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{issue.technicalEvidence}</pre></details>}
+              </div>;
+            })}
           </div>
         </div>
         <div>
@@ -115,12 +118,14 @@ export function AgentProjectSection({ projectId, config }: AgentProjectSectionPr
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Recent agent history</p>
           <div className="mt-2 space-y-2">
             {config.projectEvents.length === 0 && <p className="text-sm text-muted-foreground">No events yet.</p>}
-            {config.projectEvents.slice(0, 8).map((event) => (
-              <div className="border-l-2 border-cyan-500/30 pl-3" key={event.id}>
-                <p className="text-sm">{event.summary}</p>
+            {config.projectEvents.slice(0, 8).map((event) => {
+              const issue = operatorIssue(event.summary);
+              return <div className="border-l-2 border-cyan-500/30 pl-3" key={event.id}>
+                <p className="text-sm">{issue.summary}</p>
                 <p className="text-xs text-muted-foreground">{event.type.replaceAll("_", " ")} · {formatDate(event.createdAt)}</p>
-              </div>
-            ))}
+                {issue.technicalEvidence && <details className="mt-1 text-xs text-muted-foreground"><summary>Technical evidence</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{issue.technicalEvidence}</pre></details>}
+              </div>;
+            })}
           </div>
         </div>
       </div>

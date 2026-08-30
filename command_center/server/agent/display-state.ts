@@ -102,6 +102,11 @@ export type AgentProjectDisplayState = {
     financialHealth: string | null;
     poCertifiedAt: string | null;
     openCommitments: number | null;
+    settledCash: number | null;
+    protectedCommitments: number | null;
+    knownInventoryAtCost: number | null;
+    totalDebt: number | null;
+    currentBlockers: string[];
   };
 };
 
@@ -145,6 +150,23 @@ function concise(value: string, fallback: string) {
   return normalized.length > 520
     ? `${normalized.slice(0, 517).trimEnd()}…`
     : normalized;
+}
+
+function financialBlockerSummary(
+  key: string,
+  checklist: Array<{ inputKey: string; reason: string | null }>
+) {
+  if (key === "AMAZON_SALES_INVENTORY") return "Amazon source data needs refresh.";
+  const reason = checklist.find((item) => item.inputKey === key)?.reason;
+  if (reason) return concise(reason, `${key.replaceAll("_", " ")} needs reconciliation.`);
+  const labels: Record<string, string> = {
+    BUSINESS_CASH: "Business cash needs an owner refresh.",
+    DEBT: "One or more active debts need reconciliation.",
+    OBLIGATIONS: "Current obligations need an owner refresh.",
+    OWNER_POLICY: "Owner capital policy needs reconciliation.",
+    PROTECTED_COMMITMENTS: "Protected commitments need reconciliation."
+  };
+  return labels[key] ?? `${key.replaceAll("_", " ")} needs reconciliation.`;
 }
 
 export function containsOwnerDecisionLanguage(
@@ -419,22 +441,37 @@ export function deriveAgentProjectDisplayState(
     if (capital || financial || capitalPlan) {
       supportingState = {
         kind: "RYKAS_TRUTH",
-        poLedgerStatus: capital?.poLedgerStatus ?? "UNKNOWN",
-        poTruthCurrent: capital?.poTruthCurrent ?? !financial?.missingInputs.includes("PO_COMMITMENTS"),
+        poLedgerStatus: financial?.commitments.detailedTruthStatus ?? capital?.poLedgerStatus ?? "UNKNOWN",
+        poTruthCurrent: financial
+          ? financial.checklist.find((item) => item.inputKey === "PO_COMMITMENTS")?.status === "CURRENT"
+          : capital?.poTruthCurrent ?? false,
         safeInventoryCapital: capital?.safeInventoryCapital ?? null,
         safeBuyingCapacity: capitalPlan?.safeBuyingCapacity ?? null,
         coreRestockNeeds: financial?.replenishment.candidateCount ?? null,
         debtPlanStatus: typeof financial?.debtAdvice.status === "string" ? financial.debtAdvice.status : null,
         financialHealth: financial?.financialHealth.status ?? null,
         poCertifiedAt: capital?.poCertifiedAt ?? null,
-        openCommitments: capitalPlan?.committedCapital ?? capital?.openCommitments ?? null
+        openCommitments: financial?.commitments.protectedCommittedCapital ?? capitalPlan?.committedCapital ?? capital?.openCommitments ?? null,
+        settledCash: financial?.settledCash.grossCash ?? null,
+        protectedCommitments: financial?.commitments.protectedCommittedCapital ?? null,
+        knownInventoryAtCost: financial?.inventoryCapitalPosition.knownOwnedInventoryAtCost ?? null,
+        totalDebt: financial?.debt.totalBalance ?? null,
+        currentBlockers: financial
+          ? financial.missingInputs.map((key) => financialBlockerSummary(key, financial.checklist))
+          : []
       };
     }
     if (financial && (financial.status === "BLOCKED" || capitalPlan?.status === "BLOCKED")) {
       displayHealth = "NEEDS_ATTENTION";
-      displayBottleneck = financial.missingInputs.length
-        ? `Financial truth needs one consolidated update: ${financial.missingInputs.join(", ")}.`
+      const blockers = financial.missingInputs.map((key) =>
+        financialBlockerSummary(key, financial.checklist)
+      );
+      displayBottleneck = blockers.length
+        ? blockers.join(" ")
         : "Rykas financial truth requires reconciliation before buying decisions.";
+    } else if (financial?.financialHealth.status === "PARTIAL") {
+      displayHealth = "NEEDS_ATTENTION";
+      displayBottleneck = "Financial health is partial because local inventory capital is unknown or stale; core replenishment is not blocked solely for this reason.";
     } else if (
       !financial && (
       !capital ||

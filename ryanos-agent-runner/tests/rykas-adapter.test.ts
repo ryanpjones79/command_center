@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RunnerConfig } from "../src/config.js";
 import { RykasTruthAdapter } from "../src/rykas-adapter.js";
-import { rykasReadRequestSchema } from "../src/rykas-contracts.js";
+import { financialSnapshotSchema, rykasReadRequestSchema } from "../src/rykas-contracts.js";
+import { financialSnapshotV11Fixture } from "./fixtures/financial-snapshot-v1-1.js";
 
 const config = { FEATURE_RYKAS_TRUTH_READ: "true", RYKAS_TRUTH_BASE_URL: "http://127.0.0.1:8765", RYKAS_TRUTH_TIMEOUT_MS: 1000 } as RunnerConfig;
 const summary = { actions: [{ action_bucket: "BUY NOW", action_count: 1, top_opportunity_score: 91 }], capital: { reliable: false, status: "BLOCKED", reason: "PO truth stale", actionRequired: "Confirm PO ledger", asOf: "2026-08-29", openCommitments: 0, purchaseOrderRows: 0, openPurchaseOrderLines: 0, poLedgerStatus: "NOT VERIFIED", poCertificationState: "NOT VERIFIED", poCertifiedAt: "2026-08-20T00:00:00Z", poTruthCurrent: false, safeInventoryCapital: null } };
@@ -11,7 +12,7 @@ const staleUnknown = { asin: "B000000002", product: "Needs evidence", action_buc
 function fetcher(items = [ready, staleUnknown]) {
   return vi.fn(async (input: URL | RequestInfo) => {
     const path = new URL(String(input)).pathname;
-    const body = path.endsWith("/summary") ? summary : path.endsWith("/opportunities") ? { items } : ready;
+    const body = path.endsWith("/finance/snapshot") ? financialSnapshotV11Fixture : path.endsWith("/summary") ? summary : path.endsWith("/opportunities") ? { items } : ready;
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 }
@@ -47,6 +48,27 @@ describe("bounded deterministic Rykas truth adapter", () => {
     expect(() => new RykasTruthAdapter({ ...config, RYKAS_TRUTH_BASE_URL: "https://example.com" }, fetcher())).toThrow("loopback");
     const failed = vi.fn(async () => new Response("unavailable", { status: 503 })) as typeof fetch;
     await expect(new RykasTruthAdapter(config, failed).execute({ version: 1, operation: "PURCHASE_CANDIDATES", input: { limit: 10 } })).rejects.toThrow("unavailable");
+  });
+  it("accepts the exact V1.1 financial snapshot and rejects the superseded V1 shape", async () => {
+    const parsed = financialSnapshotSchema.parse(financialSnapshotV11Fixture);
+    expect(parsed).toMatchObject({
+      settledCash: { grossCash: 30000 },
+      commitments: { protectedCommittedCapital: 22161, aggregateCertifiesDetailedLedger: false },
+      inventoryCapitalPosition: { amazonOnHandUnits: 4791, amazonInboundUnits: 1673, totalOwnedInventoryAtCost: null, countedAsCash: false },
+      debt: { totalBalance: 469143 }
+    });
+    const result = await new RykasTruthAdapter(config, fetcher()).execute({ version: 1, operation: "FINANCIAL_SNAPSHOT", input: {} });
+    expect(result.data.financialSnapshot?.commitments.protectedCommittedCapital).toBe(22161);
+    expect(result.data.financialSnapshot?.inventoryCapitalPosition.totalOwnedInventoryAtCost).toBeNull();
+    expect(result).toMatchObject({ readOnly: true, purchaseAuthorized: false, purchaseExecuted: false });
+
+    const oldV1 = {
+      ...financialSnapshotV11Fixture,
+      commitments: { openPurchaseOrders: 0, openLines: 0, asOf: financialSnapshotV11Fixture.asOf },
+      inventory: {},
+      inventoryCapitalPosition: undefined
+    };
+    expect(financialSnapshotSchema.safeParse(oldV1).success).toBe(false);
   });
   it("writes only bounded owner-maintained facts and cannot report a financial side effect", async () => {
     const ownerConfig = { ...config, FEATURE_RYKAS_OWNER_DATA_WRITE: "true" } as RunnerConfig;

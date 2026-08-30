@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/session";
+import { groupRecentEvents, operatorIssue } from "@/lib/agent-operator-summary";
 import { getAgentHqData } from "@/server/agent/hq-service";
 
 export const metadata: Metadata = { title: "Agent HQ" };
@@ -67,6 +68,7 @@ export default async function AgentHqPage() {
           .slice(0, 3)
           .map((item) => ({ item, projectName: config.project.name }))
   );
+  const recentMovement = groupRecentEvents(data.events, 12);
 
   return (
     <main className="space-y-6">
@@ -91,7 +93,10 @@ export default async function AgentHqPage() {
 
       <section className="grid gap-4 lg:grid-cols-2">
         <Card><CardHeader><CardTitle>Local runner</CardTitle><CardDescription>Outbound polling only; no inbound Windows exposure.</CardDescription></CardHeader><CardContent className="space-y-2">
-          {data.runners.length === 0 ? <p className="text-sm text-muted-foreground">No runner registered. Live-internal work remains safely queued.</p> : data.runners.map((runner) => <div className="rounded-lg border p-3" key={runner.id}><div className="flex justify-between gap-2"><span className="font-medium">{runner.name}</span><Badge variant={runner.effectiveStatus === "ONLINE" ? "success" : "warning"}>{runner.effectiveStatus}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Last heartbeat {formatDate(runner.lastHeartbeatAt)} · Version {runner.version ?? "unknown"}</p><p className="mt-1 text-xs text-muted-foreground">Current work {runner.currentWorkItemId ?? "none"} · Last success {formatDate(runner.lastSuccessfulRunAt)}</p>{runner.recentFailure && <p className="mt-2 text-xs text-amber-400">{runner.recentFailure}</p>}</div>)}
+          {data.runners.length === 0 ? <p className="text-sm text-muted-foreground">No runner registered. Live-internal work remains safely queued.</p> : data.runners.map((runner) => {
+            const issue = operatorIssue(runner.recentFailure);
+            return <div className="rounded-lg border p-3" key={runner.id}><div className="flex justify-between gap-2"><span className="font-medium">{runner.name}</span><Badge variant={runner.effectiveStatus === "ONLINE" ? "success" : "warning"}>{runner.effectiveStatus}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Last heartbeat {formatDate(runner.lastHeartbeatAt)} · Version {runner.version ?? "unknown"}</p><p className="mt-1 text-xs text-muted-foreground">Current work {runner.currentWorkItemId ?? "none"} · Last success {formatDate(runner.lastSuccessfulRunAt)}</p>{runner.recentFailure && <><p className="mt-2 text-xs text-amber-400">{issue.summary}</p>{issue.technicalEvidence && <details className="mt-2 text-xs text-muted-foreground"><summary>Technical evidence</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{issue.technicalEvidence}</pre></details>}</>}</div>;
+          })}
         </CardContent></Card>
         <Card><CardHeader><CardTitle>Authorized / awaiting execution</CardTitle><CardDescription>Approval records authority; execution evidence completes an action.</CardDescription></CardHeader><CardContent className="space-y-2">
           {data.actions.length === 0 ? <p className="text-sm text-muted-foreground">No authorized actions are waiting.</p> : data.actions.map((action) => <div className="rounded-lg border p-3" key={action.id}><div className="flex justify-between gap-2"><span className="text-sm font-medium">{action.project.name}</span><Badge variant="warning">{action.state.replaceAll("_", " ")}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{action.category.replaceAll("_", " ")} · one transaction only</p></div>)}
@@ -169,12 +174,13 @@ export default async function AgentHqPage() {
                     <p className="mt-1 text-sm">{display.displayBottleneck}</p>
                     {display.supportingState?.kind === "RYKAS_TRUTH" && (
                       <div className="mt-2 grid gap-1 rounded-lg border bg-background/40 p-2 text-xs text-muted-foreground">
-                        <span>PO ledger: {display.supportingState.poLedgerStatus}</span>
-                        <span>PO truth current: {display.supportingState.poTruthCurrent ? "Yes" : "No"}</span>
-                        <span>Safe buying capacity: {display.supportingState.safeBuyingCapacity === null ? "BLOCKED" : display.supportingState.safeBuyingCapacity.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
-                        <span>Core restock needs: {display.supportingState.coreRestockNeeds ?? "Unknown"}</span>
-                        <span>Debt plan: {display.supportingState.debtPlanStatus ?? "NEEDS DATA"}</span>
                         <span>Financial health: {display.supportingState.financialHealth ?? "Unknown"}</span>
+                        <span>Settled cash: {display.supportingState.settledCash === null ? "Unknown" : display.supportingState.settledCash.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                        <span>Protected commitments: {display.supportingState.protectedCommitments === null ? "Unknown" : display.supportingState.protectedCommitments.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                        <span>Known inventory at cost: {display.supportingState.knownInventoryAtCost === null ? "Unknown" : display.supportingState.knownInventoryAtCost.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                        <span>Total debt: {display.supportingState.totalDebt === null ? "Unknown" : display.supportingState.totalDebt.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                        <span>Safe buying capacity: {display.supportingState.safeBuyingCapacity === null ? "BLOCKED" : display.supportingState.safeBuyingCapacity.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                        {display.supportingState.currentBlockers.length > 0 && <div className="mt-1"><span className="font-medium text-foreground">Current blockers:</span><ul className="ml-4 list-disc">{display.supportingState.currentBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div>}
                       </div>
                     )}
                   </div>
@@ -212,14 +218,15 @@ export default async function AgentHqPage() {
         <Card>
           <CardHeader><CardTitle>Recent movement</CardTitle><CardDescription>Operational state changes and outcomes—not token telemetry or private reasoning.</CardDescription></CardHeader>
           <CardContent className="space-y-2">
-            {data.events.length === 0 && <p className="text-sm text-muted-foreground">No agent movement recorded yet.</p>}
-            {data.events.map((event) => {
+            {recentMovement.length === 0 && <p className="text-sm text-muted-foreground">No agent movement recorded yet.</p>}
+            {recentMovement.map((event) => {
               const pmDecision = pmDecisionDetails(event.type, event.metadata);
               return (
                 <div className="flex gap-3 rounded-lg border p-3" key={event.id}>
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" />
                   <div className="min-w-0">
-                    <p className="text-sm"><span className="font-medium">{event.project.name}:</span> {event.summary}</p>
+                    <p className="text-sm"><span className="font-medium">{event.project.name}:</span> {event.operatorSummary}{event.repeatCount > 1 ? ` (${event.repeatCount} similar events)` : ""}</p>
+                    {event.technicalEvidence && <details className="mt-2 text-xs text-muted-foreground"><summary>Technical evidence</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{event.technicalEvidence}</pre></details>}
                     {movementKind(event.metadata) && <Badge className="mt-1" variant="success">Movement: {movementKind(event.metadata)!.replaceAll("_", " ")}</Badge>}
                     {pmDecision && (
                       <div className="mt-2 rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
@@ -238,12 +245,14 @@ export default async function AgentHqPage() {
         <Card>
           <CardHeader><CardTitle>Parked / stalled</CardTitle><CardDescription>Stagnation stays visible to the Chief.</CardDescription></CardHeader>
           <CardContent className="space-y-3">
-            {currentParkedOrFailed.map(({ item, projectName }) => (
-              <div className="rounded-lg border p-3" key={item.id}>
+            {currentParkedOrFailed.map(({ item, projectName }) => {
+              const issue = operatorIssue(item.blocker);
+              return <div className="rounded-lg border p-3" key={item.id}>
                 <div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">{item.title}</p><Badge variant={statusVariant(item.state)}>{item.state}</Badge></div>
-                <p className="mt-1 text-xs text-muted-foreground">{projectName} · {item.blocker || "No blocker recorded"}</p>
-              </div>
-            ))}
+                <p className="mt-1 text-xs text-muted-foreground">{projectName} · {issue.summary}</p>
+                {issue.technicalEvidence && <details className="mt-2 text-xs text-muted-foreground"><summary>Technical evidence</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{issue.technicalEvidence}</pre></details>}
+              </div>;
+            })}
             {data.chief.stalledProjectIds.length === 0 && currentParkedOrFailed.length === 0 && (
               <p className="text-sm text-muted-foreground">No parked work or stalled projects.</p>
             )}

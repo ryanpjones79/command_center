@@ -10,6 +10,7 @@ import {
   decisionPrimaryText
 } from "@/lib/agent-decision-display";
 import { serializeRykasTruthReconciliation } from "@/lib/rykas-owner-data-contract";
+import { financialSnapshotV11Fixture } from "../../ryanos-agent-runner/tests/fixtures/financial-snapshot-v1-1";
 
 const now = new Date("2026-08-29T18:00:00.000Z");
 
@@ -181,7 +182,42 @@ function rykasInput(
   });
 }
 
+function rykasV11Input(snapshot: unknown = financialSnapshotV11Fixture) {
+  const input = rykasInput();
+  const outcome = rykasTruth();
+  (outcome.data as Record<string, unknown>).financialSnapshot = snapshot;
+  input.project.agentWorkItems[0]!.runs[0]!.structuredOutcome = JSON.stringify(outcome);
+  return input;
+}
+
 describe("canonical Agent HQ display state", () => {
+  it("reconciles current V1.1 owner truth and reports only genuine blockers", () => {
+    const state = deriveAgentProjectDisplayState(rykasV11Input(), now);
+    expect(state.displayBottleneck).toContain("Amazon source data needs refresh");
+    expect(state.displayBottleneck).toContain("minimum-payment truth");
+    expect(state.displayBottleneck).not.toMatch(/BUSINESS_CASH|OBLIGATIONS|OWNER_POLICY|PO_COMMITMENTS/);
+    expect(state.supportingState).toMatchObject({
+      financialHealth: "BLOCKED", settledCash: 30000, protectedCommitments: 22161,
+      knownInventoryAtCost: 42885.38, totalDebt: 469143,
+      currentBlockers: ["Amazon source data needs refresh.", "One active debt lacks minimum-payment truth."]
+    });
+  });
+
+  it("treats unknown local inventory as partial/watch without blocking core replenishment", () => {
+    const snapshot = {
+      ...financialSnapshotV11Fixture,
+      status: "READY",
+      missingInputs: [],
+      capitalPlan: { ...financialSnapshotV11Fixture.capitalPlan, status: "READY", missingInputs: [], blockers: [], grossCash: 30000, committedCapital: 22161, openObligations: 0, minimumDebtObligations: 0, debtPaymentBuffer: 0, operatingReserve: 0, coreReplenishmentReserve: 0, coreReplenishmentShortfall: 0, plannedExtraDebtReduction: 0, preliminaryFreeCapital: 7839, safeBuyingCapacity: 0, coreReplenishmentBudget: 0, growthInventoryBudget: 0, opportunisticSaleBudget: 0, speculativeTestBudget: 0, remainingBuffer: 7839 },
+      financialHealth: { status: "PARTIAL", reasons: ["Local inventory capital is unknown or stale; discretionary inventory confidence is reduced, but core replenishment is not blocked solely for this reason."] },
+      weeklyCapitalPlan: { ...financialSnapshotV11Fixture.weeklyCapitalPlan, status: "READY", coreReplenishment: 0, growthInventory: 0, saleEventInventory: 0, debtReduction: 0, holdAsReserve: 7839 },
+      capitalPosition: { ...financialSnapshotV11Fixture.capitalPosition, safeBuyingCapacity: 0 }
+    };
+    const state = deriveAgentProjectDisplayState(rykasV11Input(snapshot), now);
+    expect(state.supportingState?.financialHealth).toBe("PARTIAL");
+    expect(state.displayBottleneck).toContain("core replenishment is not blocked solely");
+    expect(state.displayBottleneck).not.toContain("owner");
+  });
   it("cannot display an owner-decision blocker when pending owner decisions are zero", () => {
     const state = deriveAgentProjectDisplayState(
       baseInput({
