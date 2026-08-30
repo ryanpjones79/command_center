@@ -12,6 +12,7 @@ import {
   BROKEN_RYKAS_OWNER_DATA_DECISION_ID,
   createOwnerDecision,
   recoverBrokenRykasOwnerDataDecision,
+  recoverPrematurelyResolvedRykasOwnerUpdates,
   resolveOwnerDecision,
   retryRykasOwnerFinancialUpdate,
   submitRykasOwnerFinancialUpdate
@@ -137,6 +138,23 @@ async function createReconciliationDecision(key: string) {
 }
 
 describe("Rykas owner-data reconciliation", () => {
+  it("reopens the already-resolved production failure and retries without owner re-entry", async () => {
+    const { work, decision } = await createReconciliationDecision("premature-resolution-recovery");
+    const payload = { version: 1 as const, observedAt: "2026-08-29T12:00:00.000Z", businessCash: { label: "Synthetic cash", amount: 30000 }, debts: null, obligations: { status: "CURRENT_NONE" as const, items: [], note: null }, ownerCertifiedOpenCommitments: { totalOpenCommitments: 22161, note: null }, localInventorySnapshots: null, ownerPolicy: null, poCertification: null };
+    await submitRykasOwnerFinancialUpdate(userId, decision.id, payload, db);
+    const exactContext = (await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })).operationalContext;
+    await db.agentWorkItem.update({ where: { id: work.id }, data: { state: "FAILED", blocker: "Rykas truth unavailable (503).", completedAt: new Date() } });
+    await db.agentDecision.update({ where: { id: decision.id }, data: { status: "RESOLVED", selectedChoice: "UPDATED_AND_RECHECK", resultingAction: "Legacy premature resolution", resolvedAt: new Date() } });
+
+    expect((await recoverPrematurelyResolvedRykasOwnerUpdates(userId, db)).recovered).toBe(1);
+    expect(await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } })).toMatchObject({ status: "PENDING", selectedChoice: null });
+    expect((await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })).operationalContext).toBe(exactContext);
+    await retryRykasOwnerFinancialUpdate(userId, decision.id, db);
+    expect(await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })).toMatchObject({ state: "RETRY", operationalContext: exactContext });
+    expect(await db.agentActionRequest.count({ where: { decisionId: decision.id } })).toBe(0);
+    await db.agentWorkItem.update({ where: { id: work.id }, data: { state: "PARKED", nextEligibleRunAt: null } });
+  });
+
   it("keeps the decision pending across failure, retries the exact payload, and resolves only after SAVED", async () => {
     const { work, decision } = await createReconciliationDecision("reliable-owner-save");
     const debts = Array.from({ length: 13 }, (_, index) => ({

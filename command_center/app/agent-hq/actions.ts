@@ -139,7 +139,7 @@ export async function getRykasOwnerUpdateStatusAction(decisionId: string): Promi
   const id = entityIdSchema.parse(decisionId);
   const decision = await prisma.agentDecision.findFirst({ where: { id, userId: user.id }, include: { originatingWorkItem: true } });
   if (!decision) return { status: "NEEDS_ATTENTION", message: "The financial truth update could not be located. Your browser draft remains preserved." };
-  if (decision.status === "RESOLVED" && decision.selectedChoice === "UPDATED_AND_RECHECK") {
+  if (decision.status === "RESOLVED" && decision.selectedChoice === "UPDATED_AND_RECHECK" && decision.originatingWorkItem?.state === "DONE") {
     return { status: "SAVED", message: "Rykas confirmed SAVED. A fresh financial read was queued." };
   }
   const work = decision.originatingWorkItem;

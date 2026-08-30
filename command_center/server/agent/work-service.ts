@@ -93,7 +93,9 @@ export async function retryRykasOwnerFinancialUpdate(
   db: PrismaClient = prisma
 ) {
   const decision = await loadDecisionForResolution(userId, decisionId, db);
-  if (!decision || decision.status !== "PENDING") throw new Error("Pending Rykas financial truth decision not found.");
+  const recoverablePrematureResolution = decision?.status === "RESOLVED" && decision.selectedChoice === "UPDATED_AND_RECHECK" &&
+    decision.originatingWorkItem?.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY && ["FAILED", "RETRY"].includes(decision.originatingWorkItem.state);
+  if (!decision || (decision.status !== "PENDING" && !recoverablePrematureResolution)) throw new Error("Pending Rykas financial truth decision not found.");
   if (!parseRykasTruthReconciliation(decision.context)) throw new Error("Decision is not a Rykas financial truth update.");
   if (decision.actionRequest) throw new Error("Financial data maintenance must not create an action request.");
   const work = decision.originatingWorkItem;
@@ -101,6 +103,9 @@ export async function retryRykasOwnerFinancialUpdate(
     throw new Error("No preserved Rykas financial truth submission is available to retry.");
   }
   rykasOwnerFinancialUpdateSchema.parse(JSON.parse(work.operationalContext));
+  if (recoverablePrematureResolution) {
+    await db.agentDecision.update({ where: { id: decision.id }, data: { status: "PENDING", selectedChoice: null, resultingAction: "NEEDS ATTENTION: the earlier save was not confirmed. The exact owner submission is preserved for retry.", resolvedAt: null } });
+  }
   if (work.state === "FAILED") {
     // This narrowly scoped recovery is permitted only after the owner-update capability and payload are revalidated above.
     await db.agentWorkItem.update({ where: { id: work.id }, data: { state: "RETRY", blocker: "Retry requested with the preserved owner submission.", nextEligibleRunAt: new Date(), completedAt: null } });
@@ -113,6 +118,33 @@ export async function retryRykasOwnerFinancialUpdate(
   await db.agentDecision.update({ where: { id: decision.id }, data: { resultingAction: "PROCESSING: retrying the preserved bounded owner update. No form re-entry or financial action is required." } });
   await recordAgentEvent({ userId, projectId: decision.projectId, workItemId: work.id, type: "RYKAS_OWNER_DATA_RETRY_QUEUED", summary: "The exact preserved owner financial truth payload was queued for retry.", metadata: { payloadPreserved: true, purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false } }, db);
   return { queued: true, workItemId: work.id };
+}
+
+export async function recoverPrematurelyResolvedRykasOwnerUpdates(
+  userId: string,
+  db: PrismaClient = prisma,
+  now = new Date()
+) {
+  const candidates = await db.agentDecision.findMany({
+    where: { userId, status: "RESOLVED", selectedChoice: "UPDATED_AND_RECHECK" },
+    include: { originatingWorkItem: true, actionRequest: true }
+  });
+  let recovered = 0;
+  for (const decision of candidates) {
+    const work = decision.originatingWorkItem;
+    if (decision.actionRequest || !work || work.requiredCapability !== RYKAS_OWNER_DATA_CAPABILITY || !["FAILED", "RETRY"].includes(work.state) || !work.operationalContext) continue;
+    if (!parseRykasTruthReconciliation(decision.context)) continue;
+    try {
+      rykasOwnerFinancialUpdateSchema.parse(JSON.parse(work.operationalContext));
+    } catch {
+      continue;
+    }
+    await db.agentDecision.update({ where: { id: decision.id }, data: { status: "PENDING", selectedChoice: null, resultingAction: "NEEDS ATTENTION: the earlier Rykas save was not confirmed. The exact bounded submission is preserved for retry without owner re-entry.", resolvedAt: null } });
+    await db.agentProjectConfig.updateMany({ where: { userId, projectId: decision.projectId, profile: "RYKAS_GM" }, data: { health: "NEEDS_ATTENTION", currentBottleneck: "A prior owner financial update needs a safe retry using its preserved submission.", nextAgentReviewAt: now } });
+    await recordAgentEvent({ userId, projectId: decision.projectId, workItemId: work.id, decisionId: decision.id, idempotencyKey: `rykas-premature-resolution-recovered:${decision.id}`, type: "RYKAS_OWNER_DATA_SAVE_FAILED", summary: "A prematurely resolved owner financial update was reopened because no confirmed SAVED receipt exists. Its exact submission remains available for retry.", metadata: { payloadPreserved: true, purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false } }, db);
+    recovered += 1;
+  }
+  return { recovered };
 }
 
 export async function createOwnerDecision(
