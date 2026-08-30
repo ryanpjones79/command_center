@@ -57,11 +57,19 @@ async function main() {
   console.log(`Seeded user, execution domains, and Agent HQ projects: ${user.email}`);
 }
 
-main()
-  .catch((error) => {
+async function run() {
+  let exitCode = 0;
+
+  try {
+    await main();
+  } catch (error) {
     console.error(error);
-    process.exit(1);
-  })
-  .finally(async () => {
+    exitCode = 1;
+  } finally {
     await prisma.$disconnect();
-  });
+  }
+
+  process.exit(exitCode);
+}
+
+void run();
