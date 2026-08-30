@@ -53,19 +53,59 @@ export async function saveRykasFinancialTruthAction(formData: FormData) {
   const user = await requireUser();
   const decisionId = entityIdSchema.parse(formData.get("decisionId"));
   const cash = optionalNumber(formData, "businessCash");
-  const debtBalance = optionalNumber(formData, "debtBalance");
-  const debtStatus = String(formData.get("debtStatus") ?? "").trim() || null;
-  const obligationAmount = optionalNumber(formData, "obligationAmount");
-  const obligationStatus = String(formData.get("obligationStatus") ?? "").trim() || null;
   const reserve = optionalNumber(formData, "minimumOperatingReserve");
   const discretionaryPct = optionalNumber(formData, "maximumDiscretionaryInventoryPercent");
+  const rawNumber = (value: FormDataEntryValue | undefined, label: string) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) throw new Error(`${label} must be numeric.`);
+    return parsed;
+  };
+  const debtValues = (name: string) => formData.getAll(name);
+  const debtNames = debtValues("debtDisplayName");
+  const debts = debtNames.map((entry, index) => {
+    const pricingType = String(debtValues("debtPricingType")[index] ?? "UNKNOWN").trim() || "UNKNOWN";
+    const aprPercent = rawNumber(debtValues("debtAprPercent")[index], "Debt APR");
+    return {
+      displayName: String(entry).trim(), debtType: String(debtValues("debtType")[index] ?? "OTHER").trim() || "OTHER",
+      pricingType, currentBalance: rawNumber(debtValues("debtBalance")[index], "Debt balance"),
+      apr: pricingType === "APR" && aprPercent !== null ? aprPercent / 100 : null,
+      minimumPayment: rawNumber(debtValues("debtMinimumPayment")[index], "Debt minimum payment"),
+      nextDueDate: String(debtValues("debtNextDueDate")[index] ?? "").trim() || null,
+      promotionalRateEnd: String(debtValues("debtPromotionalEnd")[index] ?? "").trim() || null,
+      ownerPriority: rawNumber(debtValues("debtOwnerPriority")[index], "Debt owner priority"),
+      remainingFinancingFee: rawNumber(debtValues("debtRemainingFee")[index], "Remaining financing fee"),
+      remainingTotalRepayment: rawNumber(debtValues("debtRemainingRepayment")[index], "Remaining total repayment"),
+      paymentCadence: String(debtValues("debtPaymentCadence")[index] ?? "").trim() || null,
+      requiredPeriodicPayment: rawNumber(debtValues("debtRequiredPeriodicPayment")[index], "Required periodic payment"),
+      notes: String(debtValues("debtNotes")[index] ?? "").trim() || null
+    };
+  }).filter((row) => row.displayName || row.currentBalance !== null);
+  const obligationValues = (name: string) => formData.getAll(name);
+  const obligationDescriptions = obligationValues("obligationDescription");
+  const obligations = obligationDescriptions.map((entry, index) => ({
+    vendor: String(obligationValues("obligationVendor")[index] ?? "").trim() || null,
+    description: String(entry).trim(), amountDue: rawNumber(obligationValues("obligationAmount")[index], "Obligation amount"),
+    dueDate: String(obligationValues("obligationDueDate")[index] ?? "").trim(),
+    category: String(obligationValues("obligationCategory")[index] ?? "UNRECORDED_OBLIGATION").trim() || "UNRECORDED_OBLIGATION",
+    relatedPurchaseOrderId: rawNumber(obligationValues("obligationRelatedPo")[index], "Related PO")
+  })).filter((row) => row.description || row.amountDue !== null);
+  const debtStatusOverride = String(formData.get("debtStatusOverride") ?? "").trim();
+  const obligationStatusOverride = String(formData.get("obligationStatusOverride") ?? "").trim();
+  const debtStatus = formData.get("noActiveDebt") ? "CURRENT_NONE" : debtStatusOverride || (debts.length ? "CURRENT_ROWS_LOADED" : null);
+  const obligationStatus = formData.get("noUnrecordedObligations") ? "CURRENT_NONE" : obligationStatusOverride || (obligations.length ? "CURRENT_ROWS_LOADED" : null);
+  const commitmentTotal = optionalNumber(formData, "ownerCertifiedOpenCommitments");
+  const localCost = optionalNumber(formData, "localInventoryCostBasis");
   const observedAt = new Date().toISOString();
   const payload = {
     version: 1 as const,
     observedAt,
     businessCash: cash === null ? null : { label: "Rykas operating cash", amount: cash },
-    debts: debtStatus ? { status: debtStatus, items: debtStatus === "CURRENT_ROWS_LOADED" ? [{ displayName: String(formData.get("debtLabel") ?? "").trim(), debtType: "OTHER", currentBalance: debtBalance, apr: optionalNumber(formData, "debtAprPercent") === null ? null : optionalNumber(formData, "debtAprPercent")! / 100, minimumPayment: optionalNumber(formData, "debtMinimumPayment"), nextDueDate: String(formData.get("debtNextDueDate") ?? "").trim() || null, promotionalRateEnd: null, ownerPriority: optionalNumber(formData, "debtOwnerPriority"), notes: null }] : [], note: null } : null,
-    obligations: obligationStatus ? { status: obligationStatus, items: obligationStatus === "CURRENT_ROWS_LOADED" ? [{ vendor: String(formData.get("obligationVendor") ?? "").trim() || null, description: String(formData.get("obligationDescription") ?? "").trim(), amountDue: obligationAmount, dueDate: String(formData.get("obligationDueDate") ?? "").trim(), category: "UNRECORDED_OBLIGATION", relatedPurchaseOrderId: null }] : [], note: null } : null,
+    debts: debtStatus ? { status: debtStatus, items: debtStatus === "CURRENT_ROWS_LOADED" ? debts : [], note: null } : null,
+    obligations: obligationStatus ? { status: obligationStatus, items: obligationStatus === "CURRENT_ROWS_LOADED" ? obligations : [], note: null } : null,
+    ownerCertifiedOpenCommitments: commitmentTotal === null ? null : { totalOpenCommitments: commitmentTotal, note: String(formData.get("openCommitmentsNote") ?? "").trim() || null },
+    localInventorySnapshots: localCost === null ? (String(formData.get("localInventoryStatus") ?? "").trim() ? { status: String(formData.get("localInventoryStatus")), items: [], note: null } : null) : { status: "CURRENT_ROWS_LOADED", items: [{ location: String(formData.get("localInventoryLocation") ?? "GARAGE"), inventoryCostBasis: localCost, confidence: String(formData.get("localInventoryConfidence") ?? "ESTIMATED"), notes: String(formData.get("localInventoryNotes") ?? "").trim() || null }], note: null },
     ownerPolicy: reserve === null && discretionaryPct === null ? null : { minimumOperatingReserve: reserve, minimumDebtPaymentBuffer: optionalNumber(formData, "minimumDebtPaymentBuffer"), desiredMonthlyExtraDebtPayment: optionalNumber(formData, "desiredMonthlyExtraDebtPayment"), percentOfExcessCashToDebt: optionalNumber(formData, "percentOfExcessCashToDebt") === null ? null : optionalNumber(formData, "percentOfExcessCashToDebt")! / 100, maximumDiscretionaryInventoryPercent: discretionaryPct === null ? null : discretionaryPct / 100, maximumBrandConcentrationPercent: optionalNumber(formData, "maximumBrandConcentrationPercent") === null ? null : optionalNumber(formData, "maximumBrandConcentrationPercent")! / 100, coreReplenishmentPriority: "CORE_FIRST", speculativeTestBudgetCap: optionalNumber(formData, "speculativeTestBudgetCap"), debtStrategy: String(formData.get("debtStrategy") ?? "HIGHEST_APR"), notes: null },
     poCertification: String(formData.get("poCertification") ?? "").trim() || null
   };

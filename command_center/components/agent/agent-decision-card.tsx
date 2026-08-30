@@ -1,9 +1,10 @@
-import { resolveAgentDecisionAction, saveRykasFinancialTruthAction } from "@/app/agent-hq/actions";
+import { resolveAgentDecisionAction } from "@/app/agent-hq/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { buildAgentDecisionPresentation } from "@/lib/agent-decision-display";
 import { rykasOwnerChoiceLabel } from "@/lib/rykas-owner-data-contract";
+import { RykasFinancialTruthForm } from "@/components/agent/rykas-financial-truth-form";
 
 type AgentDecisionCardProps = {
   decision: {
@@ -122,51 +123,7 @@ export function AgentDecisionCard({
           </section>
         )}
 
-        {presentation.kind === "RYKAS_TRUTH_RECONCILIATION" && (
-          <form action={saveRykasFinancialTruthAction} className="space-y-4 rounded-lg border bg-background/60 p-4">
-            <input name="decisionId" type="hidden" value={decision.id} />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="text-sm">Current business cash
-                <input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0" name="businessCash" placeholder="$" step="0.01" type="number" />
-              </label>
-              <label className="text-sm">PO truth
-                <select className="mt-1 w-full rounded-md border bg-background px-3 py-2" name="poCertification" defaultValue="">
-                  <option value="">Leave unchanged</option><option value="CURRENT_NO_OPEN_POS">No open POs</option><option value="CURRENT_OPEN_POS_LOADED">Current open POs are loaded</option>
-                </select>
-              </label>
-              <label className="text-sm">Obligations
-                <select className="mt-1 w-full rounded-md border bg-background px-3 py-2" name="obligationStatus" defaultValue="">
-                  <option value="">Leave unchanged</option><option value="CURRENT_NONE">None unrecorded</option><option value="CURRENT_ROWS_LOADED">Add one below</option><option value="NOT_AVAILABLE">Not available</option><option value="NEEDS_RECONCILIATION">Needs reconciliation</option>
-                </select>
-              </label>
-              <label className="text-sm">Obligation amount<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0.01" name="obligationAmount" step="0.01" type="number" /></label>
-              <label className="text-sm">Vendor<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" maxLength={200} name="obligationVendor" /></label>
-              <label className="text-sm">Description<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" maxLength={1000} name="obligationDescription" /></label>
-              <label className="text-sm">Due date<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" name="obligationDueDate" type="date" /></label>
-              <label className="text-sm">Debt truth
-                <select className="mt-1 w-full rounded-md border bg-background px-3 py-2" name="debtStatus" defaultValue="">
-                  <option value="">Leave unchanged</option><option value="CURRENT_NONE">No active debt</option><option value="CURRENT_ROWS_LOADED">Add one below</option><option value="NOT_AVAILABLE">Not available</option><option value="NEEDS_RECONCILIATION">Needs reconciliation</option>
-                </select>
-              </label>
-              <label className="text-sm">Debt label<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" maxLength={160} name="debtLabel" /></label>
-              <label className="text-sm">Debt balance<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0" name="debtBalance" step="0.01" type="number" /></label>
-              <label className="text-sm">APR (%)<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" max="100" min="0" name="debtAprPercent" step="0.01" type="number" /></label>
-              <label className="text-sm">Minimum payment<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0" name="debtMinimumPayment" step="0.01" type="number" /></label>
-              <label className="text-sm">Next due date<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" name="debtNextDueDate" type="date" /></label>
-              <label className="text-sm">Owner payoff priority<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" max="100" min="1" name="debtOwnerPriority" step="1" type="number" /></label>
-              <label className="text-sm">Minimum operating reserve<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0" name="minimumOperatingReserve" step="0.01" type="number" /></label>
-              <label className="text-sm">Minimum debt-payment buffer<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0" name="minimumDebtPaymentBuffer" step="0.01" type="number" /></label>
-              <label className="text-sm">Max discretionary inventory (%)<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" max="100" min="0" name="maximumDiscretionaryInventoryPercent" step="0.1" type="number" /></label>
-              <label className="text-sm">Excess cash to debt (%)<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" max="100" min="0" name="percentOfExcessCashToDebt" step="0.1" type="number" /></label>
-              <label className="text-sm">Max brand concentration (%)<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" max="100" min="0" name="maximumBrandConcentrationPercent" step="0.1" type="number" /></label>
-              <label className="text-sm">Desired extra monthly debt payment<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0" name="desiredMonthlyExtraDebtPayment" step="0.01" type="number" /></label>
-              <label className="text-sm">Speculative test cap<input className="mt-1 w-full rounded-md border bg-background px-3 py-2" min="0" name="speculativeTestBudgetCap" step="0.01" type="number" /></label>
-              <label className="text-sm">Debt strategy<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" name="debtStrategy" defaultValue="HIGHEST_APR"><option value="HIGHEST_APR">Highest APR</option><option value="OWNER_DEFINED_ORDER">Owner-defined order</option></select></label>
-            </div>
-            <Button type="submit">SAVE &amp; RECHECK</Button>
-            <p className="text-xs text-muted-foreground">Saves only owner-confirmed planning facts in Rykas. It cannot place an order, move money, pay debt, or create a commitment.</p>
-          </form>
-        )}
+        {presentation.kind === "RYKAS_TRUTH_RECONCILIATION" && <RykasFinancialTruthForm decisionId={decision.id} />}
 
         <div className="flex flex-wrap gap-2">
           {decision.choices.filter((choice) => presentation.kind !== "RYKAS_TRUTH_RECONCILIATION" || choice !== "UPDATED_AND_RECHECK").map((choice) => (

@@ -95,6 +95,8 @@ describe("Rykas Capital Steward safety contracts", () => {
       businessCash: { label: "Operating cash", amount: 30_000 },
       debts: null,
       obligations: null,
+      ownerCertifiedOpenCommitments: null,
+      localInventorySnapshots: null,
       ownerPolicy: null,
       poCertification: null
     };
@@ -122,7 +124,9 @@ describe("Rykas Capital Steward safety contracts", () => {
         debts: 0,
         obligations: 0,
         ownerPolicy: 0,
-        poCertification: 0
+        poCertification: 0,
+        ownerCertifiedOpenCommitments: 0,
+        localInventorySnapshots: 0
       },
       observedAt,
       purchaseAuthorized: false,
@@ -138,5 +142,30 @@ describe("Rykas Capital Steward safety contracts", () => {
         purchaseExecuted: true
       }).success
     ).toBe(false);
+  });
+
+  it("accepts 13 debts, multiple obligations, aggregate commitments, and estimated garage inventory", () => {
+    const debts = Array.from({ length: 13 }, (_, index) => ({
+      displayName: `Debt ${index + 1}`, debtType: "OTHER", pricingType: index === 0 ? "FIXED_FEE" : "APR",
+      currentBalance: 1000 + index, apr: index === 0 ? null : 0.2, minimumPayment: 25,
+      nextDueDate: null, promotionalRateEnd: null, ownerPriority: index + 1,
+      remainingFinancingFee: index === 0 ? 100 : null, remainingTotalRepayment: null,
+      paymentCadence: "MONTHLY", requiredPeriodicPayment: 25, notes: null
+    }));
+    const result = rykasOwnerFinancialUpdateSchema.parse({
+      version: 1, observedAt, businessCash: null,
+      debts: { status: "CURRENT_ROWS_LOADED", items: debts, note: null },
+      obligations: { status: "CURRENT_ROWS_LOADED", items: [
+        { vendor: "A", description: "Invoice A", amountDue: 100, dueDate: "2026-09-01", category: "SUPPLIER", relatedPurchaseOrderId: null },
+        { vendor: "B", description: "Freight", amountDue: 200, dueDate: "2026-09-02", category: "FREIGHT", relatedPurchaseOrderId: null }
+      ], note: null },
+      ownerCertifiedOpenCommitments: { totalOpenCommitments: 22161, note: "Aggregate only" },
+      localInventorySnapshots: { status: "CURRENT_ROWS_LOADED", items: [{ location: "GARAGE", inventoryCostBasis: 5000, confidence: "ESTIMATED", notes: null }], note: null },
+      ownerPolicy: null, poCertification: null
+    });
+    expect(result.debts?.items).toHaveLength(13);
+    expect(result.obligations?.items).toHaveLength(2);
+    expect(result.debts?.items[0]?.apr).toBeNull();
+    expect(rykasOwnerFinancialUpdateSchema.safeParse({ ...result, amazonSales: 123 }).success).toBe(false);
   });
 });

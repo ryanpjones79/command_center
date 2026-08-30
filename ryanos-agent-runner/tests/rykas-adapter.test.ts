@@ -56,7 +56,7 @@ describe("bounded deterministic Rykas truth adapter", () => {
       return new Response(JSON.stringify({
         schemaVersion: "RYKAS_OWNER_FINANCIAL_TRUTH_UPDATE_V1",
         status: "SAVED",
-        writes: { businessCash: 1, debts: 0, obligations: 0, ownerPolicy: 0, poCertification: 0 },
+        writes: { businessCash: 1, debts: 0, obligations: 0, ownerPolicy: 0, poCertification: 0, ownerCertifiedOpenCommitments: 0, localInventorySnapshots: 0 },
         observedAt: "2026-08-29T12:00:00.000Z",
         purchaseAuthorized: false,
         purchaseExecuted: false,
@@ -71,6 +71,8 @@ describe("bounded deterministic Rykas truth adapter", () => {
       businessCash: { label: "Operating cash", amount: 30000 },
       debts: null,
       obligations: null,
+      ownerCertifiedOpenCommitments: null,
+      localInventorySnapshots: null,
       ownerPolicy: null,
       poCertification: null
     };
