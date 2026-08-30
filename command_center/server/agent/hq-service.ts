@@ -4,7 +4,11 @@ import {
   deriveAgentProjectDisplayState
 } from "@/server/agent/display-state";
 import { ensureInitialAgentProjects } from "@/server/agent/setup-service";
-import { recoverBrokenRykasOwnerDataDecision, recoverPrematurelyResolvedRykasOwnerUpdates } from "@/server/agent/work-service";
+import {
+  reconcilePendingRykasOwnerDecisions,
+  recoverBrokenRykasOwnerDataDecision,
+  recoverPrematurelyResolvedRykasOwnerUpdates
+} from "@/server/agent/work-service";
 
 export function parseDecisionChoices(value: string): string[] {
   try {
@@ -21,6 +25,7 @@ export async function getAgentHqData(userId: string, now = new Date()) {
   await ensureInitialAgentProjects(userId);
   await recoverBrokenRykasOwnerDataDecision(userId, prisma, now);
   await recoverPrematurelyResolvedRykasOwnerUpdates(userId, prisma, now);
+  await reconcilePendingRykasOwnerDecisions(userId, prisma, now);
   const [configs, decisions, events, completedCount, runners, actions, signalCareQueue] = await Promise.all([
     prisma.agentProjectConfig.findMany({
       where: { userId },

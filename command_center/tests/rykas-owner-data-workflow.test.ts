@@ -2,15 +2,18 @@ import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, openSync, rmSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  extractRykasTruthReconciliation,
   rykasTruthReconciliationDecision,
   type RykasTruthReconciliation
 } from "@/lib/rykas-owner-data-contract";
+import { rykasTruthResultSchema } from "@/lib/rykas-truth-contract";
 import { DeterministicProjectManagerAgent } from "@/server/agent/mock-agents";
 import {
   BROKEN_RYKAS_OWNER_DATA_DECISION_ID,
   createOwnerDecision,
+  reconcilePendingRykasOwnerDecisions,
   recoverBrokenRykasOwnerDataDecision,
   recoverPrematurelyResolvedRykasOwnerUpdates,
   resolveOwnerDecision,
@@ -18,6 +21,7 @@ import {
   submitRykasOwnerFinancialUpdate
 } from "@/server/agent/work-service";
 import { claimRunnerWork, submitRunnerResult } from "@/server/agent/runner-service";
+import { financialSnapshotV11Fixture } from "../../ryanos-agent-runner/tests/fixtures/financial-snapshot-v1-1";
 
 const databasePath = path.join(
   process.cwd(),
@@ -92,6 +96,22 @@ beforeAll(async () => {
   });
 }, 60_000);
 
+beforeEach(async () => {
+  if (!db) return;
+  await db.agentDecision.updateMany({
+    where: { userId, status: "PENDING" },
+    data: {
+      status: "CANCELLED",
+      resultingAction: "Test isolation cleanup.",
+      resolvedAt: new Date()
+    }
+  });
+  await db.agentWorkItem.updateMany({
+    where: { userId, state: "NEEDS_RYAN" },
+    data: { state: "PARKED", completedAt: new Date() }
+  });
+});
+
 afterAll(async () => {
   await db?.$disconnect();
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
@@ -135,6 +155,112 @@ async function createReconciliationDecision(key: string) {
     db
   );
   return { work, decision };
+}
+
+function currentDebtMinimumTruth(observedAt: string) {
+  const financialSnapshot = JSON.parse(
+    JSON.stringify(financialSnapshotV11Fixture)
+  );
+  financialSnapshot.asOf = observedAt;
+  financialSnapshot.missingInputs = ["DEBT"];
+  financialSnapshot.capitalPlan.asOf = observedAt;
+  financialSnapshot.capitalPlan.missingInputs = ["DEBT"];
+  financialSnapshot.capitalPlan.blockers = [
+    "One active debt lacks minimum-payment truth."
+  ];
+  financialSnapshot.checklist = financialSnapshot.checklist.map(
+    (item: { inputKey: string; status: string; observedAt: string | null; reason: string | null }) =>
+    item.inputKey === "AMAZON_SALES_INVENTORY"
+      ? {
+          ...item,
+          status: "CURRENT" as const,
+          observedAt,
+          reason: null
+        }
+      : item
+  );
+  return rykasTruthResultSchema.parse({
+    schemaVersion: "RYKAS_TRUTH_READ_V1",
+    operation: "FINANCIAL_SNAPSHOT",
+    readOnly: true,
+    purchaseAuthorized: false,
+    purchaseExecuted: false,
+    observedAt,
+    authoritativeSource:
+      "Rykas SQL Server database rykas via loopback Command Center marts",
+    sourceUpdatedAt: observedAt,
+    freshness: "STALE",
+    stale: true,
+    data: {
+      actionSummary: [],
+      capital: {
+        reliable: false,
+        status: "BLOCKED",
+        reason: "Legacy PO detail is not verified.",
+        actionRequired: "Confirm legacy PO truth.",
+        asOf: observedAt,
+        openCommitments: 0,
+        purchaseOrderRows: 0,
+        openPurchaseOrderLines: 0,
+        poLedgerStatus: "NOT VERIFIED",
+        poCertificationState: "NOT VERIFIED",
+        poCertifiedAt: null,
+        poTruthCurrent: false,
+        safeInventoryCapital: null
+      },
+      opportunities: [],
+      purchaseCandidates: [],
+      blockers: [],
+      detail: null,
+      financialSnapshot,
+      capitalPlan: null,
+      replenishmentCandidates: null,
+      capitalReleaseCandidates: null,
+      saleEventEvaluation: null
+    }
+  });
+}
+
+async function persistFinancialSnapshot(key: string, observedAt: string) {
+  const truth = currentDebtMinimumTruth(observedAt);
+  const work = await db.agentWorkItem.create({
+    data: {
+      userId,
+      projectId,
+      idempotencyKey: `financial-snapshot-work:${key}`,
+      title: "Read authoritative Rykas financial snapshot",
+      objective: "Read current Rykas financial truth.",
+      expectedValue: "Canonical financial evidence.",
+      acceptanceCriteria: "Schema-valid FINANCIAL_SNAPSHOT.",
+      agentRole: "RYKAS_CFO_CAPITAL_STEWARD",
+      actionCategory: "RESEARCH_READ_ONLY",
+      requiredCapability: "RYKAS_OPERATIONS_READ",
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "LOCALHOST_ONLY",
+      operationalContext: JSON.stringify({
+        version: 1,
+        operation: "FINANCIAL_SNAPSHOT",
+        input: {}
+      }),
+      state: "DONE",
+      completedAt: new Date(observedAt)
+    }
+  });
+  const run = await db.agentRun.create({
+    data: {
+      userId,
+      projectId,
+      workItemId: work.id,
+      idempotencyKey: `financial-snapshot-run:${key}`,
+      role: "RYKAS_CFO_CAPITAL_STEWARD",
+      runType: "EXECUTION",
+      status: "SUCCEEDED",
+      providerIdentifier: "rykas-local-truth",
+      structuredOutcome: JSON.stringify(truth),
+      completedAt: new Date(observedAt)
+    }
+  });
+  return { truth, work, run };
 }
 
 describe("Rykas owner-data reconciliation", () => {
@@ -451,6 +577,216 @@ describe("Rykas owner-data reconciliation", () => {
       await db.agentActionRequest.count({
         where: { executedAt: { not: null } }
       })
+    ).toBe(0);
+  });
+
+  it("gives the current V1.1 snapshot precedence over stale legacy PO and capital fields", () => {
+    const truth = currentDebtMinimumTruth("2026-09-01T12:00:00.000Z");
+    const request = extractRykasTruthReconciliation([
+      {
+        toolId: "rykas.operations.snapshot",
+        output: { realTruth: truth }
+      }
+    ]);
+
+    expect(request).toMatchObject({
+      truthArea: "DEBT_MINIMUM",
+      openCommitments: 22161,
+      safeInventoryCapital: null,
+      requestedFields: ["DEBT:13:minimumPayment"],
+      missingDebtMinimums: [
+        {
+          debtId: 13,
+          displayName: "Synthetic acceptance debt",
+          currentBalance: 469143
+        }
+      ],
+      currentFinancialFacts: {
+        settledCash: 30000,
+        protectedCommitments: 22161,
+        knownInventoryAtCost: 42885.38,
+        totalDebt: 469143
+      }
+    });
+    expect(request?.requiredOwnerAction).toContain(
+      "Synthetic acceptance debt"
+    );
+    expect(request?.requiredOwnerAction).not.toMatch(/PO|cash|inventory/i);
+  });
+
+  it("does not create owner reconciliation from legacy null safe capital or unverified PO detail", () => {
+    const truth = currentDebtMinimumTruth("2026-09-01T13:00:00.000Z");
+    const raw = JSON.parse(JSON.stringify(truth));
+    raw.data.financialSnapshot.missingInputs = ["AMAZON_SALES_INVENTORY"];
+    raw.data.financialSnapshot.capitalPlan.missingInputs = [
+      "AMAZON_SALES_INVENTORY"
+    ];
+    raw.data.financialSnapshot.checklist = raw.data.financialSnapshot.checklist.map(
+      (item: { inputKey: string; status: string; reason: string | null }) =>
+        item.inputKey === "DEBT"
+          ? { ...item, status: "CURRENT", reason: null }
+          : item
+    );
+    const currentSystemOnlyTruth = rykasTruthResultSchema.parse(raw);
+
+    expect(
+      extractRykasTruthReconciliation([
+        {
+          toolId: "rykas.operations.snapshot",
+          output: { realTruth: currentSystemOnlyTruth }
+        }
+      ])
+    ).toBeNull();
+  });
+
+  it("does not reopen a failed historical save when newer authoritative truth supersedes its owner request", async () => {
+    const { work, decision } = await createReconciliationDecision(
+      "historical-save-superseded"
+    );
+    const payload = {
+      version: 1 as const,
+      observedAt: "2026-08-30T12:00:00.000Z",
+      businessCash: { label: "Synthetic cash", amount: 30000 },
+      debts: null,
+      obligations: {
+        status: "CURRENT_NONE" as const,
+        items: [],
+        note: null
+      },
+      ownerCertifiedOpenCommitments: {
+        totalOpenCommitments: 22161,
+        note: null
+      },
+      localInventorySnapshots: null,
+      ownerPolicy: null,
+      poCertification: null
+    };
+    await submitRykasOwnerFinancialUpdate(userId, decision.id, payload, db);
+    await db.agentWorkItem.update({
+      where: { id: work.id },
+      data: {
+        state: "FAILED",
+        blocker: "Historical loopback failure.",
+        completedAt: new Date("2026-08-30T13:00:00.000Z")
+      }
+    });
+    await db.agentDecision.update({
+      where: { id: decision.id },
+      data: {
+        status: "RESOLVED",
+        selectedChoice: "UPDATED_AND_RECHECK",
+        resultingAction: "Legacy premature resolution",
+        resolvedAt: new Date("2026-08-30T13:00:00.000Z")
+      }
+    });
+    const latest = await persistFinancialSnapshot(
+      "historical-save-superseded",
+      "2026-09-01T14:00:00.000Z"
+    );
+    const structuredOutcomeBefore = latest.run.structuredOutcome;
+
+    expect(
+      await recoverPrematurelyResolvedRykasOwnerUpdates(userId, db)
+    ).toMatchObject({ recovered: 0, superseded: 1 });
+    expect(
+      await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    ).toMatchObject({
+      status: "CANCELLED",
+      selectedChoice: "UPDATED_AND_RECHECK"
+    });
+    expect(
+      await db.agentEvent.count({
+        where: {
+          idempotencyKey: `rykas-owner-decision-superseded:${decision.id}`
+        }
+      })
+    ).toBe(1);
+    expect(
+      (
+        await db.agentRun.findUniqueOrThrow({ where: { id: latest.run.id } })
+      ).structuredOutcome
+    ).toBe(structuredOutcomeBefore);
+    expect(
+      await db.agentActionRequest.count({ where: { decisionId: decision.id } })
+    ).toBe(0);
+  });
+
+  it("supersedes obsolete pending cards from newer truth with an idempotent audit event", async () => {
+    const { work, decision } = await createReconciliationDecision(
+      "obsolete-pending"
+    );
+    await persistFinancialSnapshot(
+      "obsolete-pending",
+      "2026-09-02T14:00:00.000Z"
+    );
+
+    expect(
+      await reconcilePendingRykasOwnerDecisions(userId, db)
+    ).toEqual({ superseded: 1 });
+    expect(
+      await reconcilePendingRykasOwnerDecisions(userId, db)
+    ).toEqual({ superseded: 0 });
+    expect(
+      await db.agentDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    ).toMatchObject({ status: "CANCELLED", selectedChoice: null });
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "PARKED" });
+    expect(
+      await db.agentEvent.count({
+        where: {
+          idempotencyKey: `rykas-owner-decision-superseded:${decision.id}`
+        }
+      })
+    ).toBe(1);
+  });
+
+  it("reuses one equivalent narrow debt request across PM cycles without an action request", async () => {
+    const truth = currentDebtMinimumTruth("2026-09-03T14:00:00.000Z");
+    const narrowRequest = extractRykasTruthReconciliation([
+      {
+        toolId: "rykas.operations.snapshot",
+        output: { realTruth: truth }
+      }
+    ])!;
+    const firstWork = await ownerWork("work:narrow-dedupe-1");
+    const first = await createOwnerDecision(
+      {
+        userId,
+        projectId,
+        workItemId: firstWork.id,
+        idempotencyKey: "decision:narrow-dedupe-1",
+        profile: "RYKAS_GM",
+        plan: rykasTruthReconciliationDecision(narrowRequest)
+      },
+      db
+    );
+    const secondWork = await ownerWork("work:narrow-dedupe-2");
+    const second = await createOwnerDecision(
+      {
+        userId,
+        projectId,
+        workItemId: secondWork.id,
+        idempotencyKey: "decision:narrow-dedupe-2",
+        profile: "RYKAS_GM",
+        plan: rykasTruthReconciliationDecision(narrowRequest)
+      },
+      db
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(
+      await db.agentDecision.count({
+        where: { userId, projectId, status: "PENDING" }
+      })
+    ).toBe(1);
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({
+        where: { id: secondWork.id }
+      })
+    ).toMatchObject({ state: "PARKED" });
+    expect(
+      await db.agentActionRequest.count({ where: { decisionId: first.id } })
     ).toBe(0);
   });
 });

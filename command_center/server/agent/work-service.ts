@@ -1,17 +1,23 @@
 import type { AgentWorkState, PrismaClient } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
-import { assertAgentWorkTransition } from "@/lib/agent-state-machine";
+import {
+  assertAgentWorkTransition,
+  canTransitionAgentWorkItem
+} from "@/lib/agent-state-machine";
 import { evaluateAgentPolicy, type AgentActionCategory } from "@/lib/agent-policy";
 import { prisma } from "@/lib/prisma";
 import {
+  extractRykasTruthReconciliation,
   parseRykasTruthReconciliation,
   rykasTruthReconciliationDecision,
   rykasTruthReconciliationSchema,
-  RYKAS_TRUTH_RECONCILIATION_KIND
+  RYKAS_TRUTH_RECONCILIATION_KIND,
+  type RykasTruthReconciliation
 } from "@/lib/rykas-owner-data-contract";
 import {
   RYKAS_READ_CAPABILITY,
+  rykasTruthResultSchema,
   serializeRykasReadRequest
 } from "@/lib/rykas-truth-contract";
 import { RYKAS_OWNER_DATA_CAPABILITY, rykasOwnerFinancialUpdateSchema, serializeRykasOwnerFinancialUpdate } from "@/lib/rykas-owner-financial-contract";
@@ -29,6 +35,135 @@ type TransitionInput = {
   evidenceSummary?: string | null;
   nextEligibleRunAt?: Date | null;
 };
+
+function reconciliationFields(value: RykasTruthReconciliation) {
+  if (value.requestedFields?.length) {
+    return [...new Set(value.requestedFields)].sort();
+  }
+  if (value.truthArea === "PO_AND_CAPITAL") {
+    return ["PROTECTED_COMMITMENTS"];
+  }
+  if (value.truthArea === "DEBT_MINIMUM") return ["DEBT"];
+  return ["BUSINESS_CASH", "DEBT", "OBLIGATIONS", "OWNER_POLICY", "PROTECTED_COMMITMENTS"];
+}
+
+function reconciliationKey(value: RykasTruthReconciliation) {
+  return reconciliationFields(value).join("|");
+}
+
+async function latestRykasFinancialSnapshot(
+  userId: string,
+  projectId: string,
+  db: PrismaClient
+) {
+  const runs = await db.agentRun.findMany({
+    where: {
+      userId,
+      projectId,
+      status: "SUCCEEDED",
+      structuredOutcome: { not: null },
+      workItem: { requiredCapability: RYKAS_READ_CAPABILITY }
+    },
+    orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
+    take: 30
+  });
+  for (const run of runs) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(run.structuredOutcome!);
+    } catch {
+      continue;
+    }
+    const parsed = rykasTruthResultSchema.safeParse(raw);
+    if (
+      parsed.success &&
+      parsed.data.operation === "FINANCIAL_SNAPSHOT" &&
+      parsed.data.data.financialSnapshot
+    ) {
+      const request = extractRykasTruthReconciliation([
+        {
+          toolId: "rykas.operations.snapshot",
+          output: { realTruth: parsed.data }
+        }
+      ]);
+      return {
+        run,
+        truth: parsed.data,
+        request,
+        observedAt: new Date(parsed.data.observedAt)
+      };
+    }
+  }
+  return null;
+}
+
+function requestSatisfiedByLatestTruth(
+  request: RykasTruthReconciliation,
+  canonicalRequest: RykasTruthReconciliation | null
+) {
+  if (!canonicalRequest) return true;
+  const missingAreas = new Set(
+    reconciliationFields(canonicalRequest).map((field) => field.split(":")[0])
+  );
+  return reconciliationFields(request)
+    .map((field) => field.split(":")[0])
+    .every((area) => !missingAreas.has(area));
+}
+
+async function supersedeRykasOwnerDecision(
+  decision: {
+    id: string;
+    userId: string;
+    projectId: string;
+    originatingWorkItemId: string | null;
+    originatingRunId: string | null;
+    originatingWorkItem: { id: string; state: AgentWorkState } | null;
+  },
+  reason: string,
+  evidence: { runId: string; observedAt: string },
+  db: PrismaClient,
+  now: Date
+) {
+  await db.agentDecision.update({
+    where: { id: decision.id },
+    data: {
+      status: "CANCELLED",
+      resultingAction: reason,
+      resolvedAt: now
+    }
+  });
+  const work = decision.originatingWorkItem;
+  if (work && canTransitionAgentWorkItem(work.state, "PARKED")) {
+    await transitionAgentWorkItem(
+      decision.userId,
+      work.id,
+      "PARKED",
+      { blocker: reason, nextEligibleRunAt: null },
+      db
+    );
+  }
+  await recordAgentEvent(
+    {
+      userId: decision.userId,
+      projectId: decision.projectId,
+      workItemId: decision.originatingWorkItemId,
+      runId: decision.originatingRunId,
+      decisionId: decision.id,
+      idempotencyKey: `rykas-owner-decision-superseded:${decision.id}`,
+      type: "RYKAS_OWNER_DECISION_SUPERSEDED",
+      summary: reason,
+      metadata: {
+        authoritativeRunId: evidence.runId,
+        authoritativeObservedAt: evidence.observedAt,
+        ownerFinancialTruthChanged: false,
+        purchaseExecuted: false,
+        debtPaymentExecuted: false,
+        financialCommitmentCreated: false
+      }
+    },
+    db
+  );
+}
 
 export async function transitionAgentWorkItem(
   userId: string,
@@ -130,13 +265,50 @@ export async function recoverPrematurelyResolvedRykasOwnerUpdates(
     include: { originatingWorkItem: true, actionRequest: true }
   });
   let recovered = 0;
+  let superseded = 0;
+  const latestByProject = new Map<
+    string,
+    Awaited<ReturnType<typeof latestRykasFinancialSnapshot>>
+  >();
   for (const decision of candidates) {
     const work = decision.originatingWorkItem;
     if (decision.actionRequest || !work || work.requiredCapability !== RYKAS_OWNER_DATA_CAPABILITY || !["FAILED", "RETRY"].includes(work.state) || !work.operationalContext) continue;
-    if (!parseRykasTruthReconciliation(decision.context)) continue;
+    const request = parseRykasTruthReconciliation(decision.context);
+    if (!request) continue;
     try {
       rykasOwnerFinancialUpdateSchema.parse(JSON.parse(work.operationalContext));
     } catch {
+      continue;
+    }
+    if (!latestByProject.has(decision.projectId)) {
+      latestByProject.set(
+        decision.projectId,
+        await latestRykasFinancialSnapshot(userId, decision.projectId, db)
+      );
+    }
+    const latest = latestByProject.get(decision.projectId) ?? null;
+    const failedRun = await db.agentRun.findFirst({
+      where: { userId, workItemId: work.id, status: "FAILED" },
+      orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }]
+    });
+    const failedAt =
+      failedRun?.completedAt ?? work.completedAt ?? work.updatedAt;
+    if (
+      latest &&
+      latest.observedAt > failedAt &&
+      requestSatisfiedByLatestTruth(request, latest.request)
+    ) {
+      await supersedeRykasOwnerDecision(
+        decision,
+        "Superseded: a newer schema-valid authoritative Rykas FINANCIAL_SNAPSHOT proves the owner areas requested by this failed historical update are current. The failed write is preserved in history and was not retried.",
+        {
+          runId: latest.run.id,
+          observedAt: latest.truth.observedAt
+        },
+        db,
+        now
+      );
+      superseded += 1;
       continue;
     }
     await db.agentDecision.update({ where: { id: decision.id }, data: { status: "PENDING", selectedChoice: null, resultingAction: "NEEDS ATTENTION: the earlier Rykas save was not confirmed. The exact bounded submission is preserved for retry without owner re-entry.", resolvedAt: null } });
@@ -144,7 +316,54 @@ export async function recoverPrematurelyResolvedRykasOwnerUpdates(
     await recordAgentEvent({ userId, projectId: decision.projectId, workItemId: work.id, decisionId: decision.id, idempotencyKey: `rykas-premature-resolution-recovered:${decision.id}`, type: "RYKAS_OWNER_DATA_SAVE_FAILED", summary: "A prematurely resolved owner financial update was reopened because no confirmed SAVED receipt exists. Its exact submission remains available for retry.", metadata: { payloadPreserved: true, purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false } }, db);
     recovered += 1;
   }
-  return { recovered };
+  return { recovered, superseded };
+}
+
+export async function reconcilePendingRykasOwnerDecisions(
+  userId: string,
+  db: PrismaClient = prisma,
+  now = new Date()
+) {
+  const pending = await db.agentDecision.findMany({
+    where: { userId, status: "PENDING" },
+    include: { originatingWorkItem: true, actionRequest: true },
+    orderBy: { createdAt: "asc" }
+  });
+  const latestByProject = new Map<
+    string,
+    Awaited<ReturnType<typeof latestRykasFinancialSnapshot>>
+  >();
+  let superseded = 0;
+  for (const decision of pending) {
+    if (decision.actionRequest) continue;
+    const request = parseRykasTruthReconciliation(decision.context);
+    if (!request) continue;
+    if (!latestByProject.has(decision.projectId)) {
+      latestByProject.set(
+        decision.projectId,
+        await latestRykasFinancialSnapshot(userId, decision.projectId, db)
+      );
+    }
+    const latest = latestByProject.get(decision.projectId) ?? null;
+    if (!latest || latest.observedAt <= new Date(request.observedAt)) continue;
+    if (
+      latest.request &&
+      reconciliationKey(latest.request) === reconciliationKey(request)
+    ) {
+      continue;
+    }
+    await supersedeRykasOwnerDecision(
+      decision,
+      latest.request
+        ? "Superseded: newer authoritative Rykas financial truth narrowed the canonical owner requirement. This older request is no longer the decision surface."
+        : "Superseded: newer authoritative Rykas financial truth shows this owner request is no longer required.",
+      { runId: latest.run.id, observedAt: latest.truth.observedAt },
+      db,
+      now
+    );
+    superseded += 1;
+  }
+  return { superseded };
 }
 
 export async function createOwnerDecision(
@@ -171,6 +390,60 @@ export async function createOwnerDecision(
       throw new Error("Rykas owner-data decisions are eligible only for RYKAS_GM.");
     }
     plan = rykasTruthReconciliationDecision(ownerDataRequest);
+    const pending = await db.agentDecision.findMany({
+      where: {
+        userId: input.userId,
+        projectId: input.projectId,
+        status: "PENDING"
+      },
+      include: { originatingWorkItem: true, actionRequest: true },
+      orderBy: { createdAt: "asc" }
+    });
+    for (const existing of pending) {
+      if (existing.actionRequest) continue;
+      const existingRequest = parseRykasTruthReconciliation(existing.context);
+      if (!existingRequest) continue;
+      if (
+        reconciliationKey(existingRequest) ===
+        reconciliationKey(ownerDataRequest)
+      ) {
+        if (
+          input.workItemId &&
+          input.workItemId !== existing.originatingWorkItemId
+        ) {
+          const duplicateWork = await db.agentWorkItem.findFirst({
+            where: { id: input.workItemId, userId: input.userId }
+          });
+          if (
+            duplicateWork &&
+            canTransitionAgentWorkItem(duplicateWork.state, "PARKED")
+          ) {
+            await transitionAgentWorkItem(
+              input.userId,
+              duplicateWork.id,
+              "PARKED",
+              {
+                blocker:
+                  "Duplicate Rykas owner request suppressed; the existing canonical decision was reused.",
+                nextEligibleRunAt: null
+              },
+              db
+            );
+          }
+        }
+        return existing;
+      }
+      await supersedeRykasOwnerDecision(
+        existing,
+        "Superseded: a newer canonical Rykas owner-data requirement replaced this pending request. No financial truth or external action was changed.",
+        {
+          runId: input.runId ?? "current-canonical-rykas-evidence",
+          observedAt: ownerDataRequest.observedAt
+        },
+        db,
+        new Date()
+      );
+    }
   }
   const policy = evaluateAgentPolicy({
     category: plan.category,
@@ -219,15 +492,22 @@ export async function createOwnerDecision(
 
   validateOwnerDecisionChoices(plan.availableChoices, plan.recommendedChoice);
 
+  const decisionIdempotencyKey = ownerDataRequest
+    ? `${input.idempotencyKey}:rykas:${createHash("sha256")
+        .update(reconciliationKey(ownerDataRequest))
+        .digest("hex")
+        .slice(0, 16)}`
+    : input.idempotencyKey;
+
   const decision = await db.agentDecision.upsert({
-    where: { idempotencyKey: input.idempotencyKey },
+    where: { idempotencyKey: decisionIdempotencyKey },
     update: {},
     create: {
       userId: input.userId,
       projectId: input.projectId,
       originatingWorkItemId: input.workItemId ?? null,
       originatingRunId: input.runId ?? null,
-      idempotencyKey: input.idempotencyKey,
+      idempotencyKey: decisionIdempotencyKey,
       category: plan.category,
       question: plan.question,
       context: plan.context,

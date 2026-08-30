@@ -154,6 +154,53 @@ export function buildAgentDecisionPresentation(
 ): AgentDecisionPresentation {
   const reconciliation = parseRykasTruthReconciliation(input.context);
   if (reconciliation) {
+    if (reconciliation.truthArea === "DEBT_MINIMUM") {
+      const missingDebts = reconciliation.missingDebtMinimums ?? [];
+      const facts = reconciliation.currentFinancialFacts;
+      const currency = (value: number) =>
+        value.toLocaleString("en-US", {
+          style: "currency",
+          currency: "USD"
+        });
+      return {
+        kind: "RYKAS_TRUTH_RECONCILIATION",
+        categoryLabel: "RYKAS / DEBT TRUTH",
+        contextSummary: reconciliation.requiredOwnerAction,
+        recommendation: input.recommendedChoice,
+        why: missingDebts.map(
+          (account) =>
+            `${account.displayName} (${currency(account.currentBalance)}) is active but has no minimum required payment.`
+        ),
+        keyFacts: [
+          ...(facts
+            ? [
+                { label: "Settled cash", value: currency(facts.settledCash) },
+                {
+                  label: "Protected commitments",
+                  value: currency(facts.protectedCommitments)
+                },
+                { label: "Total debt", value: currency(facts.totalDebt) },
+                {
+                  label: "Known inventory at cost",
+                  value: currency(facts.knownInventoryAtCost)
+                }
+              ]
+            : []),
+          ...missingDebts.map((account) => ({
+            label: `${account.displayName} minimum payment`,
+            value: "Missing — owner input needed"
+          }))
+        ],
+        proposedAction:
+          "Update only the missing minimum required payment in authoritative Rykas debt data, then choose UPDATED & RECHECK. Do not re-enter current financial facts.",
+        draft: null,
+        sourceUrls: [],
+        auditPayload: {
+          reconciliation,
+          sourceInstructions: RYKAS_OWNER_DATA_SOURCE_INSTRUCTIONS
+        }
+      };
+    }
     return {
       kind: "RYKAS_TRUTH_RECONCILIATION",
       categoryLabel: "RYKAS / TRUTH RECONCILIATION",

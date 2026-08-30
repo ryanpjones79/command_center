@@ -36,7 +36,9 @@ import {
 } from "@/server/agent/signalcare-research-service";
 import {
   createOwnerDecision,
+  reconcilePendingRykasOwnerDecisions,
   recoverBrokenRykasOwnerDataDecision,
+  recoverPrematurelyResolvedRykasOwnerUpdates,
   transitionAgentWorkItem
 } from "@/server/agent/work-service";
 
@@ -630,6 +632,10 @@ async function processClaimedProject(
 
   await reclassifySignalCareProspectResearch(config, db);
   await recoverFailedSignalCareProspectResearch(config, db);
+  if (config.profile === "RYKAS_GM") {
+    await recoverPrematurelyResolvedRykasOwnerUpdates(config.userId, db, now);
+    await reconcilePendingRykasOwnerDecisions(config.userId, db, now);
+  }
 
   const eligibleExisting = await db.agentWorkItem.findFirst({
     where: {
@@ -820,7 +826,10 @@ async function processClaimedProject(
         },
         db
       );
-      if (proposedAction.state === "PLANNING") {
+      if (
+        proposedAction.state === "PLANNING" &&
+        decision.originatingWorkItemId === proposedAction.id
+      ) {
         await transitionAgentWorkItem(
           config.userId,
           proposedAction.id,

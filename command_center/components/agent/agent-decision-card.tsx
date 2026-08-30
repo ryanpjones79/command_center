@@ -3,7 +3,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { buildAgentDecisionPresentation } from "@/lib/agent-decision-display";
-import { rykasOwnerChoiceLabel } from "@/lib/rykas-owner-data-contract";
+import {
+  parseRykasTruthReconciliation,
+  rykasOwnerChoiceLabel
+} from "@/lib/rykas-owner-data-contract";
 import { RykasFinancialTruthForm } from "@/components/agent/rykas-financial-truth-form";
 
 type AgentDecisionCardProps = {
@@ -38,8 +41,10 @@ export function AgentDecisionCard({
   formatDate
 }: AgentDecisionCardProps) {
   const presentation = buildAgentDecisionPresentation(decision);
+  const reconciliation = parseRykasTruthReconciliation(decision.context);
+  const narrowDebtRequest = reconciliation?.truthArea === "DEBT_MINIMUM";
   const displayQuestion =
-    presentation.kind === "RYKAS_TRUTH_RECONCILIATION"
+    presentation.kind === "RYKAS_TRUTH_RECONCILIATION" && !narrowDebtRequest
       ? "Buying blocked — PO/capital truth needs update"
       : decision.question;
   return (
@@ -123,10 +128,10 @@ export function AgentDecisionCard({
           </section>
         )}
 
-        {presentation.kind === "RYKAS_TRUTH_RECONCILIATION" && <RykasFinancialTruthForm decisionId={decision.id} />}
+        {presentation.kind === "RYKAS_TRUTH_RECONCILIATION" && !narrowDebtRequest && <RykasFinancialTruthForm decisionId={decision.id} />}
 
         <div className="flex flex-wrap gap-2">
-          {decision.choices.filter((choice) => presentation.kind !== "RYKAS_TRUTH_RECONCILIATION" || choice !== "UPDATED_AND_RECHECK").map((choice) => (
+          {decision.choices.filter((choice) => presentation.kind !== "RYKAS_TRUTH_RECONCILIATION" || narrowDebtRequest || choice !== "UPDATED_AND_RECHECK").map((choice) => (
             <form action={resolveAgentDecisionAction} key={choice}>
               <input name="decisionId" type="hidden" value={decision.id} />
               <input name="choice" type="hidden" value={choice} />
