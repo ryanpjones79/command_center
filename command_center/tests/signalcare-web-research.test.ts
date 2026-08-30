@@ -12,6 +12,7 @@ import {
   vi
 } from "vitest";
 import { SIGNALCARE_WEB_RESEARCH_CAPABILITY } from "@/lib/agent-capabilities";
+import { signalCareApprovedOfferIds } from "@/lib/signalcare-commercial-profile";
 import {
   evaluateSignalCareProspectQuality,
   hasUnresolvedOutreachPlaceholder,
@@ -516,7 +517,17 @@ describe("SignalCare hosted public-web research", () => {
     expect(result.outcome).toBe("COMPLETED");
     expect(result.created).toHaveLength(5);
     expect(client.discover).toHaveBeenCalledWith(
-      expect.objectContaining({ maxProspects: 5 })
+      expect.objectContaining({
+        maxProspects: 5,
+        targetRawOrganizations: 5,
+        strategyId: "REGIONAL_GROWTH_EXPANSION",
+        searchIntents: expect.arrayContaining([
+          "multi-location dental groups and DSOs",
+          "specialty-provider network growth and new service lines",
+          "healthcare operations leadership pages"
+        ]),
+        offerLanes: signalCareApprovedOfferIds
+      })
     );
     expect(await db.queueItem.count({ where: { userId } })).toBe(5);
     expect(await db.pipelineAction.count({ where: { userId } })).toBe(5);
@@ -583,7 +594,12 @@ describe("SignalCare hosted public-web research", () => {
     );
 
     expect(result.candidates).toEqual([]);
-    expect(result.diagnostics.candidatesRejectedQualityGate).toBe(4);
+    expect(result.diagnostics).toMatchObject({
+      candidatesRejectedWrongCustomerType: 1,
+      candidatesRejectedWeakDirectFit: 2,
+      candidatesRejectedQualityGate: 1,
+      candidatesAccepted: 0
+    });
   });
 
   it("excludes unrelated same-name sources from entity provenance", () => {
@@ -645,6 +661,58 @@ describe("SignalCare hosted public-web research", () => {
     expect(result.candidates[0]?.verifiedPublicFacts).toHaveLength(1);
     expect(JSON.stringify(result)).not.toContain("care.org");
     expect(JSON.stringify(result)).not.toContain("captions.example.com");
+  });
+
+  it("binds third-party provider metadata to one exact candidate identity", () => {
+    const sharedSource = "https://news.example.com/regional-expansion-2026";
+    const first = candidate(41, {
+      verifiedFitEvidence: [
+        {
+          fact: "Example Dental Group 41 opened two locations in a regional expansion.",
+          sourceUrls: [sharedSource]
+        }
+      ],
+      sourceUrls: [...candidate(41).sourceUrls, sharedSource],
+      sourceQuality: [
+        ...candidate(41).sourceQuality,
+        { sourceUrl: sharedSource, quality: "SECONDARY" }
+      ]
+    });
+    const second = candidate(42, {
+      verifiedFitEvidence: [
+        {
+          fact: "Example Dental Group 42 opened two locations in a regional expansion.",
+          sourceUrls: [sharedSource]
+        }
+      ],
+      sourceUrls: [...candidate(42).sourceUrls, sharedSource],
+      sourceQuality: [
+        ...candidate(42).sourceQuality,
+        { sourceUrl: sharedSource, quality: "SECONDARY" }
+      ]
+    });
+    const result = retainCitedSignalCareEvidence(
+      { candidates: [first, second], searchSummary: "Identity binding test." },
+      [
+        ...first.sourceUrls
+          .filter((url) => url !== sharedSource)
+          .map(providerSource),
+        ...second.sourceUrls
+          .filter((url) => url !== sharedSource)
+          .map(providerSource),
+        {
+          ...providerSource(sharedSource),
+          title: "Example Dental Group 41 announces regional expansion",
+          snippet:
+            "Example Dental Group 41 added two locations and expanded centralized operations."
+        }
+      ]
+    );
+
+    expect(result.candidates.map((item) => item.organizationName)).toEqual([
+      "Example Dental Group 41"
+    ]);
+    expect(result.diagnostics.candidatesRejectedWeakDirectFit).toBe(1);
   });
 
   it("cannot validate Caption Care with an unrelated care.org result", () => {
@@ -843,7 +911,19 @@ describe("SignalCare hosted public-web research", () => {
       objective: "Find qualified prospects",
       existingOrganizations: [],
       existingDomains: [],
-      maxProspects: 5
+      maxProspects: 5,
+      targetRawOrganizations: 5,
+      strategyId: "REGIONAL_GROWTH_EXPANSION",
+      strategyLabel: "regional provider growth and expansion",
+      searchIntents: [
+        "multi-location dental groups",
+        "regional provider growth",
+        "new healthcare locations",
+        "operations leadership pages",
+        "provider recruiting growth",
+        "analytics reporting hiring"
+      ],
+      offerLanes: signalCareApprovedOfferIds
     });
 
     expect(result.candidates.map((item) => item.organizationName)).toEqual([
@@ -860,9 +940,18 @@ describe("SignalCare hosted public-web research", () => {
       tool_choice: "required",
       include: ["web_search_call.action.sources", "web_search_call.results"]
     });
+    expect(JSON.stringify(request)).toContain(
+      "Intentionally investigate 5 distinct raw organizations"
+    );
+    expect(JSON.stringify(request)).toContain(
+      "Execute several distinct bounded searches"
+    );
+    expect(JSON.stringify(request)).toContain(
+      "ANALYTICS_REPORTING_MODERNIZATION"
+    );
   });
 
-  it("records validation counts when no candidate has adequate provenance", async () => {
+  it("records provenance-stage rejection as a successful no-match", async () => {
     const work = await createWork("zero-candidate-diagnostics");
     const diagnostics = {
       rawCandidateCount: 3,
@@ -894,15 +983,22 @@ describe("SignalCare hosted public-web research", () => {
       db
     );
 
-    expect(result.outcome).toBe("RETRY");
-    expect(result.error).toContain("rawCandidateCount=3");
+    expect(result).toMatchObject({
+      outcome: "COMPLETED",
+      discoveryOutcome: "NO_QUALIFIED_CANDIDATES",
+      diagnostics
+    });
     const run = await db.agentRun.findFirstOrThrow({
       where: { workItemId: work.id, runType: "HOSTED_WEB_RESEARCH" }
     });
-    expect(JSON.parse(run.evidence ?? "{}")).toEqual({
-      failureStage: "evidence_validation",
+    expect(run.status).toBe("SUCCEEDED");
+    expect(JSON.parse(run.evidence ?? "{}")).toMatchObject({
+      discoveryOutcome: "NO_QUALIFIED_CANDIDATES",
       validationDiagnostics: diagnostics
     });
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "DONE", blocker: null });
   });
 
   it("completes successfully when the quality gate rejects every candidate", async () => {
@@ -917,16 +1013,13 @@ describe("SignalCare hosted public-web research", () => {
       candidatesRejectedQualityGate: 1,
       factsRejectedNoProviderSource: 0
     };
-    const client: SignalCareResearchClient = {
-      async discover() {
-        return {
-          candidates: [],
-          searchSummary:
-            "The only researched organization did not pass the deterministic quality gate.",
-          diagnostics
-        };
-      }
-    };
+    const discover = vi.fn().mockResolvedValue({
+      candidates: [],
+      searchSummary:
+        "The only researched organization did not pass the deterministic quality gate.",
+      diagnostics
+    });
+    const client: SignalCareResearchClient = { discover };
     const { services, chooseNextWork } = waitingServices(client);
 
     const cycle = await runAgentOrchestrationCycle(now, {
@@ -940,7 +1033,7 @@ describe("SignalCare hosted public-web research", () => {
       outcome: "COMPLETED",
       workItemId: work.id,
       detail:
-        "Discovery completed; 0 prospects passed the SignalCare quality gate. 1 candidate was rejected. Acquisition will continue on a later review."
+        "No qualified prospects from the latest 1-organization discovery batch. 1 candidate was rejected; SignalCare will search the next bounded strategy after cooldown. Strategy: regional provider growth and expansion."
     });
     expect(chooseNextWork).not.toHaveBeenCalled();
     expect(
@@ -981,7 +1074,73 @@ describe("SignalCare hosted public-web research", () => {
     });
     expect(JSON.parse(event.metadata ?? "{}")).toMatchObject({
       ...diagnostics,
+      discoveryStrategy: "REGIONAL_GROWTH_EXPANSION",
+      nextDiscoveryStrategy: "OPERATIONS_SCHEDULING_COMPLEXITY",
       externalOutreachPerformed: false
+    });
+    const continuation = await db.agentWorkItem.findFirstOrThrow({
+      where: {
+        projectId: signalProjectId,
+        idempotencyKey: `signalcare:no-match-continuation:${work.id}`
+      }
+    });
+    expect(continuation).toMatchObject({
+      state: "QUEUED",
+      nextEligibleRunAt: new Date("2026-08-29T12:30:00.000Z")
+    });
+    expect(parseSignalCareResearchContext(continuation.operationalContext)).toMatchObject({
+      researchMode: "DISCOVER_PROSPECTS",
+      discoveryStrategy: "OPERATIONS_SCHEDULING_COMPLEXITY"
+    });
+    expect(
+      await db.agentWorkItem.count({
+        where: {
+          projectId: signalProjectId,
+          state: {
+            in: [
+              "QUEUED",
+              "PLANNING",
+              "RUNNING",
+              "VERIFYING",
+              "RETRY",
+              "NEEDS_RYAN",
+              "AWAITING_EXECUTION"
+            ]
+          }
+        }
+      })
+    ).toBeLessThanOrEqual(2);
+    const earlyCycle = await runAgentOrchestrationCycle(
+      new Date("2026-08-29T12:15:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+    expect(earlyCycle).toMatchObject({
+      dueProjectCount: 0,
+      claimedProjectCount: 0,
+      projects: []
+    });
+    const rotatedCycle = await runAgentOrchestrationCycle(
+      new Date("2026-08-29T12:30:00.000Z"),
+      { userId, projectIds: [signalProjectId], db, services }
+    );
+    expect(rotatedCycle.projects[0]?.outcome).toBe("COMPLETED");
+    expect(discover.mock.calls.map((call) => call[0].strategyId)).toEqual([
+      "REGIONAL_GROWTH_EXPANSION",
+      "OPERATIONS_SCHEDULING_COMPLEXITY"
+    ]);
+    const secondContinuation = await db.agentWorkItem.findFirstOrThrow({
+      where: {
+        projectId: signalProjectId,
+        idempotencyKey: `signalcare:no-match-continuation:${continuation.id}`
+      }
+    });
+    expect(secondContinuation.nextEligibleRunAt?.toISOString()).toBe(
+      "2026-08-29T13:00:00.000Z"
+    );
+    expect(
+      parseSignalCareResearchContext(secondContinuation.operationalContext)
+    ).toMatchObject({
+      discoveryStrategy: "ANALYTICS_REPORTING_MODERNIZATION"
     });
     expect(await db.queueItem.count({ where: { userId } })).toBe(0);
     expect(
@@ -997,7 +1156,7 @@ describe("SignalCare hosted public-web research", () => {
           where: { projectId: signalProjectId }
         })
       ).nextAgentReviewAt?.toISOString()
-    ).toBe("2026-08-29T12:30:00.000Z");
+    ).toBe("2026-08-29T13:00:00.000Z");
     const config = await db.agentProjectConfig.findUniqueOrThrow({
       where: { projectId: signalProjectId }
     });
@@ -2333,7 +2492,12 @@ describe("SignalCare hosted public-web research", () => {
       data: { nextAgentReviewAt: now }
     });
     const inadequate = qualification("Heritage Provider Network");
-    const { services } = modelServices(modelOutput(), {
+    const { services } = modelServices({
+      ...modelOutput(),
+      plannedBottleneck: "Complete the bounded Heritage qualification."
+    } as Awaited<
+      ReturnType<OrchestrationServices["projectManager"]["chooseNextWork"]>
+    >, {
       discover: vi.fn(),
       qualify: vi.fn().mockResolvedValue({
         qualification: inadequate,

@@ -183,6 +183,13 @@ export default async function AgentHqPage() {
                         {display.supportingState.currentBlockers.length > 0 && <div className="mt-1"><span className="font-medium text-foreground">Current blockers:</span><ul className="ml-4 list-disc">{display.supportingState.currentBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div>}
                       </div>
                     )}
+                    {display.supportingState?.kind === "SIGNALCARE_PIPELINE" && (
+                      <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg border bg-background/40 p-2 text-xs text-muted-foreground">
+                        <span>Qualified: {display.supportingState.qualified}</span>
+                        <span>Researching: {display.supportingState.researching}</span>
+                        <span>Queued: {display.supportingState.queued}</span>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Current machine work</p>

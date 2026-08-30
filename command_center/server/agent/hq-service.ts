@@ -21,7 +21,7 @@ export async function getAgentHqData(userId: string, now = new Date()) {
   await ensureInitialAgentProjects(userId);
   await recoverBrokenRykasOwnerDataDecision(userId, prisma, now);
   await recoverPrematurelyResolvedRykasOwnerUpdates(userId, prisma, now);
-  const [configs, decisions, events, completedCount, runners, actions] = await Promise.all([
+  const [configs, decisions, events, completedCount, runners, actions, signalCareQueue] = await Promise.all([
     prisma.agentProjectConfig.findMany({
       where: { userId },
       include: {
@@ -56,11 +56,36 @@ export async function getAgentHqData(userId: string, now = new Date()) {
     }),
     prisma.agentWorkItem.count({ where: { userId, state: "DONE" } }),
     prisma.agentRunner.findMany({ where: { userId }, orderBy: { name: "asc" } }),
-    prisma.agentActionRequest.findMany({ where: { userId, state: { in: ["AUTHORIZED", "AWAITING_EXECUTION", "EXECUTING", "VERIFYING"] } }, include: { project: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 20 })
+    prisma.agentActionRequest.findMany({ where: { userId, state: { in: ["AUTHORIZED", "AWAITING_EXECUTION", "EXECUTING", "VERIFYING"] } }, include: { project: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 20 }),
+    prisma.queueItem.findMany({
+      where: {
+        userId,
+        lane: { in: ["signalcare", "pipeline"] },
+        status: { notIn: ["passed", "done", "killed"] }
+      },
+      select: { status: true }
+    })
   ]);
 
   const displayStates = configs.map((config) =>
-    deriveAgentProjectDisplayState(config, now)
+    deriveAgentProjectDisplayState(
+      config.profile === "SIGNALCARE_GM"
+        ? {
+            ...config,
+            signalCarePipeline: {
+              qualified: signalCareQueue.filter((item) =>
+                ["qualified", "outreach_ready"].includes(
+                  item.status.trim().toLowerCase()
+                )
+              ).length,
+              queued: signalCareQueue.filter(
+                (item) => item.status.trim().toLowerCase() === "queued"
+              ).length
+            }
+          }
+        : config,
+      now
+    )
   );
   const portfolioDisplay = deriveAgentPortfolioDisplay(displayStates, configs, now);
   const displayByProjectId = new Map(

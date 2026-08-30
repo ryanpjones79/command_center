@@ -33,6 +33,73 @@ import { transitionAgentWorkItem } from "@/server/agent/work-service";
 const defaultProspectLimit = 5;
 const hardProspectLimit = 10;
 
+export const signalCareDiscoveryStrategyIds = [
+  "REGIONAL_GROWTH_EXPANSION",
+  "OPERATIONS_SCHEDULING_COMPLEXITY",
+  "ANALYTICS_REPORTING_MODERNIZATION"
+] as const;
+export type SignalCareDiscoveryStrategyId =
+  (typeof signalCareDiscoveryStrategyIds)[number];
+const signalCareDiscoveryStrategySchema = z.enum(
+  signalCareDiscoveryStrategyIds
+);
+type SignalCareDiscoveryStrategy = {
+  id: SignalCareDiscoveryStrategyId;
+  label: string;
+  searchIntents: string[];
+};
+export const signalCareDiscoveryStrategies: SignalCareDiscoveryStrategy[] = [
+  {
+    id: "REGIONAL_GROWTH_EXPANSION",
+    label: "regional provider growth and expansion",
+    searchIntents: [
+      "multi-location dental groups and DSOs",
+      "regional dental group recent expansion or new locations",
+      "specialty-provider network growth and new service lines",
+      "regional ambulatory provider expansion",
+      "healthcare operations leadership pages",
+      "provider careers and recruiting growth"
+    ]
+  },
+  {
+    id: "OPERATIONS_SCHEDULING_COMPLEXITY",
+    label: "multi-site scheduling and workflow complexity",
+    searchIntents: [
+      "multi-site dental scheduling and treatment follow-up",
+      "provider network referral and patient-access operations",
+      "specialty group centralized scheduling",
+      "ambulatory network operational visibility",
+      "regional healthcare operations leadership",
+      "multi-location provider service-line expansion"
+    ]
+  },
+  {
+    id: "ANALYTICS_REPORTING_MODERNIZATION",
+    label: "healthcare analytics and reporting modernization",
+    searchIntents: [
+      "healthcare Power BI or business-intelligence hiring",
+      "provider operational reporting modernization",
+      "regional healthcare analytics leadership",
+      "provider data platform or reporting initiative",
+      "healthcare operational dashboard expansion",
+      "Oracle Health or Cerner reporting only when directly evidenced"
+    ]
+  }
+];
+
+function discoveryStrategyById(id: SignalCareDiscoveryStrategyId) {
+  return signalCareDiscoveryStrategies.find((strategy) => strategy.id === id)!;
+}
+
+function nextDiscoveryStrategy(id: SignalCareDiscoveryStrategyId) {
+  const index = signalCareDiscoveryStrategies.findIndex(
+    (strategy) => strategy.id === id
+  );
+  return signalCareDiscoveryStrategies[
+    (index + 1) % signalCareDiscoveryStrategies.length
+  ]!;
+}
+
 const sourceUrlSchema = z.string().url().max(2000);
 const verifiedFactSchema = z
   .object({
@@ -48,7 +115,8 @@ export const signalCareResearchContextSchema = z.discriminatedUnion(
       .object({
         researchMode: z.literal("DISCOVER_PROSPECTS"),
         targetProspect: z.null(),
-        instructions: z.string().max(4000)
+        instructions: z.string().max(4000),
+        discoveryStrategy: signalCareDiscoveryStrategySchema.optional()
       })
       .strict(),
     z
@@ -69,6 +137,7 @@ export function serializeSignalCareResearchContext(input: {
   researchMode: SignalCareResearchContext["researchMode"];
   targetProspect?: string | null;
   instructions?: string;
+  discoveryStrategy?: SignalCareDiscoveryStrategyId;
 }) {
   return JSON.stringify(
     signalCareResearchContextSchema.parse({
@@ -77,7 +146,11 @@ export function serializeSignalCareResearchContext(input: {
         input.researchMode === "QUALIFY_EXISTING_PROSPECT"
           ? input.targetProspect
           : null,
-      instructions: input.instructions ?? ""
+      instructions: input.instructions ?? "",
+      ...(input.researchMode === "DISCOVER_PROSPECTS" &&
+      input.discoveryStrategy
+        ? { discoveryStrategy: input.discoveryStrategy }
+        : {})
     })
   );
 }
@@ -308,6 +381,10 @@ export type SignalCareResearchDiagnostics = {
   candidatesRejectedNoProviderSource: number;
   candidatesRejectedQualityGate: number;
   factsRejectedNoProviderSource: number;
+  historicalDuplicates?: number;
+  candidatesRejectedIdentity?: number;
+  candidatesRejectedWrongCustomerType?: number;
+  candidatesRejectedWeakDirectFit?: number;
 };
 
 export type SignalCareResearchDiscoveryResult = SignalCareResearchResult & {
@@ -320,6 +397,11 @@ export interface SignalCareResearchClient {
     existingOrganizations: string[];
     existingDomains: string[];
     maxProspects: number;
+    targetRawOrganizations: number;
+    strategyId: SignalCareDiscoveryStrategyId;
+    strategyLabel: string;
+    searchIntents: string[];
+    offerLanes: typeof signalCareApprovedOfferIds;
   }): Promise<SignalCareResearchDiscoveryResult>;
   qualify?(input: {
     objective: string;
@@ -687,6 +769,8 @@ export type SignalCareProviderSource = {
   canonicalUrl: string;
   hostname: string;
   providerUrl: string;
+  title?: string;
+  snippet?: string;
 };
 
 function responseSourceUrls(response: Record<string, unknown>) {
@@ -703,13 +787,20 @@ function responseSourceUrls(response: Record<string, unknown>) {
         try {
           const providerUrl = record[key];
           const canonicalUrl = canonicalizeSignalCareSourceUrl(providerUrl);
-          if (!urls.has(canonicalUrl)) {
-            urls.set(canonicalUrl, {
-              canonicalUrl,
-              hostname: normalizeProspectDomain(providerUrl),
-              providerUrl
-            });
-          }
+          const existing = urls.get(canonicalUrl);
+          const title = [record.title, record.name]
+            .find((entry): entry is string => typeof entry === "string")
+            ?.slice(0, 500);
+          const snippet = [record.snippet, record.description, record.text]
+            .find((entry): entry is string => typeof entry === "string")
+            ?.slice(0, 1500);
+          urls.set(canonicalUrl, {
+            canonicalUrl,
+            hostname: normalizeProspectDomain(providerUrl),
+            providerUrl,
+            title: existing?.title ?? title,
+            snippet: existing?.snippet ?? snippet
+          });
         } catch {
           // Invalid provider provenance is ignored and can never validate a candidate.
         }
@@ -767,13 +858,28 @@ function relevantProviderMatches(
   provenance: Map<string, SignalCareProviderSource>,
   identity: SignalCareEntityIdentity
 ) {
+  const compact = (value: string) =>
+    value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "");
+  const ambiguousAliases = new Set(["care", "captions", "healthcare"]);
+  const identityNames = [
+    identity.canonicalOrganizationName,
+    ...identity.knownAliases
+  ]
+    .map(compact)
+    .filter(
+      (name) => name.length >= 6 && !ambiguousAliases.has(name)
+    );
   return urls.flatMap((url) => {
     const match = matchProviderSource(url, provenance);
+    const providerIdentityText = match
+      ? compact(`${match.title ?? ""} ${match.snippet ?? ""}`)
+      : "";
     return match &&
-      isSignalCareSourceRelevantToEntity({
+      (isSignalCareSourceRelevantToEntity({
         sourceUrl: match.providerUrl,
         ...identity
-      })
+      }) ||
+        identityNames.some((name) => providerIdentityText.includes(name)))
       ? [match]
       : [];
   });
@@ -822,7 +928,11 @@ export function retainCitedSignalCareEvidence(
     candidatesRejectedLowConfidence: 0,
     candidatesRejectedNoProviderSource: 0,
     candidatesRejectedQualityGate: 0,
-    factsRejectedNoProviderSource: 0
+    factsRejectedNoProviderSource: 0,
+    historicalDuplicates: 0,
+    candidatesRejectedIdentity: 0,
+    candidatesRejectedWrongCustomerType: 0,
+    candidatesRejectedWeakDirectFit: 0
   };
   const candidates = result.candidates.flatMap((candidate) => {
     const identity = {
@@ -914,14 +1024,23 @@ export function retainCitedSignalCareEvidence(
           )
         )
     );
+    if (candidate.entityIdentityConfidence === "LOW") {
+      diagnostics.candidatesRejectedIdentity! += 1;
+      return [];
+    }
+    if (!plausibleCustomer) {
+      diagnostics.candidatesRejectedWrongCustomerType! += 1;
+      return [];
+    }
+    if (!directFit) {
+      diagnostics.candidatesRejectedWeakDirectFit! += 1;
+      return [];
+    }
     if (
-      !plausibleCustomer ||
-      candidate.entityIdentityConfidence === "LOW" ||
       !credibleAutonomyEvidence ||
       (candidate.organizationScale === "LARGE_ENTERPRISE" &&
         (candidate.buyingAutonomy !== "VERIFIED" ||
-          !credibleContractingPath)) ||
-      !directFit
+          !credibleContractingPath))
     ) {
       diagnostics.candidatesRejectedQualityGate += 1;
       return [];
@@ -1053,6 +1172,11 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
     existingOrganizations: string[];
     existingDomains: string[];
     maxProspects: number;
+    targetRawOrganizations: number;
+    strategyId: SignalCareDiscoveryStrategyId;
+    strategyLabel: string;
+    searchIntents: string[];
+    offerLanes: typeof signalCareApprovedOfferIds;
   }) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -1077,7 +1201,7 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
             content: [
               {
                 type: "input_text",
-                text: `Find a small evidence-backed SignalCare prospect shortlist using public web sources only. Prioritize multi-location dental groups and DSOs first, then independent or mid-market provider groups and multi-location outpatient organizations. Avoid Fortune-scale enterprises, integrated subsidiaries, major technology vendors, and speculative partnerships unless credible public evidence establishes independent buying autonomy, a specific approved-offer problem, and a realistic contracting path. Return only candidates that pass the initial customer-fit gate; do not include a candidate merely to reach the requested count. Lock each entity to its canonical name, official domain, aliases, parent when relevant, customer type, identity confidence, and sourced buying-autonomy evidence. Every candidate must have at least one direct sourced fit signal for exactly one approved offer; generic healthcare, AI, growth, patient-outcome, or customer-count facts are insufficient. Classify sources as PRIMARY, SECONDARY, or WEAK. Third-party sources must visibly identify the exact target; exclude similarly named entities and ambiguous directories. Every verified fact must be grounded in public web-search evidence, and each source URL must identify the actual page used for that fact. Prefer official organization, locations, providers, careers, leadership, and credible business pages. Clearly separate VERIFIED FACTS from HYPOTHESES. Never claim revenue leakage or operational problems without public evidence. Do not contact anyone, submit forms, change pricing, make commitments, or propose more candidates than requested. Exclude organizations already supplied. ${signalCareCommercialProfileInstructions()} Return operational evidence only.`
+                text: `Run one bounded multi-lane SignalCare discovery funnel using public web sources only. Intentionally investigate ${input.targetRawOrganizations} distinct raw organizations when evidence permits, across every supplied approved offer lane, then return up to ${input.maxProspects} candidates that have enough evidence for deterministic screening. Never invent or pad candidates to hit the target. Execute several distinct bounded searches using the supplied search intents; do not collapse the run into one generic organization search and do not repeat the same query/domain combination. Prioritize multi-location dental groups and DSOs, independent or mid-market provider and specialty groups, ambulatory networks, regional healthcare operators, and healthcare organizations with directly evidenced analytics/reporting modernization. Avoid Fortune-scale enterprises, integrated subsidiaries, major technology vendors, and speculative partnerships unless credible public evidence establishes independent buying autonomy, a specific approved-offer problem, and a realistic contracting path. Lock each entity to its canonical name, official domain, aliases, parent when relevant, customer type, identity confidence, and sourced buying-autonomy evidence. Every returned candidate must have at least one direct sourced fit signal for exactly one approved offer; generic healthcare, AI, growth, patient-outcome, or customer-count facts are insufficient. Classify sources as PRIMARY, SECONDARY, or WEAK. Bind every candidate and every verified fact to the exact provider-returned page URL supporting that specific organization; never reuse a source across companies unless the page itself explicitly identifies both. Third-party sources must visibly identify the exact target; exclude similarly named entities, ambiguous directories, cross-company contamination, and generic unrelated sources. Prefer official organization, locations, providers, careers, leadership, and credible business pages. Clearly separate VERIFIED FACTS from HYPOTHESES. Never claim revenue leakage or operational problems without public evidence. Never position SignalCare as remote or patient monitoring. Do not contact anyone, submit forms, change pricing, make commitments, or return more candidates than requested. Exclude supplied historical organizations and domains. ${signalCareCommercialProfileInstructions()} Return operational evidence only.`
               }
             ]
           },
@@ -1484,7 +1608,11 @@ function emptyResearchDiagnostics(): SignalCareResearchDiagnostics {
     candidatesRejectedLowConfidence: 0,
     candidatesRejectedNoProviderSource: 0,
     candidatesRejectedQualityGate: 0,
-    factsRejectedNoProviderSource: 0
+    factsRejectedNoProviderSource: 0,
+    historicalDuplicates: 0,
+    candidatesRejectedIdentity: 0,
+    candidatesRejectedWrongCustomerType: 0,
+    candidatesRejectedWeakDirectFit: 0
   };
 }
 
@@ -1497,13 +1625,95 @@ function researchDiagnosticsSummary(
 }
 
 function noQualifiedCandidatesSummary(
-  diagnostics: SignalCareResearchDiagnostics
+  diagnostics: SignalCareResearchDiagnostics,
+  strategy: SignalCareDiscoveryStrategy
 ) {
   const rejectedCount = Math.max(
     0,
     diagnostics.rawCandidateCount - diagnostics.candidatesAccepted
   );
-  return `Discovery completed; 0 prospects passed the SignalCare quality gate. ${rejectedCount} candidate${rejectedCount === 1 ? " was" : "s were"} rejected. Acquisition will continue on a later review.`;
+  return `No qualified prospects from the latest ${diagnostics.rawCandidateCount}-organization discovery batch. ${rejectedCount} candidate${rejectedCount === 1 ? " was" : "s were"} rejected; SignalCare will search the next bounded strategy after cooldown. Strategy: ${strategy.label}.`;
+}
+
+async function queueNextSignalCareDiscoveryAfterNoMatch(
+  config: Pick<
+    AgentProjectConfig,
+    "userId" | "projectId" | "profile" | "maxConcurrentWorkItems"
+  >,
+  completedWork: AgentWorkItem,
+  strategy: SignalCareDiscoveryStrategy,
+  now: Date,
+  db: PrismaClient
+) {
+  const [activeCount, pendingOwnerDecisions] = await Promise.all([
+    db.agentWorkItem.count({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        state: {
+          in: [
+            "QUEUED",
+            "PLANNING",
+            "RUNNING",
+            "VERIFYING",
+            "RETRY",
+            "NEEDS_RYAN",
+            "AWAITING_EXECUTION"
+          ]
+        }
+      }
+    }),
+    db.agentDecision.count({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        status: "PENDING"
+      }
+    })
+  ]);
+  if (
+    pendingOwnerDecisions > 0 ||
+    activeCount >= config.maxConcurrentWorkItems
+  ) {
+    return null;
+  }
+  const nextEligibleRunAt = new Date(
+    now.getTime() + SIGNALCARE_NO_MATCH_REVIEW_MINUTES * 60 * 1000
+  );
+  return db.agentWorkItem.upsert({
+    where: {
+      projectId_idempotencyKey: {
+        projectId: config.projectId,
+        idempotencyKey: `signalcare:no-match-continuation:${completedWork.id}`
+      }
+    },
+    update: {},
+    create: {
+      userId: config.userId,
+      projectId: config.projectId,
+      idempotencyKey: `signalcare:no-match-continuation:${completedWork.id}`,
+      title: `Search SignalCare prospects — ${strategy.label}`,
+      objective: `Run the next bounded multi-lane SignalCare discovery strategy: ${strategy.label}.`,
+      expectedValue:
+        "Continue safe customer acquisition with a broader evidence-backed candidate pool.",
+      acceptanceCriteria:
+        "Search multiple deterministic intents, preserve historical organization/domain exclusions, persist funnel diagnostics, and perform no external communication.",
+      agentRole: "SIGNALCARE_RESEARCHER",
+      actionCategory: "RESEARCH_READ_ONLY",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "ALLOWLIST",
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "DISCOVER_PROSPECTS",
+        instructions: `Rotate to ${strategy.label} after a valid no-match batch.`,
+        discoveryStrategy: strategy.id
+      }),
+      priority: "HIGH",
+      maxAttempts: completedWork.maxAttempts,
+      nextEligibleRunAt,
+      workspaceIdentifier: null
+    }
+  });
 }
 
 export async function recoverFailedSignalCareProspectResearch(
@@ -1994,12 +2204,16 @@ async function persistCandidates(
     })
   );
   const created: string[] = [];
+  let historicalDuplicates = 0;
   for (const candidate of candidates) {
     const nameKey = candidate.organizationName.trim().toLowerCase();
     const domainKey = normalizeProspectDomain(
       candidate.domain || candidate.officialWebsite
     );
-    if (names.has(nameKey) || domains.has(domainKey)) continue;
+    if (names.has(nameKey) || domains.has(domainKey)) {
+      historicalDuplicates += 1;
+      continue;
+    }
     await db.queueItem.create({
       data: {
         userId,
@@ -2049,7 +2263,7 @@ async function persistCandidates(
     domains.add(domainKey);
     created.push(candidate.organizationName);
   }
-  return created;
+  return { created, historicalDuplicates };
 }
 
 function parseOperationalEvidence(note: string | null) {
@@ -2199,6 +2413,33 @@ export async function executeSignalCareHostedResearch(
   const researchContext = parseSignalCareResearchContext(
     work.operationalContext
   );
+  let discoveryStrategy: SignalCareDiscoveryStrategy | null = null;
+  if (researchContext.researchMode === "DISCOVER_PROSPECTS") {
+    const strategyId =
+      researchContext.discoveryStrategy ??
+      signalCareDiscoveryStrategies[
+        (await db.agentEvent.count({
+          where: {
+            userId: input.userId,
+            projectId: input.projectId,
+            type: "SIGNALCARE_DISCOVERY_NO_MATCH"
+          }
+        })) % signalCareDiscoveryStrategies.length
+      ]!.id;
+    discoveryStrategy = discoveryStrategyById(strategyId);
+    if (!researchContext.discoveryStrategy) {
+      work = await db.agentWorkItem.update({
+        where: { id: work.id },
+        data: {
+          operationalContext: serializeSignalCareResearchContext({
+            researchMode: "DISCOVER_PROSPECTS",
+            instructions: researchContext.instructions,
+            discoveryStrategy: discoveryStrategy.id
+          })
+        }
+      });
+    }
+  }
   if (researchContext.researchMode === "QUALIFY_EXISTING_PROSPECT") {
     const targetQueueItem = (
       await db.queueItem.findMany({
@@ -2303,7 +2544,7 @@ export async function executeSignalCareHostedResearch(
       summary:
         researchContext.researchMode === "QUALIFY_EXISTING_PROSPECT"
           ? `SignalCare qualification for ${researchContext.targetProspect} dispatched to bounded hosted public-web research.`
-          : "SignalCare prospect discovery dispatched to the bounded hosted web-research executor."
+          : `SignalCare prospect discovery dispatched using ${discoveryStrategy!.label}.`
     },
     db
   );
@@ -2522,6 +2763,12 @@ export async function executeSignalCareHostedResearch(
       return domain ? [domain] : [];
     });
     const maxProspects = getSignalCareResearchLimit();
+    const activeDiscoveryStrategy =
+      discoveryStrategy ?? signalCareDiscoveryStrategies[0]!;
+    const targetRawOrganizations = Math.min(
+      hardProspectLimit,
+      Math.max(defaultProspectLimit, maxProspects)
+    );
     const sufficientExistingProspects = existingQueue;
     const discovery: SignalCareResearchDiscoveryResult =
       sufficientExistingProspects.length > 0
@@ -2533,7 +2780,12 @@ export async function executeSignalCareHostedResearch(
             objective: input.objective,
             existingOrganizations: allQueue.map((item) => item.recipient),
             existingDomains,
-            maxProspects
+            maxProspects,
+            targetRawOrganizations,
+            strategyId: activeDiscoveryStrategy.id,
+            strategyLabel: activeDiscoveryStrategy.label,
+            searchIntents: activeDiscoveryStrategy.searchIntents,
+            offerLanes: signalCareApprovedOfferIds
           });
     failureStage = "result_validation";
     const { diagnostics: providerDiagnostics, ...research } = discovery;
@@ -2550,34 +2802,39 @@ export async function executeSignalCareHostedResearch(
       ).length,
       candidatesRejectedNoProviderSource: 0,
       candidatesRejectedQualityGate: 0,
-      factsRejectedNoProviderSource: 0
+      factsRejectedNoProviderSource: 0,
+      historicalDuplicates: 0,
+      candidatesRejectedIdentity: 0,
+      candidatesRejectedWrongCustomerType: 0,
+      candidatesRejectedWeakDirectFit: 0
     };
-    const noQualifiedCandidates =
-      sufficientExistingProspects.length === 0 &&
-      boundedCandidates.length === 0;
-    if (
-      noQualifiedCandidates &&
-      researchDiagnostics.candidatesRejectedNoProviderSource > 0
-    ) {
-      failureStage = "evidence_validation";
-      throw new Error(
-        `${priorProvenanceValidationFailure}. ${researchDiagnosticsSummary(researchDiagnostics)}.`
-      );
-    }
-    const discoveryOutcome = noQualifiedCandidates
-      ? ("NO_QUALIFIED_CANDIDATES" as const)
-      : sufficientExistingProspects.length > 0
-        ? ("SKIPPED_EXISTING_PROSPECTS" as const)
-        : ("PROSPECTS_CREATED" as const);
     failureStage = "candidate_persistence";
-    const created = await persistCandidates(
+    const persistence = await persistCandidates(
       input.userId,
       boundedCandidates,
       db,
       now
     );
+    const created = persistence.created;
+    researchDiagnostics = {
+      ...researchDiagnostics,
+      candidatesAccepted: created.length,
+      historicalDuplicates:
+        (researchDiagnostics.historicalDuplicates ?? 0) +
+        persistence.historicalDuplicates
+    };
+    const noQualifiedCandidates =
+      sufficientExistingProspects.length === 0 && created.length === 0;
+    const discoveryOutcome = noQualifiedCandidates
+      ? ("NO_QUALIFIED_CANDIDATES" as const)
+      : sufficientExistingProspects.length > 0
+        ? ("SKIPPED_EXISTING_PROSPECTS" as const)
+        : ("PROSPECTS_CREATED" as const);
     const operationalSummary = noQualifiedCandidates
-      ? noQualifiedCandidatesSummary(researchDiagnostics)
+      ? noQualifiedCandidatesSummary(
+          researchDiagnostics,
+          activeDiscoveryStrategy
+        )
       : sufficientExistingProspects.length > 0
         ? validated.searchSummary
         : `Created ${created.length} evidence-backed SignalCare prospect(s).`;
@@ -2590,12 +2847,14 @@ export async function executeSignalCareHostedResearch(
           created,
           candidateCount: boundedCandidates.length,
           summary: validated.searchSummary,
+          discoveryStrategy: activeDiscoveryStrategy.id,
           discoveryOutcome,
           validationDiagnostics: researchDiagnostics
         }),
         structuredOutcome: JSON.stringify({
           ...validated,
           created,
+          discoveryStrategy: activeDiscoveryStrategy.id,
           discoveryOutcome,
           validationDiagnostics: researchDiagnostics
         }),
@@ -2640,7 +2899,7 @@ export async function executeSignalCareHostedResearch(
         completedAt: now
       }
     });
-    await transitionAgentWorkItem(
+    work = await transitionAgentWorkItem(
       input.userId,
       work.id,
       "DONE",
@@ -2653,6 +2912,16 @@ export async function executeSignalCareHostedResearch(
       },
       db
     );
+    const nextStrategy = nextDiscoveryStrategy(activeDiscoveryStrategy.id);
+    const nextDiscoveryWork = noQualifiedCandidates
+      ? await queueNextSignalCareDiscoveryAfterNoMatch(
+          config,
+          work,
+          nextStrategy,
+          now,
+          db
+        )
+      : null;
     await recordAgentEvent(
       {
         userId: input.userId,
@@ -2665,7 +2934,7 @@ export async function executeSignalCareHostedResearch(
           : "QA_PASSED",
         summary:
           noQualifiedCandidates
-            ? "Hosted discovery completed successfully; no candidates passed the deterministic prospect-quality gate."
+            ? `No qualified prospects from the latest ${researchDiagnostics.rawCandidateCount}-organization discovery batch; SignalCare will search ${nextStrategy.label} after cooldown.`
             : sufficientExistingProspects.length > 0
             ? "Existing SignalCare prospects prevented unnecessary repeated discovery."
             : `${created.length} evidence-backed prospect(s) entered the existing SignalCare pipeline.`,
@@ -2674,6 +2943,13 @@ export async function executeSignalCareHostedResearch(
             ? "SIGNALCARE_DISCOVERY_NO_MATCH"
             : "SIGNALCARE_PROSPECTS_ADVANCED",
           createdCount: created.length,
+          discoveryStrategy: activeDiscoveryStrategy.id,
+          nextDiscoveryStrategy: noQualifiedCandidates
+            ? nextStrategy.id
+            : null,
+          nextDiscoveryWorkItemId: nextDiscoveryWork?.id ?? null,
+          nextEligibleRunAt:
+            nextDiscoveryWork?.nextEligibleRunAt?.toISOString() ?? null,
           ...researchDiagnostics,
           externalOutreachPerformed: false
         }
@@ -2683,8 +2959,13 @@ export async function executeSignalCareHostedResearch(
     await db.agentProjectConfig.update({
       where: { projectId: input.projectId },
       data: {
+        health: noQualifiedCandidates ? "ON_TRACK" : undefined,
+        currentBottleneck: noQualifiedCandidates
+          ? "No qualified prospect from the latest discovery batch; SignalCare is searching the next bounded strategy."
+          : undefined,
         nextAgentReviewAt: noQualifiedCandidates
-          ? new Date(
+          ? nextDiscoveryWork?.nextEligibleRunAt ??
+            new Date(
               now.getTime() +
                 SIGNALCARE_NO_MATCH_REVIEW_MINUTES * 60 * 1000
             )
@@ -2697,6 +2978,9 @@ export async function executeSignalCareHostedResearch(
       skippedBecauseProspectsExist: sufficientExistingProspects.length > 0,
       discoveryOutcome,
       diagnostics: researchDiagnostics,
+      discoveryStrategy: activeDiscoveryStrategy.id,
+      nextDiscoveryStrategy: noQualifiedCandidates ? nextStrategy.id : null,
+      nextDiscoveryWorkItemId: nextDiscoveryWork?.id ?? null,
       detail: operationalSummary
     };
   } catch (error) {

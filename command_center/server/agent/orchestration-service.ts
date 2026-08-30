@@ -939,7 +939,13 @@ async function processClaimedProject(
               })
               .then((project) => project?.nextAgentReviewAt ?? now)
           : now;
-        await releaseProjectClaim(config.id, leaseToken, now, { health: "ON_TRACK", currentBottleneck: plan.plannedBottleneck, nextAgentReviewAt: configuredNextReviewAt }, db);
+        await releaseProjectClaim(config.id, leaseToken, now, {
+          health: "ON_TRACK",
+          currentBottleneck: noQualifiedCandidates
+            ? "No qualified prospect from the latest discovery batch; SignalCare is searching the next bounded strategy."
+            : plan.plannedBottleneck,
+          nextAgentReviewAt: configuredNextReviewAt
+        }, db);
         return { ...baseResult, outcome: "COMPLETED", workItemId: workItem.id,
           detail: "detail" in research && typeof research.detail === "string"
             ? research.detail

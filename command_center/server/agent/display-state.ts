@@ -27,6 +27,10 @@ export type AgentProjectDisplayInput = {
   maxConcurrentWorkItems: number;
   lastAgentReviewAt: Date | null;
   nextAgentReviewAt: Date | null;
+  signalCarePipeline?: {
+    qualified: number;
+    queued: number;
+  };
   project: {
     name: string;
     agentWorkItems: Array<{
@@ -107,6 +111,11 @@ export type AgentProjectDisplayState = {
     knownInventoryAtCost: number | null;
     totalDebt: number | null;
     currentBlockers: string[];
+  } | {
+    kind: "SIGNALCARE_PIPELINE";
+    qualified: number;
+    researching: number;
+    queued: number;
   };
 };
 
@@ -434,6 +443,43 @@ export function deriveAgentProjectDisplayState(
   if (paused) {
     displayBottleneck =
       "Intentionally paused; no active review or machine work is requested.";
+  } else if (input.profile === "SIGNALCARE_GM") {
+    const researching = activeWork.filter((item) => {
+      if (item.requiredCapability !== "SIGNALCARE_PUBLIC_WEB_RESEARCH")
+        return false;
+      const context = parseSignalCareContext(item.operationalContext);
+      return context?.researchMode === "QUALIFY_EXISTING_PROSPECT";
+    }).length;
+    supportingState = {
+      kind: "SIGNALCARE_PIPELINE",
+      qualified: input.signalCarePipeline?.qualified ?? 0,
+      researching,
+      queued: input.signalCarePipeline?.queued ?? 0
+    };
+    if (signalCare) {
+      displayHealth = "NEEDS_ATTENTION";
+      displayBottleneck = `Public evidence remains inadequate after two bounded qualification attempts for ${signalCare.target}.`;
+    } else if (wipViolation) {
+      displayHealth = "NEEDS_ATTENTION";
+      displayBottleneck = `Machine work exceeds the deterministic WIP limit (${activeWork.length}/${input.maxConcurrentWorkItems}).`;
+    } else if (ownerAttentionRequired) {
+      displayHealth = "NEEDS_ATTENTION";
+      if (!containsOwnerDecisionLanguage(displayBottleneck)) {
+        displayBottleneck = `${pendingDecisions.length} owner decision${pendingDecisions.length === 1 ? "" : "s"} awaiting review.`;
+      }
+    } else if (activeWork.length > 0) {
+      displayHealth = "ON_TRACK";
+    } else if (currentFailed.length > 0) {
+      displayHealth = "NEEDS_ATTENTION";
+      displayBottleneck = concise(
+        currentFailed.sort(
+          (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime()
+        )[0]?.blocker ?? "The latest machine work failed.",
+        "The latest machine work failed."
+      );
+    } else if (input.health === "ON_TRACK" && !reviewDue) {
+      displayHealth = "ON_TRACK";
+    }
   } else if (rykas) {
     const capital = rykas.truth.data.capital;
     const financial = rykas.truth.data.financialSnapshot;
@@ -498,9 +544,6 @@ export function deriveAgentProjectDisplayState(
           ? "No discretionary buying capacity is available; debt reduction or holding cash should be considered."
           : "No PO/capital reconciliation blocker is present in the latest Rykas truth.";
     }
-  } else if (signalCare) {
-    displayHealth = "NEEDS_ATTENTION";
-    displayBottleneck = `Public evidence remains inadequate after two bounded qualification attempts for ${signalCare.target}.`;
   } else if (wipViolation) {
     displayHealth = "NEEDS_ATTENTION";
     displayBottleneck = `Machine work exceeds the deterministic WIP limit (${activeWork.length}/${input.maxConcurrentWorkItems}).`;

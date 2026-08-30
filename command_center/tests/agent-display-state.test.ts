@@ -214,7 +214,12 @@ describe("canonical Agent HQ display state", () => {
       capitalPosition: { ...financialSnapshotV11Fixture.capitalPosition, safeBuyingCapacity: 0 }
     };
     const state = deriveAgentProjectDisplayState(rykasV11Input(snapshot), now);
-    expect(state.supportingState?.financialHealth).toBe("PARTIAL");
+    expect(state.supportingState?.kind).toBe("RYKAS_TRUTH");
+    expect(
+      state.supportingState?.kind === "RYKAS_TRUTH"
+        ? state.supportingState.financialHealth
+        : null
+    ).toBe("PARTIAL");
     expect(state.displayBottleneck).toContain("core replenishment is not blocked solely");
     expect(state.displayBottleneck).not.toContain("owner");
   });
@@ -293,6 +298,71 @@ describe("canonical Agent HQ display state", () => {
     expect(state.displayLatestOutcome).toContain(
       "PASS_INSUFFICIENT_EVIDENCE"
     );
+  });
+
+  it("keeps an ordinary SignalCare no-match batch on track and searching", () => {
+    const input = baseInput({
+      projectId: "signalcare-searching",
+      profile: "SIGNALCARE_GM",
+      health: "ON_TRACK",
+      currentBottleneck:
+        "No qualified prospect from the latest discovery batch; SignalCare is searching the next bounded strategy.",
+      signalCarePipeline: { qualified: 1, queued: 3 },
+      project: {
+        name: "SignalCare",
+        agentDecisions: [],
+        agentEvents: [
+          {
+            id: "no-match",
+            type: "SIGNALCARE_DISCOVERY_NO_MATCH",
+            summary:
+              "No qualified prospects from the latest 8-organization discovery batch; SignalCare will search multi-site scheduling and workflow complexity after cooldown.",
+            metadata: JSON.stringify({
+              rawCandidateCount: 8,
+              candidatesAccepted: 0,
+              discoveryStrategy: "REGIONAL_GROWTH_EXPANSION",
+              nextDiscoveryStrategy: "OPERATIONS_SCHEDULING_COMPLEXITY"
+            }),
+            createdAt: new Date("2026-08-29T17:30:00.000Z")
+          }
+        ],
+        agentWorkItems: [
+          workItem({
+            id: "next-strategy",
+            title:
+              "Search SignalCare prospects — multi-site scheduling and workflow complexity",
+            state: "QUEUED",
+            requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+            operationalContext: JSON.stringify({
+              researchMode: "DISCOVER_PROSPECTS",
+              targetProspect: null,
+              instructions: "Rotate after a valid no-match batch.",
+              discoveryStrategy: "OPERATIONS_SCHEDULING_COMPLEXITY"
+            }),
+            resultSummary: null,
+            completedAt: null,
+            updatedAt: new Date("2026-08-29T17:30:00.000Z")
+          })
+        ]
+      }
+    });
+
+    const state = deriveAgentProjectDisplayState(input, now);
+
+    expect(state).toMatchObject({
+      displayHealth: "ON_TRACK",
+      displayBottleneck:
+        "No qualified prospect from the latest discovery batch; SignalCare is searching the next bounded strategy.",
+      displayLatestOutcome:
+        "No qualified prospects from the latest 8-organization discovery batch; SignalCare will search multi-site scheduling and workflow complexity after cooldown.",
+      pendingOwnerDecisionCount: 0,
+      supportingState: {
+        kind: "SIGNALCARE_PIPELINE",
+        qualified: 1,
+        researching: 0,
+        queued: 3
+      }
+    });
   });
 
   it("uses a completed Rykas truth read and its returned PO/capital blocker immediately", () => {
