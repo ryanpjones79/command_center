@@ -219,6 +219,132 @@ function signalCareQualificationPlan(
   };
 }
 
+const signalCareInsufficientEvidenceOutcome = "PASS_INSUFFICIENT_EVIDENCE";
+const signalCareTerminalStatuses = new Set(["passed", "done", "killed"]);
+
+function signalCareDiscoveryContinuationPlan(
+  exhaustedProspect: string,
+  originalPlan: AgentWorkPlan
+): AgentWorkPlan {
+  return {
+    disposition: "CREATE_WORK",
+    title: "Discover the next evidence-backed SignalCare prospects",
+    objective: `Continue the bounded SignalCare acquisition funnel after ${exhaustedProspect} exhausted qualification without adequate public provenance.`,
+    expectedValue:
+      "Keep customer acquisition productive without lowering evidence or outreach safety gates.",
+    acceptanceCriteria:
+      "Return a bounded, deduplicated set of source-backed prospects for qualification; exclude terminal prospects and perform no external communication.",
+    agentRole: "SIGNALCARE_RESEARCHER",
+    actionCategory: "RESEARCH_READ_ONLY",
+    priority: "HIGH",
+    maxAttempts: Math.max(1, Math.min(2, originalPlan.maxAttempts)),
+    plannedBottleneck:
+      "SignalCare needs the next evidence-backed prospect for bounded qualification.",
+    requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+    sandboxPolicy: "READ_ONLY",
+    networkPolicy: "ALLOWLIST",
+    operationalContext: `${exhaustedProspect} is terminal for this acquisition cycle with ${signalCareInsufficientEvidenceOutcome}; preserve organization/domain dedupe and discover different prospects.`,
+    evidence: originalPlan.evidence,
+    nextReviewMinutes: originalPlan.nextReviewMinutes,
+    ownerNeeded: false,
+    ownerDecision: null,
+    researchMode: "DISCOVER_PROSPECTS",
+    targetProspect: null
+  };
+}
+
+async function continueAfterExhaustedSignalCareQualification(
+  userId: string,
+  projectId: string,
+  targetProspect: string,
+  originalPlan: AgentWorkPlan,
+  now: Date,
+  db: PrismaClient
+): Promise<{ plan: AgentWorkPlan | null; ownerReadyProspect: string | null }> {
+  const normalizedTarget = targetProspect.trim().toLowerCase();
+  const queue = await db.queueItem.findMany({
+    where: { userId, lane: { in: ["signalcare", "pipeline"] } },
+    orderBy: { createdAt: "asc" }
+  });
+  const targetItems = queue.filter(
+    (item) => item.recipient.trim().toLowerCase() === normalizedTarget
+  );
+  const terminalNextAction = `${signalCareInsufficientEvidenceOutcome} — two bounded qualification attempts exhausted without adequate public provenance; no owner decision, outreach, or communication was created.`;
+
+  if (targetItems.length > 0) {
+    await db.queueItem.updateMany({
+      where: { id: { in: targetItems.map((item) => item.id) } },
+      data: {
+        status: "passed",
+        nextAction: terminalNextAction,
+        resolvedAt: now
+      }
+    });
+  } else {
+    await db.queueItem.create({
+      data: {
+        userId,
+        title: `${targetProspect} qualification outcome`,
+        lane: "signalcare",
+        recipient: targetProspect,
+        status: "passed",
+        nextAction: terminalNextAction,
+        resolvedAt: now
+      }
+    });
+  }
+
+  await recordAgentEvent(
+    {
+      userId,
+      projectId,
+      idempotencyKey: `signalcare-qualification-exhausted:${projectId}:${normalizedTarget}`,
+      type: "SIGNALCARE_QUALIFICATION_EXHAUSTED",
+      summary: `${targetProspect} marked ${signalCareInsufficientEvidenceOutcome} after two bounded qualification attempts; SignalCare immediately evaluated the next acquisition work without an owner decision or outreach.`,
+      metadata: {
+        outcome: signalCareInsufficientEvidenceOutcome,
+        targetProspect,
+        retryLimit: 2,
+        ownerDecisionCreated: false,
+        externalOutreachPerformed: false
+      }
+    },
+    db
+  );
+
+  const remaining = queue.filter(
+    (item) =>
+      item.recipient.trim().toLowerCase() !== normalizedTarget &&
+      !signalCareTerminalStatuses.has(item.status.trim().toLowerCase())
+  );
+  const nextMachineProspect = remaining.find(
+    (item) => item.status.trim().toLowerCase() !== "outreach_ready"
+  );
+  if (nextMachineProspect) {
+    return {
+      plan: signalCareQualificationPlan(
+        nextMachineProspect.recipient,
+        originalPlan,
+        [
+          `${targetProspect} exhausted its bounded qualification attempts and was passed for insufficient evidence.`,
+          "Continue with the next actionable prospect without changing evidence or outreach gates."
+        ]
+      ),
+      ownerReadyProspect: null
+    };
+  }
+
+  const ownerReadyProspect = remaining.find(
+    (item) => item.status.trim().toLowerCase() === "outreach_ready"
+  );
+  return {
+    plan: ownerReadyProspect
+      ? null
+      : signalCareDiscoveryContinuationPlan(targetProspect, originalPlan),
+    ownerReadyProspect: ownerReadyProspect?.recipient ?? null
+  };
+}
+
 async function failedSignalCareQualificationCount(
   userId: string,
   projectId: string,
@@ -230,11 +356,16 @@ async function failedSignalCareQualificationCount(
       userId,
       projectId,
       requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
-      state: "FAILED"
+      state: { in: ["FAILED", "DONE"] }
     },
-    select: { operationalContext: true }
+    select: {
+      state: true,
+      operationalContext: true,
+      updatedAt: true,
+      completedAt: true
+    }
   });
-  return failed.filter((item) => {
+  const matching = failed.filter((item) => {
     try {
       const context = parseSignalCareResearchContext(item.operationalContext);
       return (
@@ -245,7 +376,199 @@ async function failedSignalCareQualificationCount(
     } catch {
       return false;
     }
-  }).length;
+  });
+  const newestFailureAt = matching
+    .filter((item) => item.state === "FAILED")
+    .reduce(
+      (latest, item) =>
+        Math.max(latest, (item.completedAt ?? item.updatedAt).getTime()),
+      0
+    );
+  const newestSuccessAt = matching
+    .filter((item) => item.state === "DONE")
+    .reduce(
+      (latest, item) =>
+        Math.max(latest, (item.completedAt ?? item.updatedAt).getTime()),
+      0
+    );
+  if (newestSuccessAt > newestFailureAt) return 0;
+  return matching.filter((item) => item.state === "FAILED").length;
+}
+
+type SignalCareContinuationResult = {
+  plan: AgentWorkPlan | null;
+  workItem: AgentWorkItem | null;
+  ownerReadyProspect: string | null;
+  stopReason: "OWNER_ATTENTION" | "WIP_LIMIT" | null;
+};
+
+async function queueExhaustedSignalCareContinuation(
+  config: AgentProjectConfig,
+  targetProspect: string,
+  originalPlan: AgentWorkPlan,
+  now: Date,
+  db: PrismaClient
+): Promise<SignalCareContinuationResult> {
+  const continuation = await continueAfterExhaustedSignalCareQualification(
+    config.userId,
+    config.projectId,
+    targetProspect,
+    originalPlan,
+    now,
+    db
+  );
+  if (!continuation.plan) {
+    return {
+      ...continuation,
+      workItem: null,
+      stopReason: "OWNER_ATTENTION"
+    };
+  }
+  const [activeCount, pendingOwnerDecisions] = await Promise.all([
+    db.agentWorkItem.count({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        state: { in: activeAgentWorkStates }
+      }
+    }),
+    db.agentDecision.count({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        status: "PENDING"
+      }
+    })
+  ]);
+  if (pendingOwnerDecisions > 0) {
+    return {
+      ...continuation,
+      workItem: null,
+      stopReason: "OWNER_ATTENTION"
+    };
+  }
+  if (activeCount >= config.maxConcurrentWorkItems) {
+    return {
+      ...continuation,
+      workItem: null,
+      stopReason: "WIP_LIMIT"
+    };
+  }
+
+  const workItem = await db.agentWorkItem.upsert({
+    where: {
+      projectId_idempotencyKey: {
+        projectId: config.projectId,
+        idempotencyKey: `signalcare:qualification-exhausted-continuation:${config.projectId}:${targetProspect.trim().toLowerCase()}`
+      }
+    },
+    update: {},
+    create: {
+      userId: config.userId,
+      projectId: config.projectId,
+      idempotencyKey: `signalcare:qualification-exhausted-continuation:${config.projectId}:${targetProspect.trim().toLowerCase()}`,
+      title: continuation.plan.title,
+      objective: continuation.plan.objective,
+      expectedValue: continuation.plan.expectedValue,
+      acceptanceCriteria: continuation.plan.acceptanceCriteria,
+      agentRole: continuation.plan.agentRole,
+      actionCategory: continuation.plan.actionCategory,
+      requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+      sandboxPolicy: "READ_ONLY",
+      networkPolicy: "ALLOWLIST",
+      operationalContext: serializePlanOperationalContext(
+        continuation.plan,
+        "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+        config.profile
+      ),
+      priority: continuation.plan.priority,
+      maxAttempts: continuation.plan.maxAttempts,
+      workspaceIdentifier: null
+    }
+  });
+  return { ...continuation, workItem, stopReason: null };
+}
+
+async function recoverExhaustedSignalCareQualifications(
+  now: Date,
+  options: { userId?: string; projectIds?: string[] },
+  db: PrismaClient
+) {
+  const configs = await db.agentProjectConfig.findMany({
+    where: {
+      enabled: true,
+      pausedAt: null,
+      profile: "SIGNALCARE_GM",
+      ...(options.userId ? { userId: options.userId } : {}),
+      ...(options.projectIds ? { projectId: { in: options.projectIds } } : {})
+    }
+  });
+  for (const config of configs) {
+    const failedItems = await db.agentWorkItem.findMany({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+        state: "FAILED"
+      },
+      orderBy: { updatedAt: "desc" }
+    });
+    const targets = new Map<string, { name: string; item: AgentWorkItem }>();
+    for (const item of failedItems) {
+      try {
+        const context = parseSignalCareResearchContext(item.operationalContext);
+        if (context.researchMode !== "QUALIFY_EXISTING_PROSPECT") continue;
+        const key = context.targetProspect.trim().toLowerCase();
+        if (!targets.has(key)) {
+          targets.set(key, { name: context.targetProspect, item });
+        }
+      } catch {
+        // Malformed historical work cannot trigger deterministic recovery.
+      }
+    }
+    for (const target of targets.values()) {
+      if (
+        (await failedSignalCareQualificationCount(
+          config.userId,
+          config.projectId,
+          target.name,
+          db
+        )) < 2
+      ) {
+        continue;
+      }
+      const alreadyTerminalized = await db.agentEvent.findUnique({
+        where: {
+          idempotencyKey: `signalcare-qualification-exhausted:${config.projectId}:${target.name.trim().toLowerCase()}`
+        },
+        select: { id: true }
+      });
+      if (alreadyTerminalized) continue;
+
+      const continuation = await queueExhaustedSignalCareContinuation(
+        config,
+        target.name,
+        planFromPersistedWork(target.item, config.currentBottleneck),
+        now,
+        db
+      );
+      const update = continuation.workItem
+        ? {
+            health: "ON_TRACK",
+            currentBottleneck: continuation.plan!.plannedBottleneck,
+            nextAgentReviewAt: now
+          }
+        : continuation.stopReason === "OWNER_ATTENTION"
+          ? { nextAgentReviewAt: now }
+          : {};
+      if (Object.keys(update).length > 0) {
+        await db.agentProjectConfig.update({
+          where: { id: config.id },
+          data: update
+        });
+      }
+    }
+  }
 }
 
 async function releaseProjectClaim(
@@ -378,55 +701,6 @@ async function processClaimedProject(
     assertOwnerDecisionConsistency(plan);
     if (services.projectManager.adapterKind === "MODEL") {
       await recordModelPmDecision(config, dueAnchor, plan, db);
-    }
-
-    if (
-      config.profile === "SIGNALCARE_GM" &&
-      plan.requiredCapability === "SIGNALCARE_PUBLIC_WEB_RESEARCH" &&
-      plan.researchMode === "QUALIFY_EXISTING_PROSPECT" &&
-      plan.targetProspect &&
-      (await failedSignalCareQualificationCount(
-        config.userId,
-        config.projectId,
-        plan.targetProspect,
-        db
-      )) >= 2
-    ) {
-      await recordAgentEvent(
-        {
-          userId: config.userId,
-          projectId: config.projectId,
-          idempotencyKey: `signalcare-qualification-followup-exhausted:${config.projectId}:${plan.targetProspect.toLowerCase()}:${dueAnchor.toISOString()}`,
-          type: "WORK_WAITING",
-          summary: `No further automatic qualification work was created for ${plan.targetProspect}; two bounded attempts already failed without adequate public evidence.`,
-          metadata: {
-            targetProspect: plan.targetProspect,
-            externalOutreachPerformed: false
-          }
-        },
-        db
-      );
-      await releaseProjectClaim(
-        config.id,
-        leaseToken,
-        now,
-        {
-          health: "NEEDS_ATTENTION",
-          currentBottleneck:
-            "Public evidence remains inadequate after bounded qualification attempts.",
-          nextAgentReviewAt: nextReviewAt(
-            now,
-            SIGNALCARE_NO_MATCH_REVIEW_MINUTES
-          )
-        },
-        db
-      );
-      return {
-        ...baseResult,
-        outcome: "WAITING",
-        detail:
-          "Bounded SignalCare qualification follow-up exhausted; no repository work or outreach was created."
-      };
     }
 
     if (
@@ -672,6 +946,68 @@ async function processClaimedProject(
             : research.qualifiedProspect
             ? `${research.qualifiedProspect} advanced to ${research.pipelineStatus}; PM is due to reevaluate.`
             : research.skippedBecauseProspectsExist ? "Existing prospects suppressed repeated discovery; PM is due to reevaluate." : `${research.created.length} evidence-backed prospect(s) entered the pipeline; PM is due to reevaluate.` };
+      }
+      if (
+        research.outcome === "FAILED" &&
+        config.profile === "SIGNALCARE_GM" &&
+        plan.researchMode === "QUALIFY_EXISTING_PROSPECT" &&
+        plan.targetProspect &&
+        (await failedSignalCareQualificationCount(
+          config.userId,
+          config.projectId,
+          plan.targetProspect,
+          db
+        )) >= 2
+      ) {
+        const continuation = await queueExhaustedSignalCareContinuation(
+          config,
+          plan.targetProspect,
+          plan,
+          now,
+          db
+        );
+        if (continuation.workItem) {
+          await releaseProjectClaim(
+            config.id,
+            leaseToken,
+            now,
+            {
+              health: "ON_TRACK",
+              currentBottleneck: continuation.plan!.plannedBottleneck,
+              nextAgentReviewAt: now
+            },
+            db
+          );
+          return {
+            ...baseResult,
+            outcome: "WAITING",
+            workItemId: continuation.workItem.id,
+            detail: `${plan.targetProspect} passed for insufficient evidence; the next bounded SignalCare acquisition work was queued immediately.`
+          };
+        }
+        await releaseProjectClaim(
+          config.id,
+          leaseToken,
+          now,
+          {
+            health: "NEEDS_ATTENTION",
+            currentBottleneck:
+              continuation.stopReason === "WIP_LIMIT"
+                ? "SignalCare acquisition WIP is at its deterministic limit."
+                : `${continuation.ownerReadyProspect ?? "A qualified prospect"} completed qualification; deterministic review is due before any communication workflow.`,
+            nextAgentReviewAt: now
+          },
+          db
+        );
+        return {
+          ...baseResult,
+          outcome:
+            continuation.stopReason === "WIP_LIMIT" ? "WIP_LIMIT" : "WAITING",
+          detail:
+            continuation.stopReason === "WIP_LIMIT"
+              ? `${plan.targetProspect} passed for insufficient evidence; the acquisition WIP limit prevented another work item.`
+              : `${plan.targetProspect} passed for insufficient evidence; a deterministic review is due before further communication workflow.`
+        };
       }
       await releaseProjectClaim(config.id, leaseToken, now, {
         health: research.outcome === "FAILED" ? "BLOCKED" : "NEEDS_ATTENTION",
@@ -1145,6 +1481,7 @@ export async function runAgentOrchestrationCycle(
 ): Promise<AgentCycleResult> {
   const db = options.db ?? prisma;
   await recoverBrokenRykasOwnerDataDecision(options.userId, db, now);
+  await recoverExhaustedSignalCareQualifications(now, options, db);
   const maxModelInvocations = Math.max(0, Number(process.env.AGENT_MAX_MODEL_INVOCATIONS_PER_CYCLE ?? 3));
   let modelInvocations = 0;
   const dueConfigs = await db.agentProjectConfig.findMany({

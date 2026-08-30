@@ -211,6 +211,54 @@ describe("canonical Agent HQ display state", () => {
     expect(state.displayBottleneck).not.toContain("owner-approved outreach");
   });
 
+  it("lets a terminal insufficient-evidence pass and new discovery supersede exhausted qualification", () => {
+    const input = signalCareInput();
+    input.health = "ON_TRACK";
+    input.currentBottleneck =
+      "SignalCare needs the next evidence-backed prospect for bounded qualification.";
+    input.project.agentEvents.push({
+      id: "heritage-terminal",
+      type: "SIGNALCARE_QUALIFICATION_EXHAUSTED",
+      summary:
+        "Heritage Provider Network marked PASS_INSUFFICIENT_EVIDENCE after two bounded qualification attempts; SignalCare immediately evaluated the next acquisition work without an owner decision or outreach.",
+      metadata: JSON.stringify({
+        outcome: "PASS_INSUFFICIENT_EVIDENCE",
+        targetProspect: "Heritage Provider Network"
+      }),
+      createdAt: new Date("2026-08-29T17:01:00.000Z")
+    });
+    input.project.agentWorkItems.push(
+      workItem({
+        id: "next-discovery",
+        title: "Discover the next evidence-backed SignalCare prospects",
+        state: "QUEUED",
+        requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+        operationalContext: JSON.stringify({
+          researchMode: "DISCOVER_PROSPECTS",
+          targetProspect: null
+        }),
+        resultSummary: null,
+        createdAt: new Date("2026-08-29T17:01:00.000Z"),
+        updatedAt: new Date("2026-08-29T17:01:00.000Z"),
+        completedAt: null
+      })
+    );
+
+    const state = deriveAgentProjectDisplayState(input, now);
+
+    expect(state).toMatchObject({
+      displayHealth: "ON_TRACK",
+      displayBottleneck:
+        "SignalCare needs the next evidence-backed prospect for bounded qualification.",
+      ownerAttentionRequired: false,
+      pendingOwnerDecisionCount: 0,
+      machineWorkState: { activeCount: 1 }
+    });
+    expect(state.displayLatestOutcome).toContain(
+      "PASS_INSUFFICIENT_EVIDENCE"
+    );
+  });
+
   it("uses a completed Rykas truth read and its returned PO/capital blocker immediately", () => {
     const state = deriveAgentProjectDisplayState(rykasInput(), now);
     expect(state.displayHealth).toBe("NEEDS_ATTENTION");

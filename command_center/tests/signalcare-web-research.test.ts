@@ -2290,8 +2290,8 @@ describe("SignalCare hosted public-web research", () => {
     expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
   });
 
-  it("stops creating qualification follow-ups after two bounded failures", async () => {
-    const now = new Date("2026-08-29T16:00:00.000Z");
+  it("queues the next acquisition work in the same cycle as the second provenance failure", async () => {
+    const now = new Date("2026-08-29T15:55:00.000Z");
     await db.queueItem.create({
       data: {
         userId,
@@ -2300,6 +2300,104 @@ describe("SignalCare hosted public-web research", () => {
         recipient: "Heritage Provider Network",
         status: "qualified",
         nextAction: "Resolve missing public provenance."
+      }
+    });
+    const first = await createWork("heritage-first-provenance-failure", signalProjectId, {
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Heritage Provider Network"
+      })
+    });
+    await db.agentWorkItem.update({
+      where: { id: first.id },
+      data: {
+        state: "FAILED",
+        attemptCount: 1,
+        maxAttempts: 1,
+        blocker: "SignalCare qualification returned inadequate provider provenance.",
+        completedAt: new Date("2026-08-29T15:50:00.000Z")
+      }
+    });
+    const second = await createWork("heritage-second-provenance-attempt", signalProjectId, {
+      operationalContext: serializeSignalCareResearchContext({
+        researchMode: "QUALIFY_EXISTING_PROSPECT",
+        targetProspect: "Heritage Provider Network"
+      })
+    });
+    await db.agentWorkItem.update({
+      where: { id: second.id },
+      data: { maxAttempts: 1 }
+    });
+    await db.agentProjectConfig.update({
+      where: { projectId: signalProjectId },
+      data: { nextAgentReviewAt: now }
+    });
+    const inadequate = qualification("Heritage Provider Network");
+    const { services } = modelServices(modelOutput(), {
+      discover: vi.fn(),
+      qualify: vi.fn().mockResolvedValue({
+        qualification: inadequate,
+        providerSourceUrls: ["https://unrelated.example/evidence"]
+      })
+    });
+
+    const cycle = await runAgentOrchestrationCycle(now, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+
+    expect(cycle.projects[0]).toMatchObject({
+      outcome: "WAITING",
+      detail:
+        "Heritage Provider Network passed for insufficient evidence; the next bounded SignalCare acquisition work was queued immediately."
+    });
+    const work = await db.agentWorkItem.findMany({
+      where: { projectId: signalProjectId }
+    });
+    expect(
+      work.filter((item) => {
+        const context = parseSignalCareResearchContext(item.operationalContext);
+        return context.targetProspect === "Heritage Provider Network";
+      })
+    ).toHaveLength(2);
+    expect(
+      work.some((item) => {
+        const context = parseSignalCareResearchContext(item.operationalContext);
+        return context.researchMode === "DISCOVER_PROSPECTS" && item.state === "QUEUED";
+      })
+    ).toBe(true);
+    expect(
+      await db.queueItem.findFirstOrThrow({
+        where: { userId, recipient: "Heritage Provider Network" }
+      })
+    ).toMatchObject({ status: "passed" });
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+    expect(await db.pipelineAction.count({ where: { userId, type: "outreach" } })).toBe(0);
+  });
+
+  it("passes an exhausted prospect and immediately queues deduplicated discovery", async () => {
+    const now = new Date("2026-08-29T16:00:00.000Z");
+    process.env.FEATURE_SIGNALCARE_WEB_RESEARCH = "false";
+    const heritage = await db.queueItem.create({
+      data: {
+        userId,
+        title: "Heritage Provider Network qualification",
+        lane: "signalcare",
+        recipient: "Heritage Provider Network",
+        status: "qualified",
+        nextAction: "Resolve missing public provenance."
+      }
+    });
+    await db.pipelineAction.create({
+      data: {
+        userId,
+        date: new Date("2026-08-28T12:00:00.000Z"),
+        type: "prospect_research",
+        withWhom: "Heritage Provider Network",
+        note: JSON.stringify({ officialDomain: "heritage-provider.example" })
       }
     });
     for (const suffix of ["original", "followup"]) {
@@ -2331,7 +2429,7 @@ describe("SignalCare hosted public-web research", () => {
     }
     await db.agentProjectConfig.update({
       where: { projectId: signalProjectId },
-      data: { nextAgentReviewAt: now }
+      data: { nextAgentReviewAt: new Date("2026-08-30T16:00:00.000Z") }
     });
     const { services } = modelServices({
       disposition: "CREATE_WORK",
@@ -2363,21 +2461,192 @@ describe("SignalCare hosted public-web research", () => {
 
     expect(cycle.projects[0]).toMatchObject({
       outcome: "WAITING",
-      detail:
-        "Bounded SignalCare qualification follow-up exhausted; no repository work or outreach was created."
+      detail: "Hosted SignalCare research is disabled; no local runner claim is permitted."
     });
     expect(
       await db.agentWorkItem.count({ where: { projectId: signalProjectId } })
-    ).toBe(2);
+    ).toBe(3);
+    const work = await db.agentWorkItem.findMany({
+      where: { projectId: signalProjectId },
+      orderBy: { createdAt: "asc" }
+    });
     expect(
-      (
-        await db.agentProjectConfig.findUniqueOrThrow({
-          where: { projectId: signalProjectId }
-        })
-      ).nextAgentReviewAt?.toISOString()
-    ).toBe("2026-08-29T16:30:00.000Z");
+      work.filter((item) => {
+        const context = parseSignalCareResearchContext(item.operationalContext);
+        return (
+          context.researchMode === "QUALIFY_EXISTING_PROSPECT" &&
+          context.targetProspect === "Heritage Provider Network"
+        );
+      })
+    ).toHaveLength(2);
+    const discovery = work.find((item) => item.state === "QUEUED");
+    expect(discovery).toBeDefined();
+    expect(parseSignalCareResearchContext(discovery!.operationalContext)).toMatchObject({
+      researchMode: "DISCOVER_PROSPECTS",
+      targetProspect: null
+    });
+    expect(
+      await db.queueItem.findUniqueOrThrow({ where: { id: heritage.id } })
+    ).toMatchObject({
+      status: "passed",
+      resolvedAt: now
+    });
+    expect(
+      (await db.queueItem.findUniqueOrThrow({ where: { id: heritage.id } }))
+        .nextAction
+    ).toContain("PASS_INSUFFICIENT_EVIDENCE");
+    expect(
+      await db.agentWorkItem.count({
+        where: {
+          projectId: signalProjectId,
+          state: { in: ["QUEUED", "RETRY", "PLANNING", "RUNNING", "VERIFYING"] }
+        }
+      })
+    ).toBeLessThanOrEqual(2);
     expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
     expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+    expect(
+      await db.pipelineAction.count({
+        where: { userId, type: "outreach", withWhom: "Heritage Provider Network" }
+      })
+    ).toBe(0);
+
+    process.env.FEATURE_SIGNALCARE_WEB_RESEARCH = "true";
+    const freshCandidate = candidate(91);
+    const rediscovery = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: discovery!.id,
+        objective: discovery!.objective
+      },
+      fakeResearchClient([
+        candidate(90, {
+          organizationName: "Heritage Provider Network",
+          canonicalOrganizationName: "Heritage Provider Network",
+          domain: "heritage-provider.example",
+          officialWebsite: "https://heritage-provider.example"
+        }),
+        freshCandidate
+      ]),
+      db,
+      new Date("2026-08-29T16:01:00.000Z")
+    );
+    expect(rediscovery.outcome).toBe("COMPLETED");
+    expect(
+      await db.queueItem.count({
+        where: { userId, recipient: "Heritage Provider Network" }
+      })
+    ).toBe(1);
+    expect(
+      await db.queueItem.count({
+        where: { userId, recipient: freshCandidate.organizationName }
+      })
+    ).toBe(1);
+  });
+
+  it("advances another actionable prospect when qualification is exhausted", async () => {
+    const now = new Date("2026-08-29T16:10:00.000Z");
+    for (const [recipient, status] of [
+      ["Heritage Provider Network", "qualified"],
+      ["Next Dental Group", "researched"]
+    ] as const) {
+      await db.queueItem.create({
+        data: {
+          userId,
+          title: `${recipient} qualification`,
+          lane: "signalcare",
+          recipient,
+          status,
+          nextAction: "Complete bounded qualification."
+        }
+      });
+    }
+    for (const suffix of ["original", "followup"]) {
+      await db.agentWorkItem.create({
+        data: {
+          userId,
+          projectId: signalProjectId,
+          idempotencyKey: `heritage-advance-${suffix}`,
+          title: `Qualify Heritage Provider Network ${suffix}`,
+          objective: "Resolve public evidence.",
+          expectedValue: "Determine customer fit.",
+          acceptanceCriteria: "Provider-backed qualification.",
+          agentRole: "SIGNALCARE_RESEARCHER",
+          actionCategory: "RESEARCH_READ_ONLY",
+          requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+          sandboxPolicy: "READ_ONLY",
+          networkPolicy: "ALLOWLIST",
+          operationalContext: serializeSignalCareResearchContext({
+            researchMode: "QUALIFY_EXISTING_PROSPECT",
+            targetProspect: "Heritage Provider Network"
+          }),
+          state: "FAILED",
+          attemptCount: 1,
+          maxAttempts: 1,
+          blocker: "SignalCare qualification returned inadequate provider provenance.",
+          completedAt: now
+        }
+      });
+    }
+    await db.agentProjectConfig.update({
+      where: { projectId: signalProjectId },
+      data: { nextAgentReviewAt: now }
+    });
+    const requestedPlan = {
+      disposition: "CREATE_WORK" as const,
+      title: "Retry Heritage Provider Network qualification",
+      objective: "Resolve Heritage evidence.",
+      expectedValue: "Determine customer fit.",
+      acceptanceCriteria: "Provider-backed facts support qualification.",
+      agentRole: "SIGNALCARE_RESEARCHER",
+      actionCategory: "RESEARCH_READ_ONLY" as const,
+      priority: "HIGH" as const,
+      maxAttempts: 1,
+      plannedBottleneck: "Public provenance remains inadequate.",
+      requiredCapability: SIGNALCARE_WEB_RESEARCH_CAPABILITY,
+      sandboxPolicy: "READ_ONLY" as const,
+      networkPolicy: "ALLOWLIST" as const,
+      researchMode: "QUALIFY_EXISTING_PROSPECT" as const,
+      targetProspect: "Heritage Provider Network",
+      ownerNeeded: false,
+      ownerDecision: null
+    };
+    const nextQualification = qualification("Next Dental Group");
+    const { services } = modelServices(requestedPlan, {
+      discover: vi.fn(),
+      qualify: vi.fn().mockResolvedValue({
+        qualification: nextQualification,
+        providerSourceUrls: nextQualification.sourceUrls
+      })
+    });
+
+    const cycle = await runAgentOrchestrationCycle(now, {
+      userId,
+      projectIds: [signalProjectId],
+      db,
+      services
+    });
+
+    expect(cycle.projects[0]?.outcome).toBe("COMPLETED");
+    const work = await db.agentWorkItem.findMany({
+      where: { projectId: signalProjectId }
+    });
+    expect(
+      work.filter((item) => {
+        const context = parseSignalCareResearchContext(item.operationalContext);
+        return context.targetProspect === "Heritage Provider Network";
+      })
+    ).toHaveLength(2);
+    expect(
+      work.some((item) => {
+        const context = parseSignalCareResearchContext(item.operationalContext);
+        return context.targetProspect === "Next Dental Group" && item.state === "DONE";
+      })
+    ).toBe(true);
+    expect(await db.agentDecision.count({ where: { userId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { userId } })).toBe(0);
+    expect(await db.pipelineAction.count({ where: { userId, type: "outreach" } })).toBe(0);
   });
 
   it("removes unrelated entity sources from qualification provenance", () => {

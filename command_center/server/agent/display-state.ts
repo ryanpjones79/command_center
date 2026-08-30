@@ -199,6 +199,27 @@ function signalCareExhaustion(
 ): SignalCareQualificationExhaustion | null {
   const failures = new Map<string, Array<{ name: string; at: Date }>>();
   const successes = new Map<string, Date>();
+  const terminalPasses = new Map<string, Date>();
+  for (const event of input.project.agentEvents) {
+    if (event.type !== "SIGNALCARE_QUALIFICATION_EXHAUSTED") continue;
+    try {
+      const metadata = JSON.parse(event.metadata ?? "{}") as {
+        outcome?: unknown;
+        targetProspect?: unknown;
+      };
+      if (
+        metadata.outcome === "PASS_INSUFFICIENT_EVIDENCE" &&
+        typeof metadata.targetProspect === "string"
+      ) {
+        terminalPasses.set(
+          metadata.targetProspect.trim().toLowerCase(),
+          event.createdAt
+        );
+      }
+    } catch {
+      // Invalid audit metadata cannot supersede deterministic work history.
+    }
+  }
   for (const item of input.project.agentWorkItems) {
     if (item.requiredCapability !== "SIGNALCARE_PUBLIC_WEB_RESEARCH") continue;
     const context = parseSignalCareContext(item.operationalContext);
@@ -230,7 +251,8 @@ function signalCareExhaustion(
       if (
         attempts.length < 2 ||
         !newestFailureAt ||
-        (successes.get(key)?.getTime() ?? 0) > newestFailureAt.getTime()
+        (successes.get(key)?.getTime() ?? 0) > newestFailureAt.getTime() ||
+        (terminalPasses.get(key)?.getTime() ?? 0) >= newestFailureAt.getTime()
       ) {
         return null;
       }
@@ -298,6 +320,7 @@ function latestMeaningfulOutcome(
     "QA_PASSED",
     "QA_FAILED",
     "SIGNALCARE_DISCOVERY_NO_MATCH",
+    "SIGNALCARE_QUALIFICATION_EXHAUSTED",
     "RYKAS_TRUTH_READ",
     "RYKAS_PURCHASE_CANDIDATE_READY",
     "RYKAS_DATA_BLOCKED",
