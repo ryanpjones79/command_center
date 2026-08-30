@@ -7,7 +7,8 @@ import { prisma } from "@/lib/prisma";
 import { recordAgentEvent } from "@/server/agent/event-service";
 import { reclassifySignalCareProspectResearch } from "@/server/agent/signalcare-research-service";
 import { createOwnerDecision } from "@/server/agent/work-service";
-import { RYKAS_READ_CAPABILITY, rykasTruthResultSchema } from "@/lib/rykas-truth-contract";
+import { RYKAS_READ_CAPABILITY, rykasTruthResultSchema, serializeRykasReadRequest } from "@/lib/rykas-truth-contract";
+import { RYKAS_OWNER_DATA_CAPABILITY, rykasOwnerFinancialUpdateResultSchema } from "@/lib/rykas-owner-financial-contract";
 
 const leaseMs = 5 * 60 * 1000;
 export const runnerResultSchema = z.object({
@@ -19,7 +20,8 @@ export const runnerResultSchema = z.object({
   acceptanceCriteriaSatisfied: z.boolean(), recommendedQaAction: z.enum(["PASS", "REPAIR", "ESCALATE"]),
   qaFeedback: z.string().max(10000).optional(), externalThreadId: z.string().max(500).optional(),
   externalRunId: z.string().max(500).optional(), providerIdentifier: z.string().max(100).optional(),
-  modelIdentifier: z.string().max(200).optional(), rykasTruthResult: rykasTruthResultSchema.optional()
+  modelIdentifier: z.string().max(200).optional(), rykasTruthResult: rykasTruthResultSchema.optional(),
+  rykasOwnerFinancialUpdateResult: rykasOwnerFinancialUpdateResultSchema.optional()
 });
 export type RunnerResult = z.infer<typeof runnerResultSchema>;
 
@@ -52,7 +54,7 @@ export async function claimRunnerWork(runner: AgentRunner, input: { capabilities
     }
     if (!item.workspaceIdentifier) continue;
     assertLocalRunnerCapability(item.requiredCapability);
-    if (item.requiredCapability === RYKAS_READ_CAPABILITY && item.project.agentConfig?.profile !== "RYKAS_GM") continue;
+    if ([RYKAS_READ_CAPABILITY, RYKAS_OWNER_DATA_CAPABILITY].includes(item.requiredCapability as never) && item.project.agentConfig?.profile !== "RYKAS_GM") continue;
     const policy = evaluateAgentPolicy({ category: item.actionCategory as never, projectProfile: item.project.agentConfig?.profile });
     if (policy !== "ALLOW") continue;
     const claimToken = randomUUID();
@@ -62,7 +64,7 @@ export async function claimRunnerWork(runner: AgentRunner, input: { capabilities
     if (claimed.count !== 1) continue;
     await db.agentWorkItem.update({ where: { id: item.id }, data: { state: "RUNNING", attemptCount: { increment: 1 }, startedAt: item.startedAt ?? now } });
     const run = await db.agentRun.create({ data: { userId: item.userId, projectId: item.projectId, workItemId: item.id,
-      idempotencyKey: `runner:${item.id}:${item.attemptCount + 1}`, role: item.agentRole, runType: item.requiredCapability === RYKAS_READ_CAPABILITY ? "RYKAS_TRUTH_READ" : "LOCAL_CODEX", status: "RUNNING",
+      idempotencyKey: `runner:${item.id}:${item.attemptCount + 1}`, role: item.agentRole, runType: item.requiredCapability === RYKAS_READ_CAPABILITY ? "RYKAS_TRUTH_READ" : item.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY ? "RYKAS_OWNER_DATA_UPDATE" : "LOCAL_CODEX", status: "RUNNING",
       executorIdentifier: runner.keyId, workspaceIdentifier: item.workspaceIdentifier, repositoryIdentifier: item.repositoryIdentifier } });
     await db.agentRunner.update({ where: { id: runner.id }, data: { currentWorkItemId: item.id } });
     await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, type: "WORK_DISPATCHED", summary: `${item.title} claimed by registered local runner.` }, db);
@@ -99,6 +101,20 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
   const run = item.runs[0];
   if (run?.status === "SUCCEEDED") return { duplicate: true, state: item.state };
   if (item.claimToken !== claimToken || item.executorIdentifier !== runner.keyId) throw new Error("Claim not found for this runner.");
+  if (item.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY && result.status === "SUCCEEDED") {
+    if (result.providerIdentifier !== "rykas-local-owner-data" || !result.rykasOwnerFinancialUpdateResult) throw new Error("Rykas owner-data work requires a schema-valid deterministic adapter result.");
+    const saved = rykasOwnerFinancialUpdateResultSchema.parse(result.rykasOwnerFinancialUpdateResult);
+    await db.$transaction([
+      db.agentRun.update({ where: { id: run.id }, data: { status: "SUCCEEDED", providerIdentifier: result.providerIdentifier, executorIdentifier: runner.keyId, operationalResultSummary: result.summary, evidence: result.evidence, structuredOutcome: JSON.stringify(saved), testOutcome: result.testResults, completedAt: now } }),
+      db.agentWorkItem.update({ where: { id: item.id }, data: { state: "DONE", resultSummary: result.summary, evidenceSummary: result.evidence, integrationStatus: "NOT_REQUIRED", blocker: null, claimToken: null, leaseExpiresAt: null, heartbeatAt: null, completedAt: now } }),
+      db.agentRunner.update({ where: { id: runner.id }, data: { currentWorkItemId: null, lastHeartbeatAt: now, lastSuccessfulRunAt: now, recentFailure: null } }),
+      db.agentProjectConfig.update({ where: { projectId: item.projectId }, data: { nextAgentReviewAt: now } })
+    ]);
+    const readRequest = serializeRykasReadRequest({ version: 1, operation: "FINANCIAL_SNAPSHOT", input: {} });
+    await db.agentWorkItem.upsert({ where: { projectId_idempotencyKey: { projectId: item.projectId, idempotencyKey: `rykas-financial-recheck:${item.id}` } }, update: {}, create: { userId: item.userId, projectId: item.projectId, idempotencyKey: `rykas-financial-recheck:${item.id}`, title: "Recheck Rykas financial truth", objective: "Recalculate the deterministic financial checklist and capital plan after the bounded owner-data save.", expectedValue: "Return a current or explicitly blocked capital plan from Rykas truth.", acceptanceCriteria: "The local adapter returns FINANCIAL_SNAPSHOT; missing values remain null and no purchase, payment, or commitment occurs.", agentRole: "RYKAS_CFO_CAPITAL_STEWARD", actionCategory: "RESEARCH_READ_ONLY", requiredCapability: RYKAS_READ_CAPABILITY, sandboxPolicy: "READ_ONLY", networkPolicy: "LOCALHOST_ONLY", operationalContext: readRequest, workspaceIdentifier: "rykas-repo", priority: "HIGH", maxAttempts: 2 } });
+    await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-owner-data-saved:${run.id}`, type: "RYKAS_OWNER_DATA_SAVED", summary: "Bounded owner financial facts were saved to Rykas manual truth and a fresh read was queued.", metadata: { writes: saved.writes, purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false } }, db);
+    return { duplicate: false, state: "DONE" as const };
+  }
   if (item.requiredCapability === RYKAS_READ_CAPABILITY && result.status === "SUCCEEDED") {
     if (result.providerIdentifier !== "rykas-local-truth" || !result.rykasTruthResult) throw new Error("Rykas truth work requires a schema-valid deterministic adapter result.");
     const truth = rykasTruthResultSchema.parse(result.rykasTruthResult);
@@ -116,6 +132,7 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
     return { duplicate: false, state: "DONE" as const };
   }
   if (item.requiredCapability !== RYKAS_READ_CAPABILITY && result.rykasTruthResult) throw new Error("Rykas truth results are not accepted for other capabilities.");
+  if (item.requiredCapability !== RYKAS_OWNER_DATA_CAPABILITY && result.rykasOwnerFinancialUpdateResult) throw new Error("Rykas owner-data results are not accepted for other capabilities.");
   const structured = JSON.stringify(result);
   await db.agentRun.update({ where: { id: run.id }, data: { status: result.status, providerIdentifier: result.providerIdentifier ?? "openai",
     modelIdentifier: result.modelIdentifier, externalThreadId: result.externalThreadId, externalRunId: result.externalRunId,

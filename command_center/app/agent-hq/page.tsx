@@ -171,7 +171,10 @@ export default async function AgentHqPage() {
                       <div className="mt-2 grid gap-1 rounded-lg border bg-background/40 p-2 text-xs text-muted-foreground">
                         <span>PO ledger: {display.supportingState.poLedgerStatus}</span>
                         <span>PO truth current: {display.supportingState.poTruthCurrent ? "Yes" : "No"}</span>
-                        <span>Safe inventory capital: {display.supportingState.safeInventoryCapital === null ? "Unknown" : display.supportingState.safeInventoryCapital.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                        <span>Safe buying capacity: {display.supportingState.safeBuyingCapacity === null ? "BLOCKED" : display.supportingState.safeBuyingCapacity.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                        <span>Core restock needs: {display.supportingState.coreRestockNeeds ?? "Unknown"}</span>
+                        <span>Debt plan: {display.supportingState.debtPlanStatus ?? "NEEDS DATA"}</span>
+                        <span>Financial health: {display.supportingState.financialHealth ?? "Unknown"}</span>
                       </div>
                     )}
                   </div>

@@ -48,4 +48,35 @@ describe("bounded deterministic Rykas truth adapter", () => {
     const failed = vi.fn(async () => new Response("unavailable", { status: 503 })) as typeof fetch;
     await expect(new RykasTruthAdapter(config, failed).execute({ version: 1, operation: "PURCHASE_CANDIDATES", input: { limit: 10 } })).rejects.toThrow("unavailable");
   });
+  it("writes only bounded owner-maintained facts and cannot report a financial side effect", async () => {
+    const ownerConfig = { ...config, FEATURE_RYKAS_OWNER_DATA_WRITE: "true" } as RunnerConfig;
+    const ownerFetcher = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      expect(request.businessCash).toEqual({ label: "Operating cash", amount: 30000 });
+      return new Response(JSON.stringify({
+        schemaVersion: "RYKAS_OWNER_FINANCIAL_TRUTH_UPDATE_V1",
+        status: "SAVED",
+        writes: { businessCash: 1, debts: 0, obligations: 0, ownerPolicy: 0, poCertification: 0 },
+        observedAt: "2026-08-29T12:00:00.000Z",
+        purchaseAuthorized: false,
+        purchaseExecuted: false,
+        debtPaymentAuthorized: false,
+        debtPaymentExecuted: false,
+        financialCommitmentCreated: false
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const request = {
+      version: 1,
+      observedAt: "2026-08-29T12:00:00.000Z",
+      businessCash: { label: "Operating cash", amount: 30000 },
+      debts: null,
+      obligations: null,
+      ownerPolicy: null,
+      poCertification: null
+    };
+    const result = await new RykasTruthAdapter(ownerConfig, ownerFetcher).executeOwnerFinancialUpdate(request);
+    expect(result).toMatchObject({ purchaseExecuted: false, debtPaymentExecuted: false, financialCommitmentCreated: false });
+    await expect(new RykasTruthAdapter(config, ownerFetcher).executeOwnerFinancialUpdate(request)).rejects.toThrow("disabled");
+    await expect(new RykasTruthAdapter(ownerConfig, ownerFetcher).executeOwnerFinancialUpdate({ ...request, routingNumber: "123456789" })).rejects.toThrow();
+  });
 });

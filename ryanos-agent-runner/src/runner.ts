@@ -12,7 +12,7 @@ export class LocalRunner {
   constructor(private config: RunnerConfig) { this.registry = loadWorkspaceRegistry(config.RYANOS_WORKSPACE_REGISTRY); this.client = new RyanOsClient(config); this.worker = new CodexWorker(config); this.worktrees = new WorktreeManager(config.RYANOS_WORKTREE_ROOT); }
   async once() {
     if (this.config.FEATURE_RUNNER_EXECUTION !== "true") return false;
-    const capabilities = ["REPOSITORY_READ", "REPOSITORY_CHANGE", "RUN_TESTS", "CODEX_IMPLEMENTATION", "CODEX_REVIEW", ...(this.config.FEATURE_RYKAS_TRUTH_READ === "true" ? ["RYKAS_OPERATIONS_READ"] : [])];
+    const capabilities = ["REPOSITORY_READ", "REPOSITORY_CHANGE", "RUN_TESTS", "CODEX_IMPLEMENTATION", "CODEX_REVIEW", ...(this.config.FEATURE_RYKAS_TRUTH_READ === "true" ? ["RYKAS_OPERATIONS_READ"] : []), ...(this.config.FEATURE_RYKAS_OWNER_DATA_WRITE === "true" ? ["RYKAS_OWNER_DATA_UPDATE"] : [])];
     const claim = await this.client.claim(capabilities); if (!claim) return false;
     let heartbeat: NodeJS.Timeout | undefined;
     try {
@@ -21,6 +21,12 @@ export class LocalRunner {
         const request = JSON.parse(claim.operationalContext ?? "null") as unknown;
         const result = await new RykasTruthAdapter(this.config).execute(request);
         await this.client.result(claim, { status: "SUCCEEDED", summary: `Read-only Rykas ${result.operation} completed.`, filesChanged: [], testsRun: ["Zod input/output validation"], testResults: "Bounded result schema passed.", unresolvedIssues: result.data.blockers.map((item) => item.summary), evidence: JSON.stringify({ observedAt: result.observedAt, authoritativeSource: result.authoritativeSource, freshness: result.freshness, blockerCount: result.data.blockers.length }), acceptanceCriteriaSatisfied: true, recommendedQaAction: "PASS", providerIdentifier: "rykas-local-truth", rykasTruthResult: result });
+        return true;
+      }
+      if (claim.allowedCapability === "RYKAS_OWNER_DATA_UPDATE") {
+        const request = JSON.parse(claim.operationalContext ?? "null") as unknown;
+        const result = await new RykasTruthAdapter(this.config).executeOwnerFinancialUpdate(request);
+        await this.client.result(claim, { status: "SUCCEEDED", summary: "Rykas owner financial truth saved; a fresh read is required.", filesChanged: [], testsRun: ["Zod input/output validation"], testResults: "Bounded owner-data result schema passed.", unresolvedIssues: [], evidence: JSON.stringify({ observedAt: result.observedAt, writes: result.writes, purchaseExecuted: false, debtPaymentExecuted: false }), acceptanceCriteriaSatisfied: true, recommendedQaAction: "PASS", providerIdentifier: "rykas-local-owner-data", rykasOwnerFinancialUpdateResult: result });
         return true;
       }
       const mutable = claim.allowedCapability === "REPOSITORY_CHANGE" || claim.allowedCapability === "CODEX_IMPLEMENTATION";

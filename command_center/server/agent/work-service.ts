@@ -14,6 +14,7 @@ import {
   RYKAS_READ_CAPABILITY,
   serializeRykasReadRequest
 } from "@/lib/rykas-truth-contract";
+import { RYKAS_OWNER_DATA_CAPABILITY, rykasOwnerFinancialUpdateSchema, serializeRykasOwnerFinancialUpdate } from "@/lib/rykas-owner-financial-contract";
 import type { OwnerDecisionPlan } from "@/server/agent/contracts";
 import { recordAgentEvent } from "@/server/agent/event-service";
 import {
@@ -55,6 +56,27 @@ export async function transitionAgentWorkItem(
       completedAt: ["DONE", "READY_FOR_REVIEW", "FAILED", "PARKED"].includes(nextState) ? now : null
     }
   });
+}
+
+export async function submitRykasOwnerFinancialUpdate(
+  userId: string,
+  decisionId: string,
+  rawUpdate: unknown,
+  db: PrismaClient = prisma
+) {
+  const update = rykasOwnerFinancialUpdateSchema.parse(rawUpdate);
+  const decision = await loadDecisionForResolution(userId, decisionId, db);
+  if (!decision || decision.status !== "PENDING") throw new Error("Pending Rykas financial truth decision not found.");
+  if (!parseRykasTruthReconciliation(decision.context)) throw new Error("Decision is not a Rykas financial truth update.");
+  if (decision.actionRequest) throw new Error("Financial data maintenance must not create an action request.");
+  const work = decision.originatingWorkItem;
+  if (!work || work.state !== "NEEDS_RYAN") throw new Error("Rykas financial truth work is not awaiting owner input.");
+  const now = new Date();
+  await db.agentDecision.update({ where: { id: decision.id }, data: { status: "RESOLVED", selectedChoice: "UPDATED_AND_RECHECK", resultingAction: "Bounded owner facts queued for the Rykas manual truth layer. No purchase, payment, or commitment occurred.", resolvedAt: now } });
+  await transitionAgentWorkItem(userId, work.id, "QUEUED", { blocker: null, nextEligibleRunAt: now }, db);
+  await db.agentWorkItem.update({ where: { id: work.id }, data: { title: "Save Rykas financial truth update", objective: "Persist only the owner-confirmed financial facts into the existing Rykas manual truth layer.", expectedValue: "Refresh the deterministic financial checklist without copying authoritative truth into RyanOS.", acceptanceCriteria: "The local Rykas API accepts the strict bounded payload, returns a schema-valid save receipt, and performs no purchase, payment, or financial commitment.", agentRole: "RYKAS_OWNER_DATA_STEWARD", actionCategory: "RESEARCH_READ_ONLY", requiredCapability: RYKAS_OWNER_DATA_CAPABILITY, sandboxPolicy: "WORKSPACE_WRITE", networkPolicy: "LOCALHOST_ONLY", operationalContext: serializeRykasOwnerFinancialUpdate(update), workspaceIdentifier: "rykas-repo", attemptCount: 0, maxAttempts: 2, resultSummary: null, evidenceSummary: null, completedAt: null } });
+  await recordAgentEvent({ userId, projectId: decision.projectId, workItemId: work.id, idempotencyKey: `rykas-owner-data-queued:${decision.id}`, type: "RYKAS_OWNER_DATA_UPDATE_QUEUED", summary: "Consolidated owner financial facts queued for the bounded Rykas manual truth update.", metadata: { purchaseAuthorized: false, purchaseExecuted: false, debtPaymentAuthorized: false, debtPaymentExecuted: false } }, db);
+  return { queued: true, workItemId: work.id };
 }
 
 export async function createOwnerDecision(

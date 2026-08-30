@@ -8,12 +8,12 @@ export const RYKAS_TRUTH_RECONCILIATION_CHOICES = [
   "CAPITAL_UNKNOWN"
 ] as const;
 export const RYKAS_OWNER_DATA_SOURCE_INSTRUCTIONS =
-  "In the existing Rykas Sourcing Command Center, open /sourcing and use the Safe Inventory Capital card. Use CONFIRM NO OPEN POS only when there truly are no commitments. If commitments exist, load inputs/command_center/purchase_orders.example.tsv through the controlled procurement import and certify CURRENT_OPEN_POS_LOADED. Update Balance as of and Operating bank / checking balance in the existing Rykas Owner Health workbook, then run the normal Rykas Command Center refresh. Safe inventory capital is calculated by Rykas; do not enter it in RyanOS.";
+  "Use the compact Rykas Financial Truth Update form in Agent HQ. Save only owner-confirmed cash, debt, obligations, and policy facts. Existing Amazon, inventory, sourcing, and PO rows remain system-derived; spreadsheets are historical reference only. SAVE & RECHECK writes through the bounded localhost connector to Rykas manual truth and cannot place an order, move money, pay debt, or create a commitment.";
 
 export const rykasTruthReconciliationSchema = z
   .object({
     kind: z.literal(RYKAS_TRUTH_RECONCILIATION_KIND),
-    truthArea: z.literal("PO_AND_CAPITAL"),
+    truthArea: z.enum(["PO_AND_CAPITAL", "FINANCIAL"]),
     observedAt: z.string().datetime(),
     sourceUpdatedAt: z.string().datetime().nullable(),
     poTruthCurrent: z.boolean(),
@@ -22,7 +22,8 @@ export const rykasTruthReconciliationSchema = z
     poCertifiedAt: z.string().datetime().nullable(),
     openCommitments: z.number().finite().nullable(),
     safeInventoryCapital: z.number().finite().nullable(),
-    requiredOwnerAction: z.string().min(1).max(2000)
+    requiredOwnerAction: z.string().min(1).max(2000),
+    requestedFields: z.array(z.string().max(100)).max(30).optional()
   })
   .strict();
 
@@ -67,6 +68,7 @@ export function extractRykasTruthReconciliation(
               openCommitments?: unknown;
               safeInventoryCapital?: unknown;
             } | null;
+            financialSnapshot?: { missingInputs?: unknown; checklist?: unknown } | null;
           };
         } | null;
       }
@@ -87,9 +89,11 @@ export function extractRykasTruthReconciliation(
       : typeof capital.reason === "string" && capital.reason.trim()
         ? capital.reason
         : "Update the authoritative Rykas PO and owner-capital inputs, then request a recheck.";
+  const financial = truth?.data?.financialSnapshot;
+  const financialMissing = Array.isArray(financial?.missingInputs) ? financial.missingInputs.filter((value): value is string => typeof value === "string") : [];
   return rykasTruthReconciliationSchema.parse({
     kind: RYKAS_TRUTH_RECONCILIATION_KIND,
-    truthArea: "PO_AND_CAPITAL",
+    truthArea: financialMissing.length ? "FINANCIAL" : "PO_AND_CAPITAL",
     observedAt: truth.observedAt,
     sourceUpdatedAt:
       typeof truth.sourceUpdatedAt === "string" ? truth.sourceUpdatedAt : null,
@@ -109,7 +113,8 @@ export function extractRykasTruthReconciliation(
         ? capital.openCommitments
         : null,
     safeInventoryCapital: safeCapital,
-    requiredOwnerAction
+    requiredOwnerAction,
+    requestedFields: financialMissing
   });
 }
 
@@ -120,7 +125,7 @@ export function rykasTruthReconciliationDecision(
   return {
     category: "RESEARCH_READ_ONLY" as const,
     question:
-      "Rykas buying is blocked because PO/capital truth is stale. Update the authoritative Rykas PO/capital source, then request a recheck?",
+      "RYKAS FINANCIAL TRUTH UPDATE — provide only the missing, stale, or conflicting owner facts needed for a safe capital plan.",
     context: serializeRykasTruthReconciliation(data),
     recommendedChoice: "UPDATED_AND_RECHECK",
     availableChoices: [...RYKAS_TRUTH_RECONCILIATION_CHOICES],
@@ -138,9 +143,9 @@ export function rykasTruthReconciliationWorkPlan(
 ) {
   return {
     disposition: "CREATE_WORK" as const,
-    title: "Rykas buying blocked",
+    title: "Rykas financial truth update",
     objective:
-      "Ask the owner to update the existing authoritative Rykas PO/capital source before a fresh read.",
+      "Collect one consolidated owner update for missing financial truth, persist it in Rykas, then run a fresh deterministic read.",
     expectedValue:
       "Restore decision-grade buying-budget truth without making RyanOS a financial source of truth.",
     acceptanceCriteria:
@@ -155,7 +160,7 @@ export function rykasTruthReconciliationWorkPlan(
     sandboxPolicy: "READ_ONLY" as const,
     networkPolicy: "OFF" as const,
     operationalContext:
-      "Owner-data dependency only; RyanOS must not write or certify PO/capital truth.",
+      "Owner-data maintenance only; the bounded runner may write approved facts to Rykas manual truth. No financial authorization or external action.",
     rykasReadRequest: null,
     evidence:
       "Rykas returned non-current PO truth or unknown safe inventory capital.",
@@ -170,6 +175,6 @@ export function rykasTruthReconciliationWorkPlan(
 export function rykasOwnerChoiceLabel(choice: string) {
   if (choice === "UPDATED_AND_RECHECK") return "UPDATED & RECHECK";
   if (choice === "REQUIRES_RECONCILIATION") return "NEEDS RECONCILIATION";
-  if (choice === "CAPITAL_UNKNOWN") return "CAPITAL UNKNOWN";
+  if (choice === "CAPITAL_UNKNOWN") return "NOT AVAILABLE";
   return choice;
 }

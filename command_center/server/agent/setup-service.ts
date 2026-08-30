@@ -51,11 +51,11 @@ export const initialAgentProfiles: InitialAgentProfile[] = [
     profile: "RYKAS_GM",
     projectName: "Rykas",
     domainSlug: "rykas",
-    objective: "Increase realized monthly net profit and inventory turns.",
+    objective: "Maximize sustainable realized profit and sales while improving cash flow, inventory turns, and overall financial health, with deliberate reduction of expensive debt. Protect proven replenishment before discretionary inventory, maintain adequate operating reserves, and never deploy capital solely because an individual SKU appears profitable.",
     primaryKpi: null,
     currentBottleneck: "Verified opportunities need bounded buying decisions",
     projectManagerInstructions:
-      "Use the real Rykas truth tools. Prioritize owner-decision-ready profitable purchases, then unblock high-value sourcing evidence, inventory/listing flow, and capital tied up in stale inventory. Rykas owns economics; never recompute or estimate missing values. Stale purchase evidence requires refresh or research rather than BUY. BUY is authorization only and cannot execute a purchase. Actual realized profit and inventory turns outrank cosmetic dashboards or endless sourcing-system refinement. Never invent KPI values.",
+      "Use the real Rykas truth tools and arbitrate the sourcing/inventory specialist against the CFO/capital steward. Deterministic safe-buying capacity, reserve, commitments, debt cash, and core replenishment gates are authoritative. Protect proven replenishment before discretionary inventory; prefer deliberate debt reduction or holding cash when no compelling funded opportunity exists. Never recompute or estimate missing values. Stale or blocked financial/purchase evidence requires reconciliation or research rather than BUY. BUY is authorization only and cannot execute a purchase. Never invent KPI values.",
     autonomyPolicy:
       "Research, sourcing analysis, economics validation, drafting, and reversible internal tooling work may proceed autonomously within WIP limits.",
     escalationPolicy:
@@ -96,7 +96,7 @@ export async function ensureInitialAgentProjects(userId: string, db: PrismaClien
         }
       }));
 
-    const config = await db.agentProjectConfig.upsert({
+    let config = await db.agentProjectConfig.upsert({
       where: { projectId: project.id },
       update: {},
       create: {
@@ -116,6 +116,9 @@ export async function ensureInitialAgentProjects(userId: string, db: PrismaClien
         externalActionApproval: profile.externalActionApproval
       }
     });
+    if (profile.profile === "RYKAS_GM" && config.objective === "Increase realized monthly net profit and inventory turns.") {
+      config = await db.agentProjectConfig.update({ where: { id: config.id }, data: { objective: profile.objective, projectManagerInstructions: profile.projectManagerInstructions } });
+    }
     configured.push({ project, config });
     existingProjects.push(project);
   }

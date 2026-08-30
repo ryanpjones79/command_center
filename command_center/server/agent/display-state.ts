@@ -96,6 +96,10 @@ export type AgentProjectDisplayState = {
     poLedgerStatus: string;
     poTruthCurrent: boolean;
     safeInventoryCapital: number | null;
+    safeBuyingCapacity: number | null;
+    coreRestockNeeds: number | null;
+    debtPlanStatus: string | null;
+    financialHealth: string | null;
     poCertifiedAt: string | null;
     openCommitments: number | null;
   };
@@ -387,21 +391,34 @@ export function deriveAgentProjectDisplayState(
       "Intentionally paused; no active review or machine work is requested.";
   } else if (rykas) {
     const capital = rykas.truth.data.capital;
-    if (capital) {
+    const financial = rykas.truth.data.financialSnapshot;
+    const capitalPlan = financial?.capitalPlan ?? rykas.truth.data.capitalPlan;
+    if (capital || financial || capitalPlan) {
       supportingState = {
         kind: "RYKAS_TRUTH",
-        poLedgerStatus: capital.poLedgerStatus,
-        poTruthCurrent: capital.poTruthCurrent,
-        safeInventoryCapital: capital.safeInventoryCapital,
-        poCertifiedAt: capital.poCertifiedAt,
-        openCommitments: capital.openCommitments
+        poLedgerStatus: capital?.poLedgerStatus ?? "UNKNOWN",
+        poTruthCurrent: capital?.poTruthCurrent ?? !financial?.missingInputs.includes("PO_COMMITMENTS"),
+        safeInventoryCapital: capital?.safeInventoryCapital ?? null,
+        safeBuyingCapacity: capitalPlan?.safeBuyingCapacity ?? null,
+        coreRestockNeeds: financial?.replenishment.candidateCount ?? null,
+        debtPlanStatus: typeof financial?.debtAdvice.status === "string" ? financial.debtAdvice.status : null,
+        financialHealth: financial?.financialHealth.status ?? null,
+        poCertifiedAt: capital?.poCertifiedAt ?? null,
+        openCommitments: capitalPlan?.committedCapital ?? capital?.openCommitments ?? null
       };
     }
-    if (
+    if (financial && (financial.status === "BLOCKED" || capitalPlan?.status === "BLOCKED")) {
+      displayHealth = "NEEDS_ATTENTION";
+      displayBottleneck = financial.missingInputs.length
+        ? `Financial truth needs one consolidated update: ${financial.missingInputs.join(", ")}.`
+        : "Rykas financial truth requires reconciliation before buying decisions.";
+    } else if (
+      !financial && (
       !capital ||
       !capital.reliable ||
       !capital.poTruthCurrent ||
       capital.safeInventoryCapital === null
+      )
     ) {
       displayHealth = "NEEDS_ATTENTION";
       displayBottleneck =
@@ -416,8 +433,10 @@ export function deriveAgentProjectDisplayState(
     } else {
       displayHealth = activeWork.length ? "ON_TRACK" : "WAITING";
       displayBottleneck = rykas.truth.data.purchaseCandidates.length
-        ? "A purchase candidate is ready for bounded owner review; no purchase has occurred."
-        : "No PO/capital reconciliation blocker is present in the latest Rykas truth.";
+        ? "A purchase candidate fits current deterministic capital gates and is ready for bounded owner review; no purchase has occurred."
+        : capitalPlan && capitalPlan.safeBuyingCapacity === 0
+          ? "No discretionary buying capacity is available; debt reduction or holding cash should be considered."
+          : "No PO/capital reconciliation blocker is present in the latest Rykas truth.";
     }
   } else if (signalCare) {
     displayHealth = "NEEDS_ATTENTION";

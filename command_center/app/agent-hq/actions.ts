@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
-import { resolveOwnerDecision, setAgentProjectPaused } from "@/server/agent/work-service";
+import { resolveOwnerDecision, setAgentProjectPaused, submitRykasOwnerFinancialUpdate } from "@/server/agent/work-service";
 
 function revalidateAgentViews() {
   revalidatePath("/agent-hq");
@@ -38,6 +38,38 @@ export async function resolveAgentDecisionAction(formData: FormData) {
     return;
   }
   await resolveOwnerDecision(user.id, parsed.data.decisionId, parsed.data.choice);
+  revalidateAgentViews();
+}
+
+function optionalNumber(formData: FormData, name: string) {
+  const raw = String(formData.get(name) ?? "").trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new Error(`${name} must be numeric.`);
+  return value;
+}
+
+export async function saveRykasFinancialTruthAction(formData: FormData) {
+  const user = await requireUser();
+  const decisionId = entityIdSchema.parse(formData.get("decisionId"));
+  const cash = optionalNumber(formData, "businessCash");
+  const debtBalance = optionalNumber(formData, "debtBalance");
+  const debtStatus = String(formData.get("debtStatus") ?? "").trim() || null;
+  const obligationAmount = optionalNumber(formData, "obligationAmount");
+  const obligationStatus = String(formData.get("obligationStatus") ?? "").trim() || null;
+  const reserve = optionalNumber(formData, "minimumOperatingReserve");
+  const discretionaryPct = optionalNumber(formData, "maximumDiscretionaryInventoryPercent");
+  const observedAt = new Date().toISOString();
+  const payload = {
+    version: 1 as const,
+    observedAt,
+    businessCash: cash === null ? null : { label: "Rykas operating cash", amount: cash },
+    debts: debtStatus ? { status: debtStatus, items: debtStatus === "CURRENT_ROWS_LOADED" ? [{ displayName: String(formData.get("debtLabel") ?? "").trim(), debtType: "OTHER", currentBalance: debtBalance, apr: optionalNumber(formData, "debtAprPercent") === null ? null : optionalNumber(formData, "debtAprPercent")! / 100, minimumPayment: optionalNumber(formData, "debtMinimumPayment"), nextDueDate: String(formData.get("debtNextDueDate") ?? "").trim() || null, promotionalRateEnd: null, ownerPriority: optionalNumber(formData, "debtOwnerPriority"), notes: null }] : [], note: null } : null,
+    obligations: obligationStatus ? { status: obligationStatus, items: obligationStatus === "CURRENT_ROWS_LOADED" ? [{ vendor: String(formData.get("obligationVendor") ?? "").trim() || null, description: String(formData.get("obligationDescription") ?? "").trim(), amountDue: obligationAmount, dueDate: String(formData.get("obligationDueDate") ?? "").trim(), category: "UNRECORDED_OBLIGATION", relatedPurchaseOrderId: null }] : [], note: null } : null,
+    ownerPolicy: reserve === null && discretionaryPct === null ? null : { minimumOperatingReserve: reserve, minimumDebtPaymentBuffer: optionalNumber(formData, "minimumDebtPaymentBuffer"), desiredMonthlyExtraDebtPayment: optionalNumber(formData, "desiredMonthlyExtraDebtPayment"), percentOfExcessCashToDebt: optionalNumber(formData, "percentOfExcessCashToDebt") === null ? null : optionalNumber(formData, "percentOfExcessCashToDebt")! / 100, maximumDiscretionaryInventoryPercent: discretionaryPct === null ? null : discretionaryPct / 100, maximumBrandConcentrationPercent: optionalNumber(formData, "maximumBrandConcentrationPercent") === null ? null : optionalNumber(formData, "maximumBrandConcentrationPercent")! / 100, coreReplenishmentPriority: "CORE_FIRST", speculativeTestBudgetCap: optionalNumber(formData, "speculativeTestBudgetCap"), debtStrategy: String(formData.get("debtStrategy") ?? "HIGHEST_APR"), notes: null },
+    poCertification: String(formData.get("poCertification") ?? "").trim() || null
+  };
+  await submitRykasOwnerFinancialUpdate(user.id, decisionId, payload);
   revalidateAgentViews();
 }
 

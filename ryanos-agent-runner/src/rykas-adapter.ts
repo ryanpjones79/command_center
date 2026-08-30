@@ -1,6 +1,7 @@
 import type { RunnerConfig } from "./config.js";
 import { rykasReadRequestSchema, rykasTruthResultSchema, type RykasTruthResult } from "./rykas-contracts.js";
 import { z } from "zod";
+import { rykasOwnerFinancialUpdateResultSchema, rykasOwnerFinancialUpdateSchema } from "./rykas-owner-financial-contract.js";
 
 const SOURCE = "Rykas SQL Server database rykas via loopback Command Center marts";
 const rawListSchema = z.object({ items: z.array(z.record(z.unknown())).max(500) });
@@ -57,14 +58,42 @@ export class RykasTruthAdapter {
     const raw = await response.text(); if (raw.length > 2_000_000) throw new Error("Rykas truth response exceeded the bounded size.");
     return JSON.parse(raw) as unknown;
   }
+  private async post(path: string, body: unknown) {
+    const url = new URL(path, this.config.RYKAS_TRUTH_BASE_URL);
+    const origin = new URL(this.config.RYKAS_TRUTH_BASE_URL);
+    if (url.origin !== origin.origin || !url.pathname.startsWith("/api/sourcing/") || !["/api/sourcing/sale-event/evaluate", "/api/sourcing/finance/owner-inputs"].includes(url.pathname)) throw new Error("Rykas adapter path denied.");
+    const response = await this.fetcher(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(this.config.RYKAS_TRUTH_TIMEOUT_MS), headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error(`Rykas truth unavailable (${response.status}).`);
+    const raw = await response.text(); if (raw.length > 2_000_000) throw new Error("Rykas truth response exceeded the bounded size.");
+    return JSON.parse(raw) as unknown;
+  }
   async execute(rawRequest: unknown): Promise<RykasTruthResult> {
     if (this.config.FEATURE_RYKAS_TRUTH_READ !== "true") throw new Error("Rykas truth connector is disabled.");
     const request = rykasReadRequestSchema.parse(rawRequest); const observedAt = new Date().toISOString();
+    if (["FINANCIAL_SNAPSHOT", "CAPITAL_PLAN", "REPLENISHMENT_CANDIDATES", "CAPITAL_RELEASE_CANDIDATES", "SALE_EVENT_EVALUATION"].includes(request.operation)) {
+      let financialSnapshot = null; let capitalPlan = null; let replenishmentCandidates = null; let capitalReleaseCandidates = null; let saleEventEvaluation = null;
+      if (request.operation === "FINANCIAL_SNAPSHOT") financialSnapshot = z.record(z.unknown()).parse(await this.get("/api/sourcing/finance/snapshot"));
+      if (request.operation === "CAPITAL_PLAN") capitalPlan = z.record(z.unknown()).parse(await this.get("/api/sourcing/finance/capital-plan"));
+      if (request.operation === "REPLENISHMENT_CANDIDATES") replenishmentCandidates = z.record(z.unknown()).parse(await this.get(`/api/sourcing/inventory/replenishment-candidates?limit=${request.input.limit}`));
+      if (request.operation === "CAPITAL_RELEASE_CANDIDATES") capitalReleaseCandidates = z.record(z.unknown()).parse(await this.get(`/api/sourcing/inventory/capital-release-candidates?limit=${request.input.limit}`));
+      if (request.operation === "SALE_EVENT_EVALUATION") saleEventEvaluation = z.record(z.unknown()).parse(await this.post("/api/sourcing/sale-event/evaluate", { candidateIds: request.input.candidateIds }));
+      const payload = financialSnapshot ?? capitalPlan ?? replenishmentCandidates ?? capitalReleaseCandidates ?? saleEventEvaluation ?? {};
+      const sourceUpdatedAt = iso(payload.asOf) ?? observedAt;
+      const blocked = payload.status === "BLOCKED";
+      const missingInputs = Array.isArray(payload.missingInputs) ? payload.missingInputs.filter((value): value is string => typeof value === "string") : [];
+      const blockers = (Array.isArray(payload.blockers) ? payload.blockers : missingInputs).slice(0, 25).map((value, index) => ({ id: `financial:${request.operation}:${index}`, opportunityId: null, stage: "SYSTEM" as const, code: blocked ? "FINANCIAL_TRUTH_BLOCKED" : "FINANCIAL_TRUTH_NOTICE", summary: String(value).slice(0, 1000), sourceUpdatedAt, stale: blocked }));
+      return rykasTruthResultSchema.parse({ schemaVersion: "RYKAS_TRUTH_READ_V1", operation: request.operation, readOnly: true, purchaseAuthorized: false, purchaseExecuted: false, observedAt, authoritativeSource: SOURCE, sourceUpdatedAt, freshness: blocked ? "STALE" : "CURRENT", stale: blocked, data: { actionSummary: [], capital: null, opportunities: [], purchaseCandidates: [], blockers, detail: null, financialSnapshot, capitalPlan, replenishmentCandidates, capitalReleaseCandidates, saleEventEvaluation } });
+    }
     let summary: z.infer<typeof rawSummarySchema> | null = null; let rawItems: Record<string, unknown>[] = []; let detail: Record<string, unknown> | null = null;
+    let operationsFinancialSnapshot: Record<string, unknown> | null = null;
     if (request.operation === "OPPORTUNITY_DETAIL") detail = z.record(z.unknown()).parse(await this.get(`/api/sourcing/opportunities/${request.input.opportunityId.slice(3)}`));
     else {
-      const [summaryRaw, listRaw] = await Promise.all([this.get("/api/sourcing/summary"), this.get("/api/sourcing/opportunities")]);
+      const [summaryRaw, listRaw, financeRaw] = await Promise.all([this.get("/api/sourcing/summary"), this.get("/api/sourcing/opportunities"), request.operation === "OPERATIONS_SNAPSHOT" ? this.get("/api/sourcing/finance/snapshot") : Promise.resolve(null)]);
       summary = rawSummarySchema.parse(summaryRaw); rawItems = rawListSchema.parse(listRaw).items;
+      if (financeRaw) {
+        const candidate = z.record(z.unknown()).parse(financeRaw);
+        operationsFinancialSnapshot = candidate.schemaVersion === "RYKAS_FINANCIAL_SNAPSHOT_V1" ? candidate : null;
+      }
     }
     const all = rawItems.map((row) => normalizeOpportunity(row, observedAt));
     const limit = request.operation === "OPERATIONS_SNAPSHOT" || request.operation === "SOURCING_OPPORTUNITIES" || request.operation === "PURCHASE_CANDIDATES" || request.operation === "OPERATIONS_BLOCKERS" ? request.input.limit : 1;
@@ -82,6 +111,12 @@ export class RykasTruthAdapter {
     const actionSummary = (summary?.actions ?? []).map((row) => ({ action: text(row.action_bucket, 100) ?? "UNKNOWN", count: int(row.action_count) ?? 0, topOpportunityScore: num(row.top_opportunity_score) })).slice(0, 30);
     const sourceUpdatedAt = latest(detailOutput?.opportunity.freshness.sourceUpdatedAt, capital?.poCertifiedAt, ...all.map((item) => item.freshness.sourceUpdatedAt));
     const stale = Boolean(detailOutput?.opportunity.freshness.stale || capital && !capital.poTruthCurrent || opportunities.some((item) => item.freshness.stale));
-    return rykasTruthResultSchema.parse({ schemaVersion: "RYKAS_TRUTH_READ_V1", operation: request.operation, readOnly: true, purchaseAuthorized: false, purchaseExecuted: false, observedAt, authoritativeSource: SOURCE, sourceUpdatedAt, freshness: stale ? "STALE" : sourceUpdatedAt ? "CURRENT" : "UNKNOWN", stale, data: { actionSummary, capital, opportunities: request.operation === "PURCHASE_CANDIDATES" ? [] : opportunities, purchaseCandidates: request.operation === "OPPORTUNITY_DETAIL" ? [] : purchaseCandidates, blockers: blockers.slice(0, limit), detail: detailOutput } });
+    return rykasTruthResultSchema.parse({ schemaVersion: "RYKAS_TRUTH_READ_V1", operation: request.operation, readOnly: true, purchaseAuthorized: false, purchaseExecuted: false, observedAt, authoritativeSource: SOURCE, sourceUpdatedAt, freshness: stale ? "STALE" : sourceUpdatedAt ? "CURRENT" : "UNKNOWN", stale, data: { actionSummary, capital, opportunities: request.operation === "PURCHASE_CANDIDATES" ? [] : opportunities, purchaseCandidates: request.operation === "OPPORTUNITY_DETAIL" ? [] : purchaseCandidates, blockers: blockers.slice(0, limit), detail: detailOutput, financialSnapshot: operationsFinancialSnapshot, capitalPlan: null, replenishmentCandidates: null, capitalReleaseCandidates: null, saleEventEvaluation: null } });
+  }
+
+  async executeOwnerFinancialUpdate(rawRequest: unknown) {
+    if (this.config.FEATURE_RYKAS_OWNER_DATA_WRITE !== "true") throw new Error("Rykas owner-data write connector is disabled.");
+    const request = rykasOwnerFinancialUpdateSchema.parse(rawRequest);
+    return rykasOwnerFinancialUpdateResultSchema.parse(await this.post("/api/sourcing/finance/owner-inputs", request));
   }
 }
