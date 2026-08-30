@@ -14,6 +14,8 @@ export type PortfolioProjectSnapshot = {
   pendingDecisionCount: number;
   lastAgentReviewAt: Date | null;
   nextAgentReviewAt: Date | null;
+  enabled?: boolean;
+  paused?: boolean;
 };
 
 export type ChiefPortfolioAssessment = {

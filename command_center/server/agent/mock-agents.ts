@@ -14,24 +14,27 @@ const staleAfterMs = 7 * 24 * 60 * 60 * 1000;
 
 export class DeterministicChiefPortfolioAgent implements ChiefPortfolioAgent {
   async inspectPortfolio(projects: Parameters<ChiefPortfolioAgent["inspectPortfolio"]>[0], now: Date) {
-    const stalledProjectIds = projects
+    const activeProjects = projects.filter(
+      (project) => project.enabled !== false && project.paused !== true
+    );
+    const stalledProjectIds = activeProjects
       .filter(
         (project) =>
           !project.lastAgentReviewAt || now.getTime() - project.lastAgentReviewAt.getTime() > staleAfterMs
       )
       .map((project) => project.projectId);
-    const wipViolationProjectIds = projects
+    const wipViolationProjectIds = activeProjects
       .filter((project) => project.activeWorkCount > project.maxConcurrentWorkItems)
       .map((project) => project.projectId);
-    const projectsNeedingPmReview = projects
+    const projectsNeedingPmReview = activeProjects
       .filter((project) => !project.nextAgentReviewAt || project.nextAgentReviewAt <= now)
       .map((project) => project.projectId);
-    const movingProjectIds = projects
+    const movingProjectIds = activeProjects
       .filter((project) => !stalledProjectIds.includes(project.projectId) && project.activeWorkCount > 0)
       .map((project) => project.projectId);
-    const blocked = projects.some((project) => project.health === "BLOCKED");
+    const blocked = activeProjects.some((project) => project.health === "BLOCKED");
     const needsAttention =
-      blocked || stalledProjectIds.length > 0 || wipViolationProjectIds.length > 0 || projects.some((p) => p.pendingDecisionCount > 0);
+      blocked || stalledProjectIds.length > 0 || wipViolationProjectIds.length > 0 || activeProjects.some((p) => p.pendingDecisionCount > 0);
 
     return {
       generatedAt: now,
@@ -41,7 +44,7 @@ export class DeterministicChiefPortfolioAgent implements ChiefPortfolioAgent {
       wipViolationProjectIds,
       projectsNeedingPmReview,
       attentionSummary: needsAttention
-        ? `${stalledProjectIds.length} stalled, ${wipViolationProjectIds.length} over WIP, ${projects.reduce((sum, p) => sum + p.pendingDecisionCount, 0)} owner decisions.`
+        ? `${stalledProjectIds.length} stalled, ${wipViolationProjectIds.length} over WIP, ${activeProjects.reduce((sum, p) => sum + p.pendingDecisionCount, 0)} owner decisions.`
         : "Portfolio is moving within policy and WIP limits."
     };
   }

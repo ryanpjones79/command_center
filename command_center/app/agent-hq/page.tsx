@@ -2,13 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AlertTriangle, Bot, CheckCircle2, Clock3, Pause, Play, ShieldCheck } from "lucide-react";
 import {
-  resolveAgentDecisionAction,
   setAgentProjectPausedAction
 } from "@/app/agent-hq/actions";
+import { AgentDecisionCard } from "@/components/agent/agent-decision-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { activeAgentWorkStates } from "@/lib/agent-state-machine";
 import { requireUser } from "@/lib/session";
 import { getAgentHqData } from "@/server/agent/hq-service";
 
@@ -57,6 +56,17 @@ function pmDecisionDetails(type: string, metadata: string | null) {
 export default async function AgentHqPage() {
   const user = await requireUser();
   const data = await getAgentHqData(user.id);
+  const currentParkedOrFailed = data.configs.flatMap((config) =>
+    config.displayState.paused
+      ? []
+      : config.project.agentWorkItems
+          .filter((item) =>
+            item.state === "PARKED" ||
+            (item.state === "FAILED" && config.displayState.machineWorkState.currentRetryFailureCount > 0)
+          )
+          .slice(0, 3)
+          .map((item) => ({ item, projectName: config.project.name }))
+  );
 
   return (
     <main className="space-y-6">
@@ -88,13 +98,14 @@ export default async function AgentHqPage() {
         </CardContent></Card>
       </section>
 
-      <section aria-label="Portfolio metrics" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <section aria-label="Portfolio metrics" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
         {[
           ["Active projects", data.summary.activeProjects],
           ["Active work", data.summary.activeWork],
           ["Completed outcomes", data.summary.completedOutcomes],
           ["Retries / failures", data.summary.retriesAndFailures],
           ["Need attention", data.summary.projectsRequiringAttention],
+          ["Need Ryan", data.summary.needRyan],
           ["WIP violations", data.summary.wipViolations]
         ].map(([label, value]) => (
           <Card className="bg-card/90" key={label}>
@@ -123,47 +134,7 @@ export default async function AgentHqPage() {
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
             {data.decisions.map((decision) => (
-              <Card className="border-amber-500/30 bg-amber-500/[0.04]" key={decision.id}>
-                <CardHeader>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Badge variant="warning">{decision.project.name.toUpperCase()}</Badge>
-                    <span className="text-xs text-muted-foreground">{formatDate(decision.createdAt)}</span>
-                  </div>
-                  <CardTitle className="pt-2 text-xl">{decision.question}</CardTitle>
-                  <CardDescription>{decision.context}</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-lg border bg-background/50 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-400">Expected upside</p>
-                      <p className="mt-1 text-sm">{decision.expectedUpside || "Not specified"}</p>
-                    </div>
-                    <div className="rounded-lg border bg-background/50 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-400">Risk</p>
-                      <p className="mt-1 text-sm">{decision.risk}</p>
-                    </div>
-                  </div>
-                  {decision.amountCents !== null && (
-                    <p className="text-sm font-medium">
-                      Exposure: {new Intl.NumberFormat("en-US", { style: "currency", currency: decision.currency ?? "USD" }).format(decision.amountCents / 100)}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    {decision.choices.map((choice) => (
-                      <form action={resolveAgentDecisionAction} key={choice}>
-                        <input name="decisionId" type="hidden" value={decision.id} />
-                        <input name="choice" type="hidden" value={choice} />
-                        <Button variant={choice === decision.recommendedChoice ? "default" : "outline"} type="submit">
-                          {choice}
-                        </Button>
-                      </form>
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Recommended: {decision.recommendedChoice ?? "No recommendation"}. Approval creates a one-time authorization; it never claims the action executed.
-                  </p>
-                </CardContent>
-              </Card>
+              <AgentDecisionCard decision={decision} formatDate={formatDate} key={decision.id} />
             ))}
           </div>
         )}
@@ -176,9 +147,7 @@ export default async function AgentHqPage() {
         </div>
         <div className="grid gap-4 xl:grid-cols-3">
           {data.configs.map((config) => {
-            const activeWork = config.project.agentWorkItems.filter((item) => activeAgentWorkStates.includes(item.state));
-            const latestDone = config.project.agentWorkItems.find((item) => item.state === "DONE");
-            const pending = config.project.agentDecisions.length;
+            const display = config.displayState;
             return (
               <Card className="flex h-full flex-col bg-card/90" key={config.id}>
                 <CardHeader>
@@ -187,7 +156,7 @@ export default async function AgentHqPage() {
                       <CardTitle>{config.project.name}</CardTitle>
                       <CardDescription className="mt-1">{config.profile.replaceAll("_", " ")}</CardDescription>
                     </div>
-                    <Badge variant={statusVariant(config.health)}>{config.health.replaceAll("_", " ")}</Badge>
+                    <Badge variant={statusVariant(display.displayHealth)}>{display.displayHealth.replaceAll("_", " ")}</Badge>
                   </div>
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col space-y-4">
@@ -195,48 +164,37 @@ export default async function AgentHqPage() {
                     <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Objective</p>
                     <p className="mt-1 text-sm">{config.objective}</p>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">KPI / success measure</p>
-                      <p className="mt-1 text-sm">{config.primaryKpi || "Not yet quantified"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Autonomy</p>
-                      <p className="mt-1 text-sm">{config.enabled ? "Enabled" : "Paused"} · WIP {activeWork.length}/{config.maxConcurrentWorkItems}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">Mode: {config.enabled ? config.operatingMode.replaceAll("_", " ") : "PAUSED"}</p>
-                    </div>
-                  </div>
                   <div>
                     <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Current bottleneck</p>
-                    <p className="mt-1 text-sm">{config.currentBottleneck || "No bottleneck recorded"}</p>
+                    <p className="mt-1 text-sm">{display.displayBottleneck}</p>
+                    {display.supportingState?.kind === "RYKAS_TRUTH" && (
+                      <div className="mt-2 grid gap-1 rounded-lg border bg-background/40 p-2 text-xs text-muted-foreground">
+                        <span>PO ledger: {display.supportingState.poLedgerStatus}</span>
+                        <span>PO truth current: {display.supportingState.poTruthCurrent ? "Yes" : "No"}</span>
+                        <span>Safe inventory capital: {display.supportingState.safeInventoryCapital === null ? "Unknown" : display.supportingState.safeInventoryCapital.toLocaleString("en-US", { style: "currency", currency: "USD" })}</span>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Current machine work</p>
-                    {activeWork.length ? (
-                      <div className="mt-2 space-y-2">
-                        {activeWork.slice(0, 2).map((item) => (
-                          <div className="flex items-center justify-between gap-2 rounded-lg border p-2 text-sm" key={item.id}>
-                            <span>{item.title}</span><Badge variant={statusVariant(item.state)}>{item.state.replaceAll("_", " ")}</Badge>
-                          </div>
-                        ))}
-                      </div>
-                    ) : <p className="mt-1 text-sm text-muted-foreground">No active machine work.</p>}
+                    <p className="mt-1 text-sm text-muted-foreground">{display.machineWorkState.currentSummary}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Mode: {display.paused ? "PAUSED" : config.operatingMode.replaceAll("_", " ")} · WIP {display.machineWorkState.activeCount}/{config.maxConcurrentWorkItems}</p>
                   </div>
                   <div>
                     <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Latest completed outcome</p>
-                    <p className="mt-1 text-sm">{latestDone?.resultSummary || "No completed outcome yet"}</p>
+                    <p className="mt-1 text-sm">{display.displayLatestOutcome}</p>
                   </div>
                   <div className="mt-auto grid gap-2 border-t pt-4 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                    <span className="flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> Next review {formatDate(config.nextAgentReviewAt)}</span>
-                    <span className="flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> NEED RYAN {pending}</span>
+                    <span className="flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> Next review {display.nextReviewState === "PAUSED" ? "Paused" : formatDate(display.nextReviewAt)}</span>
+                    <span className="flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> NEED RYAN {display.pendingOwnerDecisionCount}</span>
                   </div>
                   <div className="flex gap-2">
                     <Button asChild className="flex-1" variant="outline"><Link href={`/projects#agent-${config.projectId}`}>Project details</Link></Button>
                     <form action={setAgentProjectPausedAction}>
                       <input name="projectId" type="hidden" value={config.projectId} />
-                      <input name="paused" type="hidden" value={config.enabled ? "true" : "false"} />
-                      <Button aria-label={config.enabled ? "Pause agent" : "Resume agent"} variant={config.enabled ? "outline" : "default"} type="submit">
-                        {config.enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      <input name="paused" type="hidden" value={display.paused ? "false" : "true"} />
+                      <Button aria-label={display.paused ? "Resume agent" : "Pause agent"} variant={display.paused ? "default" : "outline"} type="submit">
+                        {display.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
                       </Button>
                     </form>
                   </div>
@@ -277,18 +235,13 @@ export default async function AgentHqPage() {
         <Card>
           <CardHeader><CardTitle>Parked / stalled</CardTitle><CardDescription>Stagnation stays visible to the Chief.</CardDescription></CardHeader>
           <CardContent className="space-y-3">
-            {data.configs.flatMap((config) =>
-              config.project.agentWorkItems
-                .filter((item) => item.state === "PARKED" || item.state === "FAILED")
-                .slice(0, 3)
-                .map((item) => (
-                  <div className="rounded-lg border p-3" key={item.id}>
-                    <div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">{item.title}</p><Badge variant={statusVariant(item.state)}>{item.state}</Badge></div>
-                    <p className="mt-1 text-xs text-muted-foreground">{config.project.name} · {item.blocker || "No blocker recorded"}</p>
-                  </div>
-                ))
-            )}
-            {data.chief.stalledProjectIds.length === 0 && data.configs.every((config) => config.project.agentWorkItems.every((item) => item.state !== "PARKED" && item.state !== "FAILED")) && (
+            {currentParkedOrFailed.map(({ item, projectName }) => (
+              <div className="rounded-lg border p-3" key={item.id}>
+                <div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">{item.title}</p><Badge variant={statusVariant(item.state)}>{item.state}</Badge></div>
+                <p className="mt-1 text-xs text-muted-foreground">{projectName} · {item.blocker || "No blocker recorded"}</p>
+              </div>
+            ))}
+            {data.chief.stalledProjectIds.length === 0 && currentParkedOrFailed.length === 0 && (
               <p className="text-sm text-muted-foreground">No parked work or stalled projects.</p>
             )}
           </CardContent>

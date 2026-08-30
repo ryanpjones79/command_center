@@ -1,7 +1,8 @@
-import { activeAgentWorkStates } from "@/lib/agent-state-machine";
 import { prisma } from "@/lib/prisma";
-import { DeterministicChiefPortfolioAgent } from "@/server/agent/mock-agents";
-import { ModelChiefPortfolioAgent } from "@/server/agent/model-agents";
+import {
+  deriveAgentPortfolioDisplay,
+  deriveAgentProjectDisplayState
+} from "@/server/agent/display-state";
 import { ensureInitialAgentProjects } from "@/server/agent/setup-service";
 import { recoverBrokenRykasOwnerDataDecision } from "@/server/agent/work-service";
 
@@ -19,7 +20,7 @@ export function parseDecisionChoices(value: string): string[] {
 export async function getAgentHqData(userId: string, now = new Date()) {
   await ensureInitialAgentProjects(userId);
   await recoverBrokenRykasOwnerDataDecision(userId, prisma, now);
-  const [configs, decisions, events, completedCount, retryFailureCount, runners, actions] = await Promise.all([
+  const [configs, decisions, events, completedCount, runners, actions] = await Promise.all([
     prisma.agentProjectConfig.findMany({
       where: { userId },
       include: {
@@ -27,11 +28,11 @@ export async function getAgentHqData(userId: string, now = new Date()) {
           include: {
             agentWorkItems: {
               orderBy: [{ updatedAt: "desc" }],
-              take: 12,
-              include: { runs: { orderBy: { startedAt: "desc" }, take: 2 } }
+              take: 30,
+              include: { runs: { orderBy: { startedAt: "desc" }, take: 4 } }
             },
-            agentDecisions: { where: { status: "PENDING" }, orderBy: { createdAt: "asc" } },
-            agentEvents: { orderBy: { createdAt: "desc" }, take: 6 }
+            agentDecisions: { orderBy: { updatedAt: "desc" } },
+            agentEvents: { orderBy: { createdAt: "desc" }, take: 20 }
           }
         }
       },
@@ -39,7 +40,11 @@ export async function getAgentHqData(userId: string, now = new Date()) {
     }),
     prisma.agentDecision.findMany({
       where: { userId, status: "PENDING" },
-      include: { project: { select: { name: true } }, originatingWorkItem: { select: { title: true } } },
+      include: {
+        project: { select: { name: true } },
+        originatingWorkItem: { select: { title: true } },
+        actionRequest: { select: { boundedPayload: true } }
+      },
       orderBy: [{ createdAt: "asc" }]
     }),
     prisma.agentEvent.findMany({
@@ -49,32 +54,34 @@ export async function getAgentHqData(userId: string, now = new Date()) {
       take: 24
     }),
     prisma.agentWorkItem.count({ where: { userId, state: "DONE" } }),
-    prisma.agentWorkItem.count({ where: { userId, state: { in: ["RETRY", "FAILED"] } } })
-    ,prisma.agentRunner.findMany({ where: { userId }, orderBy: { name: "asc" } })
-    ,prisma.agentActionRequest.findMany({ where: { userId, state: { in: ["AUTHORIZED", "AWAITING_EXECUTION", "EXECUTING", "VERIFYING"] } }, include: { project: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 20 })
+    prisma.agentRunner.findMany({ where: { userId }, orderBy: { name: "asc" } }),
+    prisma.agentActionRequest.findMany({ where: { userId, state: { in: ["AUTHORIZED", "AWAITING_EXECUTION", "EXECUTING", "VERIFYING"] } }, include: { project: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 20 })
   ]);
 
-  const snapshots = configs.map((config) => ({
-    projectId: config.projectId,
-    name: config.project.name,
-    objective: config.objective,
-    primaryKpi: config.primaryKpi,
-    health: config.health,
-    currentBottleneck: config.currentBottleneck,
-    activeWorkCount: config.project.agentWorkItems.filter((item) =>
-      activeAgentWorkStates.includes(item.state)
-    ).length,
-    maxConcurrentWorkItems: config.maxConcurrentWorkItems,
-    pendingDecisionCount: config.project.agentDecisions.length,
-    lastAgentReviewAt: config.lastAgentReviewAt,
-    nextAgentReviewAt: config.nextAgentReviewAt
+  const displayStates = configs.map((config) =>
+    deriveAgentProjectDisplayState(config, now)
+  );
+  const portfolioDisplay = deriveAgentPortfolioDisplay(displayStates, configs, now);
+  const displayByProjectId = new Map(
+    displayStates.map((display) => [display.projectId, display])
+  );
+  const displayConfigs = configs.map((config) => ({
+    ...config,
+    displayState: displayByProjectId.get(config.projectId)!
   }));
-  const chiefAgent = process.env.FEATURE_AGENT_MODELS === "true" && process.env.OPENAI_API_KEY ? new ModelChiefPortfolioAgent() : new DeterministicChiefPortfolioAgent();
-  const chief = await chiefAgent.inspectPortfolio(snapshots, now);
+  const chief = {
+    generatedAt: portfolioDisplay.generatedAt,
+    status: portfolioDisplay.status,
+    movingProjectIds: portfolioDisplay.movingProjectIds,
+    stalledProjectIds: portfolioDisplay.stalledProjectIds,
+    wipViolationProjectIds: portfolioDisplay.wipViolationProjectIds,
+    projectsNeedingPmReview: portfolioDisplay.projectsNeedingPmReview,
+    attentionSummary: portfolioDisplay.attentionSummary
+  };
 
   return {
     chief,
-    configs,
+    configs: displayConfigs,
     decisions: decisions.map((decision) => ({
       ...decision,
       choices: parseDecisionChoices(decision.availableChoices)
@@ -83,14 +90,13 @@ export async function getAgentHqData(userId: string, now = new Date()) {
     actions,
     runners: runners.map((runner) => ({ ...runner, effectiveStatus: runner.enabled && runner.lastHeartbeatAt && now.getTime() - runner.lastHeartbeatAt.getTime() < 2 * 60 * 1000 ? "ONLINE" : "OFFLINE" })),
     summary: {
-      activeProjects: configs.filter((config) => config.enabled && !config.pausedAt).length,
-      activeWork: snapshots.reduce((sum, project) => sum + project.activeWorkCount, 0),
+      activeProjects: portfolioDisplay.activeProjectCount,
+      activeWork: portfolioDisplay.activeWorkCount,
       completedOutcomes: completedCount,
-      retriesAndFailures: retryFailureCount,
-      projectsRequiringAttention: snapshots.filter(
-        (project) => project.health !== "ON_TRACK" || project.pendingDecisionCount > 0
-      ).length,
-      wipViolations: chief.wipViolationProjectIds.length
+      retriesAndFailures: portfolioDisplay.currentRetryFailureCount,
+      projectsRequiringAttention: portfolioDisplay.projectsRequiringAttention,
+      needRyan: portfolioDisplay.ownerDecisionCount,
+      wipViolations: portfolioDisplay.wipViolationProjectIds.length
     }
   };
 }

@@ -621,6 +621,7 @@ export async function getProjectMaintenanceData(userId: string) {
           take: 8
         },
         agentDecisions: {
+          include: { actionRequest: { select: { boundedPayload: true } } },
           orderBy: { createdAt: "desc" },
           take: 8
         },
