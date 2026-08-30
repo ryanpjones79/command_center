@@ -77,7 +77,6 @@ async function latestRykasFinancialSnapshot(
     const parsed = rykasTruthResultSchema.safeParse(raw);
     if (
       parsed.success &&
-      parsed.data.operation === "FINANCIAL_SNAPSHOT" &&
       parsed.data.data.financialSnapshot
     ) {
       const request = extractRykasTruthReconciliation([
@@ -345,7 +344,7 @@ export async function reconcilePendingRykasOwnerDecisions(
       );
     }
     const latest = latestByProject.get(decision.projectId) ?? null;
-    if (!latest || latest.observedAt <= new Date(request.observedAt)) continue;
+    if (!latest || latest.observedAt < new Date(request.observedAt)) continue;
     if (
       latest.request &&
       reconciliationKey(latest.request) === reconciliationKey(request)

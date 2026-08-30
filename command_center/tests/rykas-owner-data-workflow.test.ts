@@ -181,7 +181,7 @@ function currentDebtMinimumTruth(observedAt: string) {
   );
   return rykasTruthResultSchema.parse({
     schemaVersion: "RYKAS_TRUTH_READ_V1",
-    operation: "FINANCIAL_SNAPSHOT",
+    operation: "OPERATIONS_SNAPSHOT",
     readOnly: true,
     purchaseAuthorized: false,
     purchaseExecuted: false,
