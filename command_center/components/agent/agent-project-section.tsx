@@ -10,6 +10,7 @@ import { buildAgentDecisionPresentation } from "@/lib/agent-decision-display";
 import { operatorIssue } from "@/lib/agent-operator-summary";
 import { rykasOwnerChoiceLabel } from "@/lib/rykas-owner-data-contract";
 import { parseDecisionChoices } from "@/server/agent/hq-service";
+import { deriveAmazonTruthDisplay } from "@/lib/rykas-amazon-truth-display";
 
 type AgentProjectSectionProps = {
   projectId: string;
@@ -29,6 +30,7 @@ function formatDate(value: Date | null) {
 export function AgentProjectSection({ projectId, config }: AgentProjectSectionProps) {
   if (!config) return null;
   const pendingDecisions = config.projectDecisions.filter((decision) => decision.status === "PENDING");
+  const amazonTruth = config.profile === "RYKAS_GM" ? deriveAmazonTruthDisplay(config.projectWorkItems, config.projectEvents) : null;
 
   return (
     <section className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.035] p-4" id={`agent-${projectId}`}>
@@ -47,6 +49,17 @@ export function AgentProjectSection({ projectId, config }: AgentProjectSectionPr
           </form>
         </div>
       </div>
+
+      {amazonTruth && (
+        <div className="mt-4 rounded-lg border bg-background/40 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium">Amazon truth: {amazonTruth.status}</p>
+            <Badge variant={amazonTruth.status === "CURRENT" ? "success" : amazonTruth.status === "NEEDS ATTENTION" ? "warning" : "outline"}>{amazonTruth.status}</Badge>
+          </div>
+          {amazonTruth.status === "CURRENT" && <dl className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3"><div><dt>Orders through</dt><dd className="font-medium text-foreground">{amazonTruth.ordersThrough ?? "Unknown"}</dd></div><div><dt>Financials through</dt><dd className="font-medium text-foreground">{amazonTruth.financialsThrough ?? "Unknown"}</dd></div><div><dt>Inventory through</dt><dd className="font-medium text-foreground">{amazonTruth.inventoryThrough ?? "Unknown"}</dd></div></dl>}
+          {amazonTruth.status === "NEEDS ATTENTION" && <p className="mt-1 text-xs text-muted-foreground">Amazon connection needs attention. Technical evidence is available in agent history.</p>}
+        </div>
+      )}
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div><p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Objective</p><p className="mt-1 text-sm">{config.objective}</p></div>

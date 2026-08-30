@@ -11,6 +11,7 @@ This Windows-local Node/TypeScript process is a subordinate execution worker for
 - Mutable jobs require a clean canonical Git repository and run in `agent/<project>/<work-item>` worktrees. Nothing auto-merges or deploys. Successful worktrees are retained for review.
 - `RYKAS_OPERATIONS_READ` is a separate deterministic path. It accepts only versioned predefined reads, requires the fixed `rykas-repo` registry entry and `LOCALHOST_ONLY`, calls only approved Rykas loopback endpoints, validates bounded output, and never starts Codex or a shell.
 - `RYKAS_OWNER_DATA_UPDATE` is a separate opt-in path for the consolidated financial-truth form. It accepts only strict cash, debt, obligation, policy, and PO-certification fields. It cannot carry credentials or authorize/execute purchases, payments, or commitments.
+- `RYKAS_AMAZON_TRUTH_REFRESH` accepts only `{ "version": 1, "operation": "AMAZON_TRUTH_REFRESH" }` and maps it to the fixed `tools/command_center/Invoke-AmazonTruthRefresh.ps1` file in the registered `rykas-repo` workspace. No command, path, SQL, URL, or credential can be supplied by RyanOS.
 
 ## Windows setup
 
@@ -31,7 +32,7 @@ Keep `FEATURE_RYKAS_TRUTH_READ=false` until Ryan explicitly activates it. The re
 "rykas-repo": {
   "canonicalPath": "C:\\Users\\Ryan\\Desktop\\Rykas-codex",
   "projectSlug": "rykas",
-  "capabilities": ["RYKAS_OPERATIONS_READ", "RYKAS_OWNER_DATA_UPDATE"],
+  "capabilities": ["RYKAS_OPERATIONS_READ", "RYKAS_OWNER_DATA_UPDATE", "RYKAS_AMAZON_TRUTH_REFRESH"],
   "networkPolicy": "LOCALHOST_ONLY",
   "sensitivity": "STANDARD",
   "testCommands": []
@@ -47,7 +48,7 @@ npm run build
 npm run acceptance:rykas
 ```
 
-Then set `FEATURE_RYKAS_TRUTH_READ=true` and keep `RYKAS_TRUTH_BASE_URL=http://127.0.0.1:8765` in the runner environment. Keep `FEATURE_RYKAS_OWNER_DATA_WRITE=false` until the manual truth tables, compact Agent HQ form, and strict write receipt have been reviewed; enable it separately when ready. Restart the existing scheduled runner task, or stop the current process and run `node --env-file=.env --import tsx src/index.ts`. This adds no inbound listener.
+Then set `FEATURE_RYKAS_TRUTH_READ=true` and `FEATURE_RYKAS_AMAZON_TRUTH_REFRESH=true`, and keep `RYKAS_TRUTH_BASE_URL=http://127.0.0.1:8765` in the runner environment. The Amazon capability requires no Amazon or SQL credentials in RyanOS; the fixed local script uses workstation-only configuration. Keep `FEATURE_RYKAS_OWNER_DATA_WRITE=false` until the manual truth tables, compact Agent HQ form, and strict write receipt have been reviewed; enable it separately when ready. Restart the existing scheduled runner task, or stop the current process and run `node --env-file=.env --import tsx src/index.ts`. This adds no inbound listener.
 
 ## Recovery
 

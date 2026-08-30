@@ -113,6 +113,7 @@ export async function ensureInitialAgentProjects(userId: string, db: PrismaClien
         maxConcurrentWorkItems: profile.profile === "RYKAS_GM" ? 1 : 2,
         nextAgentReviewAt: new Date(),
         health: "ON_TRACK",
+        workspaceIdentifier: profile.profile === "RYKAS_GM" ? "rykas-repo" : null,
         externalActionApproval: profile.externalActionApproval
       }
     });

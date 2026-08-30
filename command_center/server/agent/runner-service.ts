@@ -9,6 +9,8 @@ import { reclassifySignalCareProspectResearch } from "@/server/agent/signalcare-
 import { createOwnerDecision } from "@/server/agent/work-service";
 import { RYKAS_READ_CAPABILITY, rykasTruthResultSchema, serializeRykasReadRequest } from "@/lib/rykas-truth-contract";
 import { RYKAS_OWNER_DATA_CAPABILITY, rykasOwnerFinancialUpdateResultSchema } from "@/lib/rykas-owner-financial-contract";
+import { RYKAS_AMAZON_TRUTH_REFRESH_CAPABILITY, rykasAmazonTruthRefreshResultSchema } from "@/lib/rykas-amazon-truth-contract";
+import { amazonRefreshRetryDelayMs, queueAmazonTruthRefreshIfStale, queueFinancialSnapshotAfterAmazonRefresh } from "@/server/agent/rykas-amazon-refresh-service";
 
 const leaseMs = 5 * 60 * 1000;
 export const runnerResultSchema = z.object({
@@ -21,7 +23,8 @@ export const runnerResultSchema = z.object({
   qaFeedback: z.string().max(10000).optional(), externalThreadId: z.string().max(500).optional(),
   externalRunId: z.string().max(500).optional(), providerIdentifier: z.string().max(100).optional(),
   modelIdentifier: z.string().max(200).optional(), rykasTruthResult: rykasTruthResultSchema.optional(),
-  rykasOwnerFinancialUpdateResult: rykasOwnerFinancialUpdateResultSchema.optional()
+  rykasOwnerFinancialUpdateResult: rykasOwnerFinancialUpdateResultSchema.optional(),
+  rykasAmazonTruthRefreshResult: rykasAmazonTruthRefreshResultSchema.optional()
 });
 export type RunnerResult = z.infer<typeof runnerResultSchema>;
 
@@ -54,7 +57,7 @@ export async function claimRunnerWork(runner: AgentRunner, input: { capabilities
     }
     if (!item.workspaceIdentifier) continue;
     assertLocalRunnerCapability(item.requiredCapability);
-    if ([RYKAS_READ_CAPABILITY, RYKAS_OWNER_DATA_CAPABILITY].includes(item.requiredCapability as never) && item.project.agentConfig?.profile !== "RYKAS_GM") continue;
+    if ([RYKAS_READ_CAPABILITY, RYKAS_OWNER_DATA_CAPABILITY, RYKAS_AMAZON_TRUTH_REFRESH_CAPABILITY].includes(item.requiredCapability as never) && item.project.agentConfig?.profile !== "RYKAS_GM") continue;
     const policy = evaluateAgentPolicy({ category: item.actionCategory as never, projectProfile: item.project.agentConfig?.profile });
     if (policy !== "ALLOW") continue;
     const claimToken = randomUUID();
@@ -64,7 +67,7 @@ export async function claimRunnerWork(runner: AgentRunner, input: { capabilities
     if (claimed.count !== 1) continue;
     await db.agentWorkItem.update({ where: { id: item.id }, data: { state: "RUNNING", attemptCount: { increment: 1 }, startedAt: item.startedAt ?? now } });
     const run = await db.agentRun.create({ data: { userId: item.userId, projectId: item.projectId, workItemId: item.id,
-      idempotencyKey: `runner:${item.id}:${item.attemptCount + 1}`, role: item.agentRole, runType: item.requiredCapability === RYKAS_READ_CAPABILITY ? "RYKAS_TRUTH_READ" : item.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY ? "RYKAS_OWNER_DATA_UPDATE" : "LOCAL_CODEX", status: "RUNNING",
+      idempotencyKey: `runner:${item.id}:${item.attemptCount + 1}`, role: item.agentRole, runType: item.requiredCapability === RYKAS_READ_CAPABILITY ? "RYKAS_TRUTH_READ" : item.requiredCapability === RYKAS_OWNER_DATA_CAPABILITY ? "RYKAS_OWNER_DATA_UPDATE" : item.requiredCapability === RYKAS_AMAZON_TRUTH_REFRESH_CAPABILITY ? "RYKAS_AMAZON_TRUTH_REFRESH" : "LOCAL_CODEX", status: "RUNNING",
       executorIdentifier: runner.keyId, workspaceIdentifier: item.workspaceIdentifier, repositoryIdentifier: item.repositoryIdentifier } });
     await db.agentRunner.update({ where: { id: runner.id }, data: { currentWorkItemId: item.id } });
     await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, type: "WORK_DISPATCHED", summary: `${item.title} claimed by registered local runner.` }, db);
@@ -131,10 +134,29 @@ export async function submitRunnerResult(runner: AgentRunner, workItemId: string
     for (const candidate of truth.data.purchaseCandidates) await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-purchase-ready:${run.id}:${candidate.opportunityId}`, type: "RYKAS_PURCHASE_CANDIDATE_READY", summary: `${candidate.opportunityId} is purchase-decision-ready in persisted Rykas truth; no purchase was authorized or executed.`, metadata: { opportunityId: candidate.opportunityId, purchaseAuthorized: false, purchaseExecuted: false } }, db);
     if (truth.stale) await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-stale:${run.id}`, type: "RYKAS_DATA_STALE", summary: "Rykas returned stale evidence; BUY must not be recommended until the authoritative evidence is refreshed." }, db);
     if (truth.data.blockers.length) await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-blocked:${run.id}`, type: "RYKAS_DATA_BLOCKED", summary: `${truth.data.blockers.length} bounded Rykas blocker(s) were observed.`, metadata: { blockers: truth.data.blockers.map((entry) => ({ code: entry.code, opportunityId: entry.opportunityId })) } }, db);
+    await queueAmazonTruthRefreshIfStale({ userId: item.userId, projectId: item.projectId, truth }, db, now);
     return { duplicate: false, state: "DONE" as const };
+  }
+  if (item.requiredCapability === RYKAS_AMAZON_TRUTH_REFRESH_CAPABILITY && result.rykasAmazonTruthRefreshResult) {
+    if (result.providerIdentifier !== "rykas-local-amazon-truth-refresh") throw new Error("Amazon truth refresh requires the fixed deterministic local provider.");
+    const refresh = rykasAmazonTruthRefreshResultSchema.parse(result.rykasAmazonTruthRefreshResult);
+    const succeeded = result.status === "SUCCEEDED" && refresh.status === "CURRENT";
+    const exhausted = item.attemptCount >= item.maxAttempts;
+    const nextState = succeeded ? "DONE" : exhausted ? "FAILED" : "RETRY";
+    const retryDelay = refresh.executionState === "ALREADY_RUNNING" ? 15 * 60_000 : amazonRefreshRetryDelayMs(item.attemptCount);
+    await db.$transaction([
+      db.agentRun.update({ where: { id: run.id }, data: { status: succeeded ? "SUCCEEDED" : "FAILED", providerIdentifier: result.providerIdentifier, executorIdentifier: runner.keyId, operationalResultSummary: result.summary, evidence: result.evidence, structuredOutcome: JSON.stringify(refresh), testOutcome: result.testResults, error: succeeded ? null : refresh.message, completedAt: now } }),
+      db.agentWorkItem.update({ where: { id: item.id }, data: { state: nextState, resultSummary: result.summary, evidenceSummary: result.evidence, integrationStatus: "NOT_REQUIRED", blocker: succeeded ? null : result.summary, claimToken: null, leaseExpiresAt: null, heartbeatAt: null, nextEligibleRunAt: nextState === "RETRY" ? new Date(now.getTime() + retryDelay) : null, completedAt: ["DONE", "FAILED"].includes(nextState) ? now : null } }),
+      db.agentRunner.update({ where: { id: runner.id }, data: { currentWorkItemId: null, lastHeartbeatAt: now, lastSuccessfulRunAt: succeeded ? now : runner.lastSuccessfulRunAt, recentFailure: succeeded ? null : result.summary } }),
+      db.agentProjectConfig.update({ where: { projectId: item.projectId }, data: { nextAgentReviewAt: now, health: nextState === "FAILED" ? "NEEDS_ATTENTION" : "ON_TRACK", currentBottleneck: succeeded ? "Amazon truth is current; Capital Steward is recalculating." : nextState === "FAILED" ? "Amazon connection needs attention." : "Amazon truth refresh will retry after bounded backoff." } })
+    ]);
+    if (succeeded) await queueFinancialSnapshotAfterAmazonRefresh({ userId: item.userId, projectId: item.projectId, refreshWorkItemId: item.id, result: refresh }, db, now);
+    else await recordAgentEvent({ userId: item.userId, projectId: item.projectId, workItemId: item.id, runId: run.id, idempotencyKey: `rykas-amazon-refresh-failed:${run.id}`, type: "RYKAS_AMAZON_TRUTH_NEEDS_ATTENTION", summary: nextState === "FAILED" ? "Amazon connection needs attention." : "Amazon truth refresh did not complete; bounded retry is scheduled.", metadata: { status: refresh.status, executionState: refresh.executionState, failureCode: refresh.failureCode, remainingStaleAreas: refresh.remainingStaleAreas, nextEligibleRunAt: nextState === "RETRY" ? new Date(now.getTime() + retryDelay).toISOString() : null, purchaseExecuted: false, listingChanged: false } }, db);
+    return { duplicate: false, state: nextState };
   }
   if (item.requiredCapability !== RYKAS_READ_CAPABILITY && result.rykasTruthResult) throw new Error("Rykas truth results are not accepted for other capabilities.");
   if (item.requiredCapability !== RYKAS_OWNER_DATA_CAPABILITY && result.rykasOwnerFinancialUpdateResult) throw new Error("Rykas owner-data results are not accepted for other capabilities.");
+  if (item.requiredCapability !== RYKAS_AMAZON_TRUTH_REFRESH_CAPABILITY && result.rykasAmazonTruthRefreshResult) throw new Error("Amazon truth refresh results are not accepted for other capabilities.");
   const structured = JSON.stringify(result);
   await db.agentRun.update({ where: { id: run.id }, data: { status: result.status, providerIdentifier: result.providerIdentifier ?? "openai",
     modelIdentifier: result.modelIdentifier, externalThreadId: result.externalThreadId, externalRunId: result.externalRunId,
