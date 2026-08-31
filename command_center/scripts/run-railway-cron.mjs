@@ -1,4 +1,10 @@
 import process from "node:process";
+import { pathToFileURL } from "node:url";
+
+export const DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS = 300_000;
+export const MIN_AGENT_CRON_REQUEST_TIMEOUT_MS = 60_000;
+export const MAX_AGENT_CRON_REQUEST_TIMEOUT_MS = 600_000;
+const DAILY_BRIEF_REQUEST_TIMEOUT_MS = 60_000;
 
 const timestamp = () => new Date().toISOString();
 const log = (message) => console.log(`[railway-cron] ${timestamp()} ${message}`);
@@ -9,11 +15,33 @@ function ensureTrailingSlash(value) {
   return value.endsWith("/") ? value : `${value}/`;
 }
 
-async function invokeEndpoint(baseUrl, secret, operation, path) {
+export function boundedAgentCronRequestTimeoutMs(value) {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS;
+  return Math.min(
+    MAX_AGENT_CRON_REQUEST_TIMEOUT_MS,
+    Math.max(MIN_AGENT_CRON_REQUEST_TIMEOUT_MS, Math.floor(parsed))
+  );
+}
+
+export async function invokeEndpoint(
+  baseUrl,
+  secret,
+  operation,
+  path,
+  timeoutMs
+) {
   const endpoint = new URL(path, ensureTrailingSlash(baseUrl));
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60_000);
-  log(`${operation} START target=${endpoint.toString()}`);
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  log(`${operation} START target=${endpoint.toString()} timeoutMs=${timeoutMs}`);
 
   try {
     const response = await fetch(endpoint, {
@@ -27,8 +55,15 @@ async function invokeEndpoint(baseUrl, secret, operation, path) {
     const body = await response.text();
     const result = body ? ` result=${body.slice(0, 4000)}` : "";
     if (!response.ok) {
-      logError(`${operation} FAILURE status=${response.status}${result}`);
-      return { ok: false, status: response.status, body };
+      logError(
+        `${operation} FAILURE reason=HTTP status=${response.status}${result}`
+      );
+      return {
+        ok: false,
+        failureReason: "HTTP",
+        status: response.status,
+        body
+      };
     }
     const skipped =
       operation === "DAILY BRIEF" && /\"skipped\"\s*:/.test(body);
@@ -39,17 +74,34 @@ async function invokeEndpoint(baseUrl, secret, operation, path) {
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : "Unknown cron request failure.";
-    logError(`${operation} FAILURE error=${detail}`);
-    return { ok: false, status: null, body: "" };
+    if (timedOut) {
+      logError(`${operation} FAILURE reason=TIMEOUT timeoutMs=${timeoutMs}`);
+      return {
+        ok: false,
+        failureReason: "TIMEOUT",
+        status: null,
+        body: ""
+      };
+    }
+    logError(`${operation} FAILURE reason=NETWORK error=${detail}`);
+    return {
+      ok: false,
+      failureReason: "NETWORK",
+      status: null,
+      body: ""
+    };
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-async function main() {
+export async function main(environment = process.env) {
   log("CRON START");
-  const baseUrl = process.env.CRON_TARGET_URL || process.env.NEXTAUTH_URL;
-  const secret = process.env.CRON_SECRET;
+  const baseUrl = environment.CRON_TARGET_URL || environment.NEXTAUTH_URL;
+  const secret = environment.CRON_SECRET;
+  const agentTimeoutMs = boundedAgentCronRequestTimeoutMs(
+    environment.AGENT_CRON_REQUEST_TIMEOUT_MS
+  );
 
   if (!baseUrl || !secret) {
     logError(
@@ -67,10 +119,11 @@ async function main() {
     baseUrl,
     secret,
     "AGENTS",
-    "/api/cron/agents"
+    "/api/cron/agents",
+    agentTimeoutMs
   );
 
-  if (process.env.FEATURE_DAILY_BRIEF_AUTOSEND !== "true") {
+  if (environment.FEATURE_DAILY_BRIEF_AUTOSEND !== "true") {
     log(
       "DAILY BRIEF SKIPPED reason=FEATURE_DAILY_BRIEF_AUTOSEND is not true"
     );
@@ -79,7 +132,8 @@ async function main() {
       baseUrl,
       secret,
       "DAILY BRIEF",
-      "/api/cron/daily-brief"
+      "/api/cron/daily-brief",
+      DAILY_BRIEF_REQUEST_TIMEOUT_MS
     );
   }
 
@@ -91,4 +145,9 @@ async function main() {
   return 0;
 }
 
-process.exitCode = await main();
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  process.exitCode = await main();
+}

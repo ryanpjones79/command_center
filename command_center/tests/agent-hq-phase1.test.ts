@@ -152,6 +152,35 @@ describe("Agent HQ durable orchestration", () => {
     expect(after).toBe(before);
   });
 
+  it("does not duplicate project work while a five-minute cycle lease is active", async () => {
+    const signalCare = await db.agentProjectConfig.findFirstOrThrow({
+      where: { userId, profile: "SIGNALCARE_GM" }
+    });
+    await db.agentProjectConfig.update({
+      where: { id: signalCare.id },
+      data: {
+        nextAgentReviewAt: cycleTime,
+        leaseToken: "slow-cycle-in-progress",
+        leaseExpiresAt: new Date(cycleTime.getTime() + 5 * 60 * 1000)
+      }
+    });
+    const before = await db.agentWorkItem.count({ where: { userId } });
+
+    const overlap = await runAgentOrchestrationCycle(
+      new Date(cycleTime.getTime() + 4 * 60 * 1000),
+      { userId, projectIds: [signalCare.projectId], db }
+    );
+
+    expect(overlap.dueProjectCount).toBe(1);
+    expect(overlap.claimedProjectCount).toBe(0);
+    expect(overlap.projects).toEqual([]);
+    expect(await db.agentWorkItem.count({ where: { userId } })).toBe(before);
+    await db.agentProjectConfig.update({
+      where: { id: signalCare.id },
+      data: { leaseToken: null, leaseExpiresAt: null }
+    });
+  });
+
   it("creates and resolves owner decisions with per-user isolation", async () => {
     const project = await db.executionProject.findFirstOrThrow({ where: { userId, name: "Rykas" } });
     const decisionWork = await db.agentWorkItem.create({ data: { userId, projectId: project.id, idempotencyKey: "explicit-owner-isolation", title: "Explicit authorization boundary test", objective: "Prove authorization does not execute", expectedValue: "Safety coverage", acceptanceCriteria: "Decision remains bounded", agentRole: "RYKAS_GM", actionCategory: "PURCHASE_INVENTORY", requiredCapability: "REPOSITORY_READ", state: "NEEDS_RYAN" } });

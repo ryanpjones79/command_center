@@ -1,12 +1,22 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS,
+  MAX_AGENT_CRON_REQUEST_TIMEOUT_MS,
+  MIN_AGENT_CRON_REQUEST_TIMEOUT_MS,
+  boundedAgentCronRequestTimeoutMs,
+  main
+} from "@/scripts/run-railway-cron.mjs";
 
 type EndpointResponse = { status: number; body: string; disconnect?: boolean };
 const servers: ReturnType<typeof createServer>[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   await Promise.all(
     servers.splice(0).map(
       (server) =>
@@ -17,7 +27,8 @@ afterEach(async () => {
 
 async function runCron(
   responses: Record<string, EndpointResponse>,
-  dailyBriefEnabled: boolean
+  dailyBriefEnabled: boolean,
+  environment: Record<string, string> = {}
 ) {
   const requests: string[] = [];
   const server = createServer((request, response) => {
@@ -49,7 +60,8 @@ async function runCron(
       ...process.env,
       CRON_TARGET_URL: `http://127.0.0.1:${address.port}`,
       CRON_SECRET: "cron-test-secret",
-      FEATURE_DAILY_BRIEF_AUTOSEND: dailyBriefEnabled ? "true" : "false"
+      FEATURE_DAILY_BRIEF_AUTOSEND: dailyBriefEnabled ? "true" : "false",
+      ...environment
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -69,7 +81,100 @@ async function runCron(
   return { exitCode, output: `${stdout}${stderr}`, requests };
 }
 
+function delayedFetch(delayMs: number, response: Response) {
+  return vi.fn((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(response), delayMs);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(
+          Object.assign(new Error("This operation was aborted"), {
+            name: "AbortError"
+          })
+        );
+      });
+    })
+  );
+}
+
 describe("Railway agent cron reliability", () => {
+  it("allows a 61-second agent response under the five-minute default", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      delayedFetch(
+        61_000,
+        new Response(JSON.stringify({ ok: true }), { status: 200 })
+      )
+    );
+
+    const result = main({
+      CRON_TARGET_URL: "https://cron.test",
+      CRON_SECRET: "test-secret",
+      FEATURE_DAILY_BRIEF_AUTOSEND: "false"
+    });
+    await vi.advanceTimersByTimeAsync(61_001);
+
+    await expect(result).resolves.toBe(0);
+  });
+
+  it("uses a configurable timeout and bounds it to one through ten minutes", async () => {
+    expect(boundedAgentCronRequestTimeoutMs(undefined)).toBe(
+      DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS
+    );
+    expect(boundedAgentCronRequestTimeoutMs("120000")).toBe(120_000);
+    expect(boundedAgentCronRequestTimeoutMs("1")).toBe(
+      MIN_AGENT_CRON_REQUEST_TIMEOUT_MS
+    );
+    expect(boundedAgentCronRequestTimeoutMs("9999999")).toBe(
+      MAX_AGENT_CRON_REQUEST_TIMEOUT_MS
+    );
+    expect(boundedAgentCronRequestTimeoutMs("not-a-number")).toBe(
+      DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS
+    );
+
+    const configured = await runCron(
+      {
+        "/api/cron/agents": {
+          status: 200,
+          body: JSON.stringify({ ok: true })
+        }
+      },
+      false,
+      { AGENT_CRON_REQUEST_TIMEOUT_MS: "120000" }
+    );
+    expect(configured.output).toMatch(/AGENTS START .*timeoutMs=120000/);
+  });
+
+  it("returns failure and an explicit timeout reason when the bound expires", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      delayedFetch(
+        DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS + 1,
+        new Response(JSON.stringify({ ok: true }), { status: 200 })
+      )
+    );
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = main({
+      CRON_TARGET_URL: "https://cron.test",
+      CRON_SECRET: "test-secret",
+      FEATURE_DAILY_BRIEF_AUTOSEND: "false"
+    });
+    await vi.advanceTimersByTimeAsync(DEFAULT_AGENT_CRON_REQUEST_TIMEOUT_MS);
+
+    await expect(result).resolves.toBe(1);
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /AGENTS FAILURE reason=TIMEOUT timeoutMs=300000/
+      )
+    );
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringMatching(/CRON COMPLETE status=FAILURE critical=AGENTS/)
+    );
+  });
+
   it("runs agents first and skips a disabled daily brief", async () => {
     const result = await runCron(
       {
@@ -114,7 +219,9 @@ describe("Railway agent cron reliability", () => {
       "/api/cron/daily-brief"
     ]);
     expect(result.output).toMatch(/AGENTS SUCCESS/);
-    expect(result.output).toMatch(/DAILY BRIEF FAILURE error=/);
+    expect(result.output).toMatch(/DAILY BRIEF FAILURE reason=NETWORK error=/);
+    expect(result.output).toMatch(/AGENTS START .*timeoutMs=300000/);
+    expect(result.output).toMatch(/DAILY BRIEF START .*timeoutMs=60000/);
     expect(result.output).toMatch(/CRON COMPLETE status=SUCCESS/);
   });
 
@@ -138,7 +245,7 @@ describe("Railway agent cron reliability", () => {
       "/api/cron/agents",
       "/api/cron/daily-brief"
     ]);
-    expect(result.output).toMatch(/AGENTS FAILURE status=500/);
+    expect(result.output).toMatch(/AGENTS FAILURE reason=HTTP status=500/);
     expect(result.output).toMatch(/CRON COMPLETE status=FAILURE critical=AGENTS/);
     expect(result.output.indexOf("AGENTS START")).toBeLessThan(
       result.output.indexOf("DAILY BRIEF START")
