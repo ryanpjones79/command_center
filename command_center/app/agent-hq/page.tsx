@@ -30,7 +30,7 @@ function formatDate(value: Date | null) {
 function statusVariant(status: string) {
   if (["ON_TRACK", "HEALTHY", "DONE"].includes(status)) return "success" as const;
   if (["BLOCKED", "FAILED"].includes(status)) return "danger" as const;
-  if (["NEEDS_ATTENTION", "NEEDS_RYAN", "RETRY"].includes(status)) return "warning" as const;
+  if (["NEEDS_ATTENTION", "NEEDS_RYAN", "RETRY", "OVERDUE"].includes(status)) return "warning" as const;
   return "outline" as const;
 }
 
@@ -91,7 +91,12 @@ export default async function AgentHqPage() {
         </p>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-2">
+      <section className="grid gap-4 lg:grid-cols-3">
+        <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>Scheduler</CardTitle><CardDescription>Durable Railway agent-orchestration heartbeat.</CardDescription></div><Badge variant={statusVariant(data.scheduler.status)}>{data.scheduler.status}</Badge></div></CardHeader><CardContent className="space-y-1 text-sm text-muted-foreground">
+          <p>Last agent cycle: {formatDate(data.scheduler.lastCycleAt)}</p>
+          <p>Next expected cycle: {formatDate(data.scheduler.nextExpectedCycleAt)}</p>
+          <p className="text-xs">Cadence: every {data.scheduler.cadenceMinutes} minutes. A late cycle does not create NEED RYAN.</p>
+        </CardContent></Card>
         <Card><CardHeader><CardTitle>Local runner</CardTitle><CardDescription>Outbound polling only; no inbound Windows exposure.</CardDescription></CardHeader><CardContent className="space-y-2">
           {data.runners.length === 0 ? <p className="text-sm text-muted-foreground">No runner registered. Live-internal work remains safely queued.</p> : data.runners.map((runner) => {
             const issue = operatorIssue(runner.recentFailure);

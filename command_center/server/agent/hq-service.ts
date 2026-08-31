@@ -9,6 +9,10 @@ import {
   recoverBrokenRykasOwnerDataDecision,
   recoverPrematurelyResolvedRykasOwnerUpdates
 } from "@/server/agent/work-service";
+import {
+  agentSchedulerHeartbeatId,
+  deriveAgentSchedulerDisplay
+} from "@/server/agent/scheduler-heartbeat";
 
 export function parseDecisionChoices(value: string): string[] {
   try {
@@ -26,7 +30,7 @@ export async function getAgentHqData(userId: string, now = new Date()) {
   await recoverBrokenRykasOwnerDataDecision(userId, prisma, now);
   await recoverPrematurelyResolvedRykasOwnerUpdates(userId, prisma, now);
   await reconcilePendingRykasOwnerDecisions(userId, prisma, now);
-  const [configs, decisions, events, completedCount, runners, actions, signalCareQueue] = await Promise.all([
+  const [configs, decisions, events, completedCount, runners, actions, signalCareQueue, schedulerHeartbeat] = await Promise.all([
     prisma.agentProjectConfig.findMany({
       where: { userId },
       include: {
@@ -69,6 +73,9 @@ export async function getAgentHqData(userId: string, now = new Date()) {
         status: { notIn: ["passed", "done", "killed"] }
       },
       select: { status: true }
+    }),
+    prisma.agentSchedulerHeartbeat.findUnique({
+      where: { id: agentSchedulerHeartbeatId }
     })
   ]);
 
@@ -112,6 +119,7 @@ export async function getAgentHqData(userId: string, now = new Date()) {
 
   return {
     chief,
+    scheduler: deriveAgentSchedulerDisplay(schedulerHeartbeat, now),
     configs: displayConfigs,
     decisions: decisions.map((decision) => ({
       ...decision,

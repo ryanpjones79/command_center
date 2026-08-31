@@ -7,6 +7,11 @@ import {
   recoverSignalCareOwnerPassContinuation,
   scheduleSignalCareQualificationReviewOnce
 } from "@/server/agent/signalcare-research-service";
+import {
+  recordAgentSchedulerFailure,
+  recordAgentSchedulerStart,
+  recordAgentSchedulerSuccess
+} from "@/server/agent/scheduler-heartbeat";
 
 function unauthorized() {
   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -21,13 +26,35 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: true, disabled: true });
   }
 
-  const users = await prisma.user.findMany({ select: { id: true } });
-  for (const user of users) {
-    await ensureInitialAgentProjects(user.id);
-    await recoverPrematureSignalCareOutreachDecisions(user.id);
-    await recoverSignalCareOwnerPassContinuation(user.id);
-    await scheduleSignalCareQualificationReviewOnce(user.id);
+  const startedAt = new Date();
+  await recordAgentSchedulerStart(startedAt).catch((error) => {
+    console.error("[agent-cron] Failed to record cycle start.", error);
+  });
+  try {
+    const users = await prisma.user.findMany({ select: { id: true } });
+    for (const user of users) {
+      await ensureInitialAgentProjects(user.id);
+      await recoverPrematureSignalCareOutreachDecisions(user.id);
+      await recoverSignalCareOwnerPassContinuation(user.id);
+      await scheduleSignalCareQualificationReviewOnce(user.id);
+    }
+    const result = await runAgentOrchestrationCycle(startedAt);
+    await recordAgentSchedulerSuccess(result);
+    return NextResponse.json({ ok: true, result });
+  } catch (error) {
+    const failedAt = new Date();
+    await recordAgentSchedulerFailure(startedAt, failedAt, error).catch(
+      (heartbeatError) => {
+        console.error(
+          "[agent-cron] Failed to record cycle failure.",
+          heartbeatError
+        );
+      }
+    );
+    console.error("[agent-cron] Agent orchestration cycle failed.", error);
+    return NextResponse.json(
+      { ok: false, error: "Agent orchestration cycle failed." },
+      { status: 500 }
+    );
   }
-  const result = await runAgentOrchestrationCycle(new Date());
-  return NextResponse.json({ ok: true, result });
 }
