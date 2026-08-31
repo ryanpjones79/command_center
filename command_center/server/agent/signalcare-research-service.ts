@@ -371,6 +371,7 @@ export type SignalCareQualification = z.infer<
 export type SignalCareQualificationResult = {
   qualification: SignalCareQualification;
   providerSourceUrls: string[];
+  providerAttemptCount?: number;
 };
 
 export type SignalCareResearchDiagnostics = {
@@ -389,6 +390,7 @@ export type SignalCareResearchDiagnostics = {
 
 export type SignalCareResearchDiscoveryResult = SignalCareResearchResult & {
   diagnostics?: SignalCareResearchDiagnostics;
+  providerAttemptCount?: number;
 };
 
 export interface SignalCareResearchClient {
@@ -706,6 +708,117 @@ function responseText(response: Record<string, unknown>) {
   }
   throw new Error(
     "SignalCare research response contained no structured output text."
+  );
+}
+
+export const signalCareProviderFailureCodes = [
+  "PROVIDER_OUTPUT_INVALID",
+  "PROVIDER_TIMEOUT",
+  "PROVIDER_UNAVAILABLE",
+  "SCHEMA_VALIDATION_FAILED"
+] as const;
+export type SignalCareProviderFailureCode =
+  (typeof signalCareProviderFailureCodes)[number];
+
+export class SignalCareProviderError extends Error {
+  constructor(
+    readonly code: SignalCareProviderFailureCode,
+    message: string,
+    readonly modelAttemptCount = 1
+  ) {
+    super(message);
+    this.name = "SignalCareProviderError";
+  }
+}
+
+const signalCareStructuredOutputCorrection =
+  "Your previous response could not be parsed as the required JSON schema. Return ONLY one complete valid JSON object matching the supplied schema. Do not include Markdown or commentary.";
+const maxSignalCareHostedModelAttempts = 3;
+
+function balancedJsonObjectCandidates(value: string) {
+  const candidates: string[] = [];
+  const starts = Array.from(value.matchAll(/\{/g), (match) => match.index ?? -1)
+    .filter((index) => index >= 0)
+    .slice(0, 8);
+  for (const start of starts) {
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    let invalid = false;
+    for (let index = start; index < value.length; index += 1) {
+      const character = value[index]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === "{") stack.push("}");
+      else if (character === "[") stack.push("]");
+      else if (character === "}" || character === "]") {
+        if (stack.pop() !== character) {
+          invalid = true;
+          break;
+        }
+        if (stack.length === 0) {
+          candidates.push(value.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+    // Closing only unmatched containers is a structural transport repair. Never
+    // close a string or synthesize a value/field.
+    if (!invalid && !inString && stack.length > 0) {
+      candidates.push(`${value.slice(start)}${stack.reverse().join("")}`);
+    }
+  }
+  return candidates;
+}
+
+export function parseSignalCareStructuredOutput<T>(
+  output: string,
+  schema: z.ZodType<T>
+): T {
+  const trimmed = output.replace(/^\uFEFF/, "").trim();
+  const fenced = Array.from(
+    trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi),
+    (match) => match[1]?.trim() ?? ""
+  ).filter(Boolean);
+  const candidates = Array.from(
+    new Set([
+      trimmed,
+      ...fenced,
+      ...balancedJsonObjectCandidates(trimmed),
+      ...fenced.flatMap(balancedJsonObjectCandidates)
+    ])
+  ).slice(0, 16);
+  let parsedJson = false;
+  let schemaIssueCount = 0;
+  for (const candidate of candidates) {
+    let value: unknown;
+    try {
+      value = JSON.parse(candidate);
+      parsedJson = true;
+    } catch {
+      continue;
+    }
+    const validated = schema.safeParse(value);
+    if (validated.success) return validated.data;
+    schemaIssueCount = Math.max(schemaIssueCount, validated.error.issues.length);
+  }
+  if (parsedJson) {
+    throw new SignalCareProviderError(
+      "SCHEMA_VALIDATION_FAILED",
+      `SignalCare hosted research returned JSON that failed ${schemaIssueCount || 1} required schema check(s).`
+    );
+  }
+  throw new SignalCareProviderError(
+    "PROVIDER_OUTPUT_INVALID",
+    "SignalCare hosted research returned invalid structured output."
   );
 }
 
@@ -1167,6 +1280,126 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
       "gpt-4.1-mini"
   ) {}
 
+  private async requestStructuredOutput<T>(
+    requestBody: Record<string, unknown>,
+    schema: z.ZodType<T>,
+    operation: "research" | "qualification"
+  ) {
+    const baseInput = Array.isArray(requestBody.input) ? requestBody.input : [];
+    let latestValidationError: SignalCareProviderError | null = null;
+    for (
+      let modelAttempt = 1;
+      modelAttempt <= maxSignalCareHostedModelAttempts;
+      modelAttempt += 1
+    ) {
+      const body =
+        modelAttempt === 1
+          ? requestBody
+          : {
+              ...requestBody,
+              input: [
+                ...baseInput,
+                {
+                  role: "system",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: signalCareStructuredOutputCorrection
+                    }
+                  ]
+                }
+              ]
+            };
+      let response: Response;
+      try {
+        response = await this.fetcher("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(body)
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const timedOut =
+          (error instanceof Error && error.name === "AbortError") ||
+          /timeout|timed out/i.test(detail);
+        throw new SignalCareProviderError(
+          timedOut ? "PROVIDER_TIMEOUT" : "PROVIDER_UNAVAILABLE",
+          timedOut
+            ? `SignalCare hosted ${operation} provider timed out.`
+            : `SignalCare hosted ${operation} provider was unavailable.`
+        );
+      }
+      if (!response.ok) {
+        const timedOut = [408, 504].includes(response.status);
+        throw new SignalCareProviderError(
+          timedOut ? "PROVIDER_TIMEOUT" : "PROVIDER_UNAVAILABLE",
+          timedOut
+            ? `SignalCare hosted ${operation} provider timed out (${response.status}).`
+            : `SignalCare hosted ${operation} provider was unavailable (${response.status}).`
+        );
+      }
+      let raw: Record<string, unknown>;
+      try {
+        raw = (await response.json()) as Record<string, unknown>;
+      } catch {
+        latestValidationError = new SignalCareProviderError(
+          "PROVIDER_OUTPUT_INVALID",
+          "SignalCare hosted research provider returned an invalid response envelope.",
+          modelAttempt
+        );
+        if (modelAttempt < maxSignalCareHostedModelAttempts) continue;
+        throw latestValidationError;
+      }
+      if (raw.status === "failed") {
+        throw new SignalCareProviderError(
+          "PROVIDER_UNAVAILABLE",
+          `SignalCare hosted ${operation} provider reported a failed response.`
+        );
+      }
+      if (raw.status === "incomplete") {
+        latestValidationError = new SignalCareProviderError(
+          "PROVIDER_OUTPUT_INVALID",
+          `SignalCare hosted ${operation} provider returned an incomplete structured response.`,
+          modelAttempt
+        );
+        if (modelAttempt < maxSignalCareHostedModelAttempts) continue;
+        throw latestValidationError;
+      }
+      try {
+        const parsed = parseSignalCareStructuredOutput(responseText(raw), schema);
+        return { parsed, raw, modelAttemptCount: modelAttempt };
+      } catch (error) {
+        if (error instanceof SignalCareProviderError) {
+          latestValidationError = new SignalCareProviderError(
+            error.code,
+            error.message,
+            modelAttempt
+          );
+          if (modelAttempt < maxSignalCareHostedModelAttempts) continue;
+          throw latestValidationError;
+        }
+        latestValidationError = new SignalCareProviderError(
+          "PROVIDER_OUTPUT_INVALID",
+          "SignalCare hosted research response contained no structured output text.",
+          modelAttempt
+        );
+        if (modelAttempt < maxSignalCareHostedModelAttempts) continue;
+        throw latestValidationError;
+      }
+    }
+    throw (
+      latestValidationError ??
+      new SignalCareProviderError(
+        "PROVIDER_OUTPUT_INVALID",
+        "SignalCare hosted research returned invalid structured output.",
+        maxSignalCareHostedModelAttempts
+      )
+    );
+  }
+
   async discover(input: {
     objective: string;
     existingOrganizations: string[];
@@ -1184,13 +1417,8 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
         "OPENAI_API_KEY is required for SignalCare web research."
       );
     }
-    const response = await this.fetcher("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
+    const { parsed, raw, modelAttemptCount } = await this.requestStructuredOutput(
+      {
         model: this.model,
         tools: [{ type: "web_search", search_context_size: "medium" }],
         tool_choice: "required",
@@ -1223,26 +1451,14 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
             schema: researchJsonSchema
           }
         }
-      })
-    });
-    if (!response.ok) {
-      throw new Error(
-        `SignalCare research request failed (${response.status}): ${(await response.text()).slice(0, 1000)}`
-      );
-    }
-    const raw = (await response.json()) as Record<string, unknown>;
-    let parsed: SignalCareResearchResult;
-    try {
-      parsed = signalCareResearchResultSchema.parse(
-        JSON.parse(responseText(raw))
-      );
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `SignalCare research model-output validation failed: ${detail}`
-      );
-    }
-    return retainCitedSignalCareEvidence(parsed, responseSourceUrls(raw));
+      },
+      signalCareResearchResultSchema,
+      "research"
+    );
+    return {
+      ...retainCitedSignalCareEvidence(parsed, responseSourceUrls(raw)),
+      providerAttemptCount: modelAttemptCount
+    };
   }
 
   async qualify(input: {
@@ -1258,13 +1474,8 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
         "OPENAI_API_KEY is required for SignalCare web research."
       );
     }
-    const response = await this.fetcher("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
+    const { parsed, raw, modelAttemptCount } = await this.requestStructuredOutput(
+      {
         model: this.model,
         tools: [{ type: "web_search", search_context_size: "medium" }],
         tool_choice: "required",
@@ -1297,25 +1508,10 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
             schema: qualificationJsonSchema
           }
         }
-      })
-    });
-    if (!response.ok) {
-      throw new Error(
-        `SignalCare qualification request failed (${response.status}): ${(await response.text()).slice(0, 1000)}`
-      );
-    }
-    const raw = (await response.json()) as Record<string, unknown>;
-    let parsed: SignalCareQualification;
-    try {
-      parsed = signalCareQualificationSchema.parse(
-        JSON.parse(responseText(raw))
-      );
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `SignalCare qualification model-output validation failed: ${detail}`
-      );
-    }
+      },
+      signalCareQualificationSchema,
+      "qualification"
+    );
     if (
       parsed.organizationName.trim().toLowerCase() !==
       input.organizationName.trim().toLowerCase()
@@ -1327,7 +1523,8 @@ export class OpenAiSignalCareResearchClient implements SignalCareResearchClient 
     const providerSources = responseSourceUrls(raw);
     return {
       qualification: retainCitedSignalCareQualification(parsed, providerSources),
-      providerSourceUrls: uniqueProviderUrls(providerSources)
+      providerSourceUrls: uniqueProviderUrls(providerSources),
+      providerAttemptCount: modelAttemptCount
     };
   }
 }
@@ -1593,6 +1790,15 @@ const priorProvenanceValidationFailure =
   "Hosted research returned no candidates with adequate cited evidence";
 const provenanceRecoveryVersion = "canonical-provenance-v2";
 export const SIGNALCARE_NO_MATCH_REVIEW_MINUTES = 30;
+export const SIGNALCARE_PROVIDER_RETRY_MINUTES = 15;
+
+function signalCareProviderRetryAt(now: Date, attemptCount: number) {
+  const multiplier = Math.min(4, 2 ** Math.max(0, attemptCount - 1));
+  return new Date(
+    now.getTime() +
+      SIGNALCARE_PROVIDER_RETRY_MINUTES * multiplier * 60 * 1000
+  );
+}
 
 function isPriorProvenanceValidationFailure(blocker: string | null) {
   return blocker
@@ -1712,6 +1918,100 @@ async function queueNextSignalCareDiscoveryAfterNoMatch(
       maxAttempts: completedWork.maxAttempts,
       nextEligibleRunAt,
       workspaceIdentifier: null
+    }
+  });
+}
+
+async function queueSignalCareProviderFailureContinuation(
+  config: Pick<
+    AgentProjectConfig,
+    "userId" | "projectId" | "profile" | "maxConcurrentWorkItems"
+  >,
+  failedWork: AgentWorkItem,
+  researchContext: SignalCareResearchContext,
+  currentStrategy: SignalCareDiscoveryStrategy | null,
+  nextEligibleRunAt: Date,
+  failureCode: SignalCareProviderFailureCode,
+  db: PrismaClient
+) {
+  const [activeCount, pendingOwnerDecisions] = await Promise.all([
+    db.agentWorkItem.count({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        state: {
+          in: [
+            "QUEUED",
+            "PLANNING",
+            "RUNNING",
+            "VERIFYING",
+            "RETRY",
+            "NEEDS_RYAN",
+            "AWAITING_EXECUTION"
+          ]
+        }
+      }
+    }),
+    db.agentDecision.count({
+      where: {
+        userId: config.userId,
+        projectId: config.projectId,
+        status: "PENDING"
+      }
+    })
+  ]);
+  if (
+    pendingOwnerDecisions > 0 ||
+    activeCount >= config.maxConcurrentWorkItems
+  ) {
+    return null;
+  }
+  const nextStrategy =
+    researchContext.researchMode === "DISCOVER_PROSPECTS"
+      ? nextDiscoveryStrategy(
+          currentStrategy?.id ?? signalCareDiscoveryStrategies[0]!.id
+        )
+      : null;
+  const operationalContext =
+    researchContext.researchMode === "DISCOVER_PROSPECTS"
+      ? serializeSignalCareResearchContext({
+          researchMode: "DISCOVER_PROSPECTS",
+          instructions: `Resume bounded acquisition after ${failureCode}. Do not reuse malformed provider output.`,
+          discoveryStrategy: nextStrategy!.id
+        })
+      : failedWork.operationalContext;
+  return db.agentWorkItem.upsert({
+    where: {
+      projectId_idempotencyKey: {
+        projectId: config.projectId,
+        idempotencyKey: `signalcare:provider-continuation:${failedWork.id}`
+      }
+    },
+    update: {},
+    create: {
+      userId: config.userId,
+      projectId: config.projectId,
+      parentWorkItemId: failedWork.id,
+      idempotencyKey: `signalcare:provider-continuation:${failedWork.id}`,
+      title: nextStrategy
+        ? `Search SignalCare prospects — ${nextStrategy.label}`
+        : failedWork.title,
+      objective: nextStrategy
+        ? `Run the next bounded multi-lane SignalCare discovery strategy: ${nextStrategy.label}.`
+        : failedWork.objective,
+      expectedValue: failedWork.expectedValue,
+      acceptanceCriteria: failedWork.acceptanceCriteria,
+      agentRole: failedWork.agentRole,
+      actionCategory: failedWork.actionCategory,
+      requiredCapability: failedWork.requiredCapability,
+      sandboxPolicy: failedWork.sandboxPolicy,
+      networkPolicy: failedWork.networkPolicy,
+      operationalContext,
+      priority: failedWork.priority,
+      maxAttempts: failedWork.maxAttempts,
+      nextEligibleRunAt,
+      workspaceIdentifier: null,
+      repositoryIdentifier: failedWork.repositoryIdentifier
     }
   });
 }
@@ -2657,6 +2957,8 @@ export async function executeSignalCareHostedResearch(
             prospectQuality: evaluateSignalCareProspectQuality(qualification),
             sourceUrls: qualification.sourceUrls,
             providerSourceUrls,
+            hostedModelAttemptCount:
+              qualificationResult.providerAttemptCount ?? 1,
             providerBackedPublicSources: true,
             externalOutreachPerformed: false
           }),
@@ -2665,6 +2967,8 @@ export async function executeSignalCareHostedResearch(
             pipelineStatus: progression.status,
             qualification,
             providerSourceUrls,
+            hostedModelAttemptCount:
+              qualificationResult.providerAttemptCount ?? 1,
             providerBackedPublicSources: true,
             externalOutreachPerformed: false
           }),
@@ -2701,6 +3005,8 @@ export async function executeSignalCareHostedResearch(
           structuredOutcome: JSON.stringify({
             outcome: "PASS",
             pipelineStatus: progression.status,
+            hostedModelAttemptCount:
+              qualificationResult.providerAttemptCount ?? 1,
             externalOutreachPerformed: false
           }),
           completedAt: now
@@ -2788,7 +3094,11 @@ export async function executeSignalCareHostedResearch(
             offerLanes: signalCareApprovedOfferIds
           });
     failureStage = "result_validation";
-    const { diagnostics: providerDiagnostics, ...research } = discovery;
+    const {
+      diagnostics: providerDiagnostics,
+      providerAttemptCount = 1,
+      ...research
+    } = discovery;
     const validated = signalCareResearchResultSchema.parse(research);
     const boundedCandidates = validated.candidates
       .filter((candidate) => candidate.evidenceConfidence !== "LOW")
@@ -2849,6 +3159,7 @@ export async function executeSignalCareHostedResearch(
           summary: validated.searchSummary,
           discoveryStrategy: activeDiscoveryStrategy.id,
           discoveryOutcome,
+          hostedModelAttemptCount: providerAttemptCount,
           validationDiagnostics: researchDiagnostics
         }),
         structuredOutcome: JSON.stringify({
@@ -2856,6 +3167,7 @@ export async function executeSignalCareHostedResearch(
           created,
           discoveryStrategy: activeDiscoveryStrategy.id,
           discoveryOutcome,
+          hostedModelAttemptCount: providerAttemptCount,
           validationDiagnostics: researchDiagnostics
         }),
         completedAt: now
@@ -2893,6 +3205,7 @@ export async function executeSignalCareHostedResearch(
         structuredOutcome: JSON.stringify({
           outcome: "PASS",
           discoveryOutcome,
+          hostedModelAttemptCount: providerAttemptCount,
           created,
           validationDiagnostics: researchDiagnostics
         }),
@@ -2950,6 +3263,7 @@ export async function executeSignalCareHostedResearch(
           nextDiscoveryWorkItemId: nextDiscoveryWork?.id ?? null,
           nextEligibleRunAt:
             nextDiscoveryWork?.nextEligibleRunAt?.toISOString() ?? null,
+          hostedModelAttemptCount: providerAttemptCount,
           ...researchDiagnostics,
           externalOutreachPerformed: false
         }
@@ -2985,11 +3299,13 @@ export async function executeSignalCareHostedResearch(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const providerError =
+      error instanceof SignalCareProviderError ? error : null;
+    const failureCode = providerError?.code ?? null;
     if (
-      message.startsWith("SignalCare research model-output validation failed")
-    ) {
-      failureStage = "model_output_validation";
-    }
+      failureCode === "PROVIDER_OUTPUT_INVALID" ||
+      failureCode === "SCHEMA_VALIDATION_FAILED"
+    ) failureStage = "model_output_validation";
     await db.agentRun.update({
       where: { id: run.id },
       data: {
@@ -2997,28 +3313,64 @@ export async function executeSignalCareHostedResearch(
         error: message,
         evidence: JSON.stringify({
           failureStage,
+          failureCode,
+          hostedModelAttemptCount: providerError?.modelAttemptCount ?? 1,
           validationDiagnostics: researchDiagnostics
         }),
         structuredOutcome: JSON.stringify({
-          outcome: "FAILED",
+          outcome: failureCode ?? "FAILED",
           failureStage,
+          failureCode,
+          hostedModelAttemptCount: providerError?.modelAttemptCount ?? 1,
           validationDiagnostics: researchDiagnostics
         }),
         completedAt: now
       }
     });
-    const nextState: "FAILED" | "RETRY" =
-      attempt >= work.maxAttempts ? "FAILED" : "RETRY";
+    const invalidStructuredOutput =
+      failureCode === "PROVIDER_OUTPUT_INVALID" ||
+      failureCode === "SCHEMA_VALIDATION_FAILED";
+    // A hosted model's two correction attempts happen inside this execution.
+    // Close this item after structured-output exhaustion so a later scheduler
+    // cycle cannot exceed the three-model-response cap for the same item.
+    const workState: "FAILED" | "RETRY" =
+      invalidStructuredOutput || attempt >= work.maxAttempts
+        ? "FAILED"
+        : "RETRY";
+    const retryAt = signalCareProviderRetryAt(now, attempt);
     await transitionAgentWorkItem(
       input.userId,
       work.id,
-      nextState,
+      workState,
       {
         blocker: message,
-        nextEligibleRunAt: nextState === "RETRY" ? now : null
+        nextEligibleRunAt: workState === "RETRY" ? retryAt : null
       },
       db
     );
+    const continuation =
+      providerError && workState === "FAILED"
+        ? await queueSignalCareProviderFailureContinuation(
+            config,
+            work,
+            researchContext,
+            discoveryStrategy,
+            retryAt,
+            providerError.code,
+            db
+          )
+        : null;
+    const outcome: "FAILED" | "RETRY" =
+      workState === "RETRY" || continuation ? "RETRY" : "FAILED";
+    const primarySummary = invalidStructuredOutput
+      ? continuation
+        ? "Hosted research returned invalid structured output; automatic retry scheduled."
+        : "Hosted research repeatedly returned invalid structured output; controlled continuation could not be queued."
+      : providerError
+        ? continuation || workState === "RETRY"
+          ? `${providerError.code.replaceAll("_", " ").toLowerCase()}; automatic retry scheduled.`
+          : `${providerError.code.replaceAll("_", " ").toLowerCase()}; controlled continuation could not be queued.`
+        : message;
     await recordAgentEvent(
       {
         userId: input.userId,
@@ -3026,11 +3378,36 @@ export async function executeSignalCareHostedResearch(
         workItemId: work.id,
         runId: run.id,
         idempotencyKey: `signalcare-research-failed:${work.id}:${attempt}`,
-        type: nextState === "RETRY" ? "RETRY_CREATED" : "MAX_RETRIES_EXHAUSTED",
-        summary: message
+        type: outcome === "RETRY" ? "RETRY_CREATED" : "MAX_RETRIES_EXHAUSTED",
+        summary: primarySummary,
+        metadata: {
+          failureCode,
+          failureStage,
+          hostedModelAttemptCount: providerError?.modelAttemptCount ?? 1,
+          continuationWorkItemId: continuation?.id ?? null,
+          nextEligibleRunAt:
+            outcome === "RETRY" ? retryAt.toISOString() : null,
+          externalOutreachPerformed: false,
+          ownerDecisionCreated: false
+        }
       },
       db
     );
-    return { outcome: nextState, created: [], error: message };
+    await db.agentProjectConfig.update({
+      where: { projectId: input.projectId },
+      data: {
+        health: providerError ? "NEEDS_ATTENTION" : undefined,
+        currentBottleneck: providerError ? primarySummary : undefined,
+        nextAgentReviewAt: outcome === "RETRY" ? retryAt : undefined
+      }
+    });
+    return {
+      outcome,
+      created: [],
+      error: primarySummary,
+      failureCode,
+      nextEligibleRunAt: outcome === "RETRY" ? retryAt : null,
+      continuationWorkItemId: continuation?.id ?? null
+    };
   }
 }

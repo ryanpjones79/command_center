@@ -365,6 +365,51 @@ describe("canonical Agent HQ display state", () => {
     });
   });
 
+  it("shows provider-output backoff as machine attention without NEED RYAN", () => {
+    const failedAt = new Date("2026-08-29T17:30:00.000Z");
+    const state = deriveAgentProjectDisplayState(
+      baseInput({
+        projectId: "signalcare-provider-retry",
+        profile: "SIGNALCARE_GM",
+        health: "NEEDS_ATTENTION",
+        currentBottleneck:
+          "Hosted research returned invalid structured output; automatic retry scheduled.",
+        project: {
+          name: "SignalCare",
+          agentDecisions: [],
+          agentEvents: [],
+          agentWorkItems: [
+            workItem({
+              id: "invalid-output",
+              state: "FAILED",
+              requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+              blocker:
+                "SignalCare hosted research returned invalid structured output.",
+              updatedAt: failedAt,
+              completedAt: failedAt
+            }),
+            workItem({
+              id: "provider-continuation",
+              state: "QUEUED",
+              requiredCapability: "SIGNALCARE_PUBLIC_WEB_RESEARCH",
+              blocker: null,
+              updatedAt: failedAt,
+              completedAt: null
+            })
+          ]
+        }
+      }),
+      now
+    );
+
+    expect(state.displayHealth).toBe("NEEDS_ATTENTION");
+    expect(state.displayBottleneck).toBe(
+      "Hosted research returned invalid structured output; automatic retry scheduled."
+    );
+    expect(state.ownerAttentionRequired).toBe(false);
+    expect(state.pendingOwnerDecisionCount).toBe(0);
+  });
+
   it("uses a completed Rykas truth read and its returned PO/capital blocker immediately", () => {
     const state = deriveAgentProjectDisplayState(rykasInput(), now);
     expect(state.displayHealth).toBe("NEEDS_ATTENTION");

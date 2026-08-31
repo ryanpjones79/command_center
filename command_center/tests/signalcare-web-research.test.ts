@@ -39,6 +39,7 @@ import {
   getSignalCareResearchLimit,
   normalizeProspectDomain,
   OpenAiSignalCareResearchClient,
+  parseSignalCareStructuredOutput,
   parseSignalCareResearchContext,
   recoverPrematureSignalCareOutreachDecisions,
   recoverSignalCareOwnerPassContinuation,
@@ -49,6 +50,7 @@ import {
   scheduleSignalCareQualificationReviewOnce,
   serializeSignalCareResearchContext,
   signalCareQualificationSchema,
+  signalCareResearchResultSchema,
   signalCareResearchCandidateSchema,
   type SignalCareQualification,
   type SignalCareResearchCandidate,
@@ -288,6 +290,44 @@ function providerSource(url: string): SignalCareProviderSource {
   };
 }
 
+function hostedResearchResponse(
+  outputText: string,
+  sourceUrls: string[] = [],
+  status: "completed" | "incomplete" = "completed"
+) {
+  return new Response(
+    JSON.stringify({
+      status,
+      output: [
+        {
+          type: "web_search_call",
+          status: "completed",
+          action: { sources: sourceUrls.map((url) => ({ url })) }
+        },
+        {
+          type: "message",
+          content: [{ type: "output_text", text: outputText }]
+        }
+      ]
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+}
+
+function hostedDiscoveryInput() {
+  return {
+    objective: "Find qualified prospects",
+    existingOrganizations: [],
+    existingDomains: [],
+    maxProspects: 5,
+    targetRawOrganizations: 5,
+    strategyId: "REGIONAL_GROWTH_EXPANSION" as const,
+    strategyLabel: "regional provider growth and expansion",
+    searchIntents: ["multi-location dental groups"],
+    offerLanes: signalCareApprovedOfferIds
+  };
+}
+
 function waitingServices(
   researchClient: SignalCareResearchClient = fakeResearchClient([candidate(1)])
 ) {
@@ -497,6 +537,212 @@ afterAll(async () => {
 });
 
 describe("SignalCare hosted public-web research", () => {
+  it("recovers fenced JSON without weakening the canonical schema", () => {
+    const expected = {
+      candidates: [],
+      searchSummary: "No evidence-backed candidate was found."
+    };
+    expect(
+      parseSignalCareStructuredOutput(
+        `\`\`\`json\n${JSON.stringify(expected)}\n\`\`\``,
+        signalCareResearchResultSchema
+      )
+    ).toEqual(expected);
+  });
+
+  it("recovers one schema-valid object from leading and duplicated trailing prose", () => {
+    const expected = {
+      candidates: [],
+      searchSummary: "The bounded search completed with no match."
+    };
+    expect(
+      parseSignalCareStructuredOutput(
+        `Result follows: ${JSON.stringify(expected)} Commentary: ${JSON.stringify({ ignored: true })}`,
+        signalCareResearchResultSchema
+      )
+    ).toEqual(expected);
+  });
+
+  it("repairs only unambiguous closing containers and never bypasses schema validation", () => {
+    expect(
+      parseSignalCareStructuredOutput(
+        '{"candidates":[],"searchSummary":"Complete semantics"',
+        signalCareResearchResultSchema
+      )
+    ).toEqual({
+      candidates: [],
+      searchSummary: "Complete semantics"
+    });
+    expect(() =>
+      parseSignalCareStructuredOutput(
+        '{"candidates":[],"searchSummary":"unterminated',
+        signalCareResearchResultSchema
+      )
+    ).toThrow(/invalid structured output/i);
+    expect(() =>
+      parseSignalCareStructuredOutput(
+        '{"candidates":[]}',
+        signalCareResearchResultSchema
+      )
+    ).toThrow(/required schema check/i);
+  });
+
+  it("retries malformed model output twice with safe correction context, then processes success", async () => {
+    const malformed = "{\"candidates\":[{\"organizationName\":\"do not echo me";
+    const valid = JSON.stringify({
+      candidates: [],
+      searchSummary: "No qualified candidates after bounded public research."
+    });
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(hostedResearchResponse(malformed))
+      .mockResolvedValueOnce(hostedResearchResponse("not-json"))
+      .mockResolvedValueOnce(hostedResearchResponse(valid));
+    const client = new OpenAiSignalCareResearchClient(
+      fetcher as unknown as typeof fetch,
+      "test-research-model"
+    );
+
+    const result = await client.discover(hostedDiscoveryInput());
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      candidates: [],
+      searchSummary: "No qualified candidates after bounded public research.",
+      providerAttemptCount: 3
+    });
+    const retryRequest = JSON.parse(
+      (fetcher.mock.calls[1]?.[1] as RequestInit).body as string
+    );
+    expect(JSON.stringify(retryRequest)).toContain(
+      "Your previous response could not be parsed as the required JSON schema"
+    );
+    expect(JSON.stringify(retryRequest)).not.toContain("do not echo me");
+  });
+
+  it("classifies repeated schema-valid JSON with missing fields separately", async () => {
+    const fetcher = vi.fn().mockImplementation(async () =>
+      hostedResearchResponse(JSON.stringify({ candidates: [] }))
+    );
+    const client = new OpenAiSignalCareResearchClient(
+      fetcher as unknown as typeof fetch,
+      "test-research-model"
+    );
+
+    await expect(client.discover(hostedDiscoveryInput())).rejects.toMatchObject({
+      code: "SCHEMA_VALIDATION_FAILED",
+      modelAttemptCount: 3
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("classifies provider timeouts without converting them to a business no-match", async () => {
+    const timeout = Object.assign(new Error("request timed out"), {
+      name: "AbortError"
+    });
+    const client = new OpenAiSignalCareResearchClient(
+      vi.fn().mockRejectedValue(timeout) as unknown as typeof fetch,
+      "test-research-model"
+    );
+
+    await expect(client.discover(hostedDiscoveryInput())).rejects.toMatchObject({
+      code: "PROVIDER_TIMEOUT",
+      modelAttemptCount: 1
+    });
+  });
+
+  it("backs off after three invalid responses, creates no owner work, and remains scheduler-eligible", async () => {
+    const now = new Date("2026-08-30T20:00:00.000Z");
+    const work = await createWork("provider-output-invalid-backoff");
+    const fetcher = vi.fn().mockImplementation(async () =>
+      hostedResearchResponse('{"candidates":[{"organizationName":"truncated')
+    );
+    const client = new OpenAiSignalCareResearchClient(
+      fetcher as unknown as typeof fetch,
+      "test-research-model"
+    );
+
+    const result = await executeSignalCareHostedResearch(
+      {
+        userId,
+        projectId: signalProjectId,
+        workItemId: work.id,
+        objective: work.objective
+      },
+      client,
+      db,
+      now
+    );
+
+    expect(result).toMatchObject({
+      outcome: "RETRY",
+      failureCode: "PROVIDER_OUTPUT_INVALID",
+      error:
+        "Hosted research returned invalid structured output; automatic retry scheduled."
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(
+      await db.agentWorkItem.findUniqueOrThrow({ where: { id: work.id } })
+    ).toMatchObject({ state: "FAILED", attemptCount: 1 });
+    const continuation = await db.agentWorkItem.findFirstOrThrow({
+      where: { parentWorkItemId: work.id }
+    });
+    expect(continuation).toMatchObject({
+      state: "QUEUED",
+      nextEligibleRunAt: new Date("2026-08-30T20:15:00.000Z")
+    });
+    expect(parseSignalCareResearchContext(continuation.operationalContext)).toMatchObject({
+      researchMode: "DISCOVER_PROSPECTS",
+      discoveryStrategy: "OPERATIONS_SCHEDULING_COMPLEXITY"
+    });
+    expect(
+      await db.agentWorkItem.count({
+        where: {
+          projectId: signalProjectId,
+          state: { in: ["QUEUED", "RUNNING", "RETRY", "VERIFYING"] }
+        }
+      })
+    ).toBeLessThanOrEqual(2);
+    expect(await db.agentDecision.count({ where: { projectId: signalProjectId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { projectId: signalProjectId } })).toBe(0);
+    expect(await db.pipelineAction.count({ where: { userId } })).toBe(0);
+    expect(
+      await db.agentProjectConfig.findUniqueOrThrow({
+        where: { projectId: signalProjectId }
+      })
+    ).toMatchObject({
+      enabled: true,
+      health: "NEEDS_ATTENTION",
+      currentBottleneck:
+        "Hosted research returned invalid structured output; automatic retry scheduled.",
+      nextAgentReviewAt: new Date("2026-08-30T20:15:00.000Z")
+    });
+
+    const resumed = await runAgentOrchestrationCycle(
+      new Date("2026-08-30T20:15:00.000Z"),
+      {
+        userId,
+        projectIds: [signalProjectId],
+        db,
+        services: waitingServices(fakeResearchClient([candidate(9)])).services
+      }
+    );
+    expect(resumed.projects).toEqual([
+      expect.objectContaining({
+        projectId: signalProjectId,
+        outcome: "COMPLETED",
+        workItemId: continuation.id
+      })
+    ]);
+    expect(
+      await db.queueItem.findFirst({
+        where: { userId, recipient: candidate(9).organizationName }
+      })
+    ).not.toBeNull();
+    expect(await db.agentDecision.count({ where: { projectId: signalProjectId } })).toBe(0);
+    expect(await db.agentActionRequest.count({ where: { projectId: signalProjectId } })).toBe(0);
+  });
+
   it("turns an empty pipeline into a bounded five-prospect shortlist", async () => {
     const work = await createWork("bounded-discovery");
     const client = fakeResearchClient(

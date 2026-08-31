@@ -362,6 +362,7 @@ async function failedSignalCareQualificationCount(
     },
     select: {
       state: true,
+      blocker: true,
       operationalContext: true,
       updatedAt: true,
       completedAt: true
@@ -373,7 +374,12 @@ async function failedSignalCareQualificationCount(
       return (
         context.researchMode === "QUALIFY_EXISTING_PROSPECT" &&
         context.targetProspect.trim().toLowerCase() ===
-          targetProspect.trim().toLowerCase()
+          targetProspect.trim().toLowerCase() &&
+        (item.state === "DONE" ||
+          item.blocker
+            ?.toLowerCase()
+            .includes("qualification returned inadequate provider provenance") ===
+            true)
       );
     } catch {
       return false;
@@ -1025,10 +1031,20 @@ async function processClaimedProject(
         };
       }
       await releaseProjectClaim(config.id, leaseToken, now, {
-        health: research.outcome === "FAILED" ? "BLOCKED" : "NEEDS_ATTENTION",
-        currentBottleneck: plan.plannedBottleneck,
+        health:
+          "failureCode" in research && research.failureCode
+            ? "NEEDS_ATTENTION"
+            : research.outcome === "FAILED"
+              ? "BLOCKED"
+              : "NEEDS_ATTENTION",
+        currentBottleneck:
+          "failureCode" in research && research.failureCode
+            ? research.error
+            : plan.plannedBottleneck,
         nextAgentReviewAt:
-          research.outcome === "PARKED"
+          "nextEligibleRunAt" in research && research.nextEligibleRunAt
+            ? research.nextEligibleRunAt
+            : research.outcome === "PARKED"
             ? now
             : research.outcome === "RETRY"
               ? addMs(now, retryDelayMs)

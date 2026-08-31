@@ -467,6 +467,17 @@ export function deriveAgentProjectDisplayState(
       if (!containsOwnerDecisionLanguage(displayBottleneck)) {
         displayBottleneck = `${pendingDecisions.length} owner decision${pendingDecisions.length === 1 ? "" : "s"} awaiting review.`;
       }
+    } else if (
+      currentFailed.some((item) =>
+        /invalid structured output|failed \d+ required schema check/i.test(
+          item.blocker ?? ""
+        )
+      )
+    ) {
+      displayHealth = "NEEDS_ATTENTION";
+      displayBottleneck = activeWork.length
+        ? "Hosted research returned invalid structured output; automatic retry scheduled."
+        : "Hosted research repeatedly returned invalid structured output; controlled continuation is awaiting recovery.";
     } else if (activeWork.length > 0) {
       displayHealth = "ON_TRACK";
     } else if (currentFailed.length > 0) {
