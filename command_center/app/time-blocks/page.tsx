@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { DeferredOwnerFeed } from "@/components/execution/deferred-owner-feed";
 import { OwnerActionsPanel } from "@/components/execution/owner-actions-panel";
 import { TimeBlockBoard } from "@/components/execution/time-block-board";
 import { Button } from "@/components/ui/button";
@@ -6,7 +7,6 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { getTimeBlockPlannerData } from "@/server/execution-service";
 import { getCalendarDayRange } from "@/server/google-calendar-service";
-import { loadApTraderFeed } from "@/server/today-feed/ap-trader-feed";
 import { loadLifeFeeds, toLifeTasks } from "@/server/today-feed/life-feeds";
 import { loadRykasFeed } from "@/server/today-feed/rykas-feed";
 import { getTodaysPrinciple } from "@/server/wisdom-service";
@@ -41,11 +41,10 @@ export default async function TimeBlocksPage({
   const user = await requireUser();
   const params = await searchParams;
   const selectedDate = dateFromParam(firstParam(params.date));
-  const [planner, todaysPrinciple, rykasFeed, apTraderFeed] = await Promise.all([
+  const [planner, todaysPrinciple, rykasFeed] = await Promise.all([
     getTimeBlockPlannerData(user.id, selectedDate),
     getTodaysPrinciple(user.id),
-    loadRykasFeed(user.id, prisma),
-    loadApTraderFeed()
+    loadRykasFeed(user.id, prisma)
   ]);
   const lifeFeeds = await loadLifeFeeds(user.id, prisma, {
     domains: planner.domains,
@@ -104,7 +103,10 @@ export default async function TimeBlocksPage({
         </div>
       </section>
 
-      <OwnerActionsPanel feeds={[...lifeFeeds, rykasFeed, apTraderFeed]} />
+      <OwnerActionsPanel
+        deferred={<DeferredOwnerFeed area="AP_TRADER" endpoint="/api/today/ap-trader" />}
+        feeds={[...lifeFeeds, rykasFeed]}
+      />
 
       <TimeBlockBoard
         calendarEvents={planner.calendarEvents}
