@@ -20,7 +20,7 @@ export async function loginAction(formData: FormData) {
     await signIn("credentials", {
       email,
       password,
-      redirectTo: "/time-blocks"
+      redirectTo: "/now"
     });
   } catch (error) {
     if (error instanceof AuthError) {

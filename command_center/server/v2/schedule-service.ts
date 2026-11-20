@@ -78,7 +78,7 @@ export async function scheduleAction(
   taskId: string,
   db: PrismaClient,
   calendarLoader: CalendarLoader,
-  options: { now?: Date; displaceIds?: string[] } = {}
+  options: { now?: Date; displaceIds?: string[]; startNow?: boolean } = {}
 ): Promise<ScheduleOutcome> {
   const now = options.now ?? new Date();
   const settings = await loadDaySettings(userId, db);
@@ -94,7 +94,7 @@ export async function scheduleAction(
     });
     if (!task) return { type: "NOT_FOUND" } as const;
     const busy = await busyBlocks(tx, userId, from, to, task.id, calendar);
-    const result = placeItem({ minutes: taskMinutes(task), workContext: task.workContext, dueAt: task.dueDate, expiresAt: task.expiresAt, earliest: now }, busy, settings);
+    const result = placeItem({ minutes: taskMinutes(task), workContext: task.workContext, dueAt: task.dueDate, expiresAt: task.expiresAt, earliest: now, startNow: options.startNow }, busy, settings);
 
     if (result.type === "SLOT" && !options.displaceIds) {
       await tx.executionTask.update({ where: { id: task.id }, data: { scheduledStart: result.slot.start, scheduledEnd: result.slot.end, whenBucket: "TODAY" } });

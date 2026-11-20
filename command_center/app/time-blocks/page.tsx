@@ -36,7 +36,7 @@ function TaskLine({ task, timeZone, extra }: { task: DayTask; timeZone: string; 
           .filter(Boolean)
           .join(" · ")}
         {" · "}
-        <a className="underline underline-offset-2" href={workHref(task)} {...(task.sourceUrl ? { target: "_blank", rel: "noopener noreferrer" } : {})}>open</a>
+        <a className="-my-2 inline-flex min-h-10 items-center px-1 underline underline-offset-2" href={workHref(task)} {...(task.sourceUrl ? { target: "_blank", rel: "noopener noreferrer" } : {})}>open</a>
       </p>
     </div>
   );

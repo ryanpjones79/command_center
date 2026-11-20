@@ -112,7 +112,7 @@ export function OutcomeEditor({ projectId, outcome }: { projectId: string; outco
       <p className="text-[15px]">
         <span className="text-muted-foreground">Outcome: </span>
         {outcome}{" "}
-        <button className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => setEditing(true)} type="button">edit</button>
+        <button className="-my-2 inline-flex min-h-10 items-center px-2 text-xs text-muted-foreground underline underline-offset-2" onClick={() => setEditing(true)} type="button">edit</button>
       </p>
     );
   }

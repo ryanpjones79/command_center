@@ -19,7 +19,7 @@ export function buildShutdown(model: DayModel): ShutdownModel {
   const { now, day } = model;
   const tomorrowEnd = new Date(day.end.getTime() + 24 * 60 * 60_000);
   const unfinished = [
-    ...model.blocks.filter((task) => task.status !== "WAITING"),
+    ...model.blocks.filter((task) => task.status !== "WAITING" && (task.scheduledStart as Date) <= now),
     ...model.queue.filter((task) => task.whenBucket === "TODAY")
   ].filter((task, index, all) => all.findIndex((other) => other.id === task.id) === index);
   const cantWait = model.queue

@@ -31,6 +31,7 @@ export type PlaceRequest = {
   dueAt: Date | null;
   expiresAt: Date | null;
   earliest: Date; // usually now
+  startNow?: boolean; // "Do it now": first candidate starts at `earliest`, not the next 15-min mark
   horizonDays?: number; // how far ahead to look (default 7)
 };
 
@@ -99,7 +100,8 @@ function searchDay(
   const length = request.minutes * 60_000;
   const end = new Date(Math.min(window.end.getTime(), latestEnd.getTime()));
   const found: Slot[] = [];
-  let start = roundUp(new Date(Math.max(window.start.getTime(), request.earliest.getTime())));
+  const from = new Date(Math.max(window.start.getTime(), request.earliest.getTime()));
+  let start = request.startNow && from.getTime() === request.earliest.getTime() ? new Date(Math.floor(from.getTime() / 60_000) * 60_000) : roundUp(from);
   while (start.getTime() + length <= end.getTime() && found.length < 4) {
     const slot = { start, end: new Date(start.getTime() + length) };
     const padded = { start: new Date(slot.start.getTime() - travel), end: new Date(slot.end.getTime() + travel) };

@@ -61,10 +61,10 @@ export async function v2PostponeAction(taskId: string, choice: string): Promise<
   return { ok: true, message: result.stillWorthIt ? "Moved. It has been put off 3+ times; it'll ask whether it's still worth doing." : "Moved." };
 }
 
-export async function v2ScheduleAction(taskId: string, displaceIds?: string[]): Promise<ActionMessage> {
+export async function v2ScheduleAction(taskId: string, displaceIds?: string[], startNow = false): Promise<ActionMessage> {
   const user = await requireUser();
   const settings = await loadDaySettings(user.id, prisma);
-  const result = await scheduleAction(user.id, taskId, prisma, googleCalendarLoader(), { displaceIds });
+  const result = await scheduleAction(user.id, taskId, prisma, googleCalendarLoader(), { displaceIds, startNow });
   refresh();
   if (result.type === "BOOKED") {
     const moved = result.displacedIds.length ? ` Moved ${result.displacedIds.length} block${result.displacedIds.length === 1 ? "" : "s"} back to today's queue.` : "";

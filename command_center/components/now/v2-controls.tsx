@@ -108,17 +108,17 @@ export function BlockControls({ taskId, protectedTime = false, ended = false }: 
 
 // "Do it now" / "Schedule": books the best feasible slot; shows the real
 // trade-off when it doesn't fit and asks before displacing anything.
-export function ScheduleButton({ taskId, label = "Schedule" }: { taskId: string; label?: string }) {
+export function ScheduleButton({ taskId, label = "Schedule", startNow = false }: { taskId: string; label?: string; startNow?: boolean }) {
   const { pending, message, run } = useRun();
   const displaceIds = (message?.detail as { displaceIds?: string[] } | null)?.displaceIds;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
-        <button className={cn("h-11 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60", focusRing)} disabled={pending} onClick={() => run(() => v2ScheduleAction(taskId))} type="button">
+        <button className={cn("h-11 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60", focusRing)} disabled={pending} onClick={() => run(() => v2ScheduleAction(taskId, undefined, startNow))} type="button">
           {pending ? "Checking…" : label}
         </button>
         {displaceIds && displaceIds.length > 0 && (
-          <button className={secondary} disabled={pending} onClick={() => run(() => v2ScheduleAction(taskId, displaceIds))} type="button">
+          <button className={secondary} disabled={pending} onClick={() => run(() => v2ScheduleAction(taskId, displaceIds, startNow))} type="button">
             Move them and schedule
           </button>
         )}

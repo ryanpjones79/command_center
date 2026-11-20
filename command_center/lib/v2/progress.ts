@@ -74,7 +74,7 @@ export function summarizeGoal(goal: GoalView, results: GoalResultView[], now: Da
   };
 
   if (verified && sourceHealthy) {
-    return { ...base, value: verified.value, status: "VERIFIED", evidenceLabel: `Reported by ${goal.sourceSystem ?? "source"}`, observedAt: verified.observedAt };
+    return { ...base, value: verified.value, status: "VERIFIED", evidenceLabel: `Reported by ${goal.sourceSystem ? goal.sourceSystem.replace("_", " ").toLowerCase() : "the source"}`, observedAt: verified.observedAt };
   }
   if (verified && !sourceHealthy) {
     return { ...base, value: verified.value, status: "HISTORICAL", evidenceLabel: "Last reported value; source not currently reachable", observedAt: verified.observedAt };

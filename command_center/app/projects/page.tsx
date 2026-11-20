@@ -46,7 +46,7 @@ export default async function ProjectsPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ProjectsTabs />
-        <Link className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/projects/manage">Add or edit projects</Link>
+        <Link className="inline-flex min-h-10 items-center rounded-lg px-2 text-sm text-muted-foreground underline-offset-4 hover:underline" href="/projects/manage">Add or edit projects</Link>
       </div>
 
       <section aria-labelledby="weekly-title" className="rounded-2xl border bg-card p-5 sm:p-6">

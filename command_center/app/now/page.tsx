@@ -78,12 +78,12 @@ export default async function NowPage() {
   const exceptions = [
     model.endedOpen.length > (closeOut ? 1 : 0) ? `${model.endedOpen.length - (closeOut ? 1 : 0)} ended block${model.endedOpen.length - (closeOut ? 1 : 0) === 1 ? "" : "s"} to close` : null,
     model.expired.length ? `${model.expired.length} expired offer${model.expired.length === 1 ? "" : "s"}` : null,
-    model.judgment.length ? `${model.judgment.length} to sort` : null,
+    model.judgmentDue.length ? `${model.judgmentDue.length} to sort` : null,
     model.stillWorthIt.length ? `${model.stillWorthIt.length} put off 3+ times` : null,
     model.sourceProblems.length ? `${model.sourceProblems.map((problem) => problem.sourceSystem.replace("_", " ").toLowerCase()).join(", ")} not reachable` : null,
     !model.calendarKnown ? "calendar not reachable" : null
   ].filter(Boolean);
-  const urgentIncident = [...model.blocks, ...model.queue].find((task) => task.sourceKind === "INCIDENT" && task.sourceState === "OPEN");
+  const urgentIncident = model.openIncidents[0] ?? null;
 
   return (
     <div className="space-y-5">
@@ -135,7 +135,7 @@ export default async function NowPage() {
             <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{recommendation.title}</h1>
             <p className="mt-2 text-sm text-muted-foreground">About {minutesText(recommendation.minutes)}</p>
             <Context task={recommendation} timeZone={tz} />
-            <div className="mt-6"><ScheduleButton label="Do it now" taskId={recommendation.id} /></div>
+            <div className="mt-6"><ScheduleButton label="Do it now" startNow taskId={recommendation.id} /></div>
             <p className="mt-2 text-xs text-muted-foreground">Or keep the time free; buffer is part of the plan.</p>
           </>
         ) : (

@@ -54,6 +54,11 @@ describe("placement rules (pure)", () => {
     expect(result.type === "CONFLICT" && result.displace).toBeNull();
   });
 
+  it("Do it now starts at the current minute when it fits", () => {
+    const result = placeItem({ minutes: 15, workContext: null, dueAt: null, expiresAt: null, earliest: pt("2026-11-20T13:23:30"), startNow: true }, [], settings);
+    expect(result.type === "SLOT" && result.slot.start.toISOString()).toBe(pt("2026-11-20T13:23:00").toISOString());
+  });
+
   it("12: an expired offer can't be scheduled for later", () => {
     const result = placeItem({ minutes: 30, workContext: null, dueAt: null, expiresAt: pt("2026-11-20T08:00:00"), earliest: FRI_9 }, [], settings);
     expect(result.type).toBe("EXPIRED");

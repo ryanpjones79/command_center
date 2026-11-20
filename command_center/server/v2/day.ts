@@ -70,6 +70,8 @@ export type DayModel = {
   expired: DayTask[]; // expired opportunities still open
   stillWorthIt: DayTask[]; // postponed 3+ times
   judgment: DayTask[]; // needs Ryan's judgment (inbox)
+  judgmentDue: DayTask[]; // judgment items whose review time has come
+  openIncidents: DayTask[]; // source incidents still open (not yet inspected)
   dueForReview: DayTask[]; // review date reached
   queue: DayTask[]; // accepted for today/this week, not scheduled
   sourceProblems: { sourceSystem: string; lastSuccessAt: Date | null }[];
@@ -165,6 +167,8 @@ export async function loadDay(userId: string, db: PrismaClient, calendarLoader: 
   const expired = tasks.filter((task) => task.expiresAt && task.expiresAt <= now);
   const stillWorthIt = tasks.filter((task) => task.postponeCount >= 3 && !task.scheduledStart);
   const judgment = tasks.filter((task) => task.needsJudgment).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const judgmentDue = judgment.filter((task) => !task.followUpDate || task.followUpDate <= now);
+  const openIncidents = tasks.filter((task) => task.sourceKind === "INCIDENT" && task.sourceState === "OPEN" && task.status !== "WAITING");
   const dueForReview = tasks.filter((task) => !task.needsJudgment && task.followUpDate && task.followUpDate <= now && !task.scheduledStart);
   const queue = tasks.filter(
     (task) => !task.scheduledStart && !task.needsJudgment && !task.isBlocked && task.status !== "WAITING" && !(task.expiresAt && task.expiresAt <= now) &&
@@ -185,6 +189,8 @@ export async function loadDay(userId: string, db: PrismaClient, calendarLoader: 
     expired,
     stillWorthIt,
     judgment,
+    judgmentDue,
+    openIncidents,
     dueForReview,
     queue,
     sourceProblems: syncs
