@@ -12,7 +12,7 @@ const TOOLS: { key: string; label: string; env: string; fallback: string | null;
   { key: "EBAY", label: "eBay workstation", env: "RYANOS_TOOL_EBAY", fallback: `${SUPPLIER_OS}/sourcing/ebay`, note: "Research and listings" },
   { key: "STORE_ROUTE", label: "Store route", env: "RYANOS_TOOL_STORE_ROUTE", fallback: `${SUPPLIER_OS}/sourcing/store-route`, note: "Retail-arbitrage routes" },
   { key: "AP_TRADER", label: "AP Trader", env: "RYANOS_TOOL_AP_TRADER", fallback: null, note: "Trading operations" },
-  { key: "CASINO_AP", label: "Casino AP", env: "RYANOS_TOOL_CASINO_AP", fallback: null, note: "Offers and opportunities" },
+  { key: "CASINO_AP", label: "AP Field Book", env: "RYANOS_TOOL_CASINO_AP", fallback: "https://ap-fieldbook-production.up.railway.app/", note: "Casino AP offers and plays" },
   { key: "CCHCS", label: "CCHCS resources", env: "RYANOS_TOOL_CCHCS", fallback: null, note: "Approved work systems only" }
 ];
 
