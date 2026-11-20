@@ -166,6 +166,7 @@ model User {
   projectAttention  ProjectAttention[]
   alertDeliveries   AlertDelivery[]
   sourceSyncs       SourceSync[]
+  protectedRoutines ProtectedRoutine[]
 }
 
 model UserSettings {
@@ -1050,4 +1051,21 @@ model SourceSync {
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, sourceSystem])
+}
+
+// Standard week: protected commitments placed automatically each day.
+model ProtectedRoutine {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  domainSlug  String
+  weekdays    String // comma-separated 0-6 (0 = Sunday)
+  startMin    Int? // minutes after local midnight; null = any time that day
+  durationMin Int
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active])
 }

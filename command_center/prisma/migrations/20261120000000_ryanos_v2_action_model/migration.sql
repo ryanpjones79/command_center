@@ -102,6 +102,21 @@ CREATE TABLE "SourceSync" (
     CONSTRAINT "SourceSync_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+-- CreateTable
+CREATE TABLE "ProtectedRoutine" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "userId" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "domainSlug" TEXT NOT NULL,
+    "weekdays" TEXT NOT NULL,
+    "startMin" INTEGER,
+    "durationMin" INTEGER NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "ProtectedRoutine_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 -- RedefineTables
 PRAGMA defer_foreign_keys=ON;
 PRAGMA foreign_keys=OFF;
@@ -278,4 +293,7 @@ CREATE INDEX "AlertDelivery_userId_sentAt_idx" ON "AlertDelivery"("userId", "sen
 
 -- CreateIndex
 CREATE UNIQUE INDEX "SourceSync_userId_sourceSystem_key" ON "SourceSync"("userId", "sourceSystem");
+
+-- CreateIndex
+CREATE INDEX "ProtectedRoutine_userId_active_idx" ON "ProtectedRoutine"("userId", "active");
 

@@ -65,6 +65,7 @@ export default async function TodayPage() {
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">{now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long", month: "long", day: "numeric" })}</h1>
         </div>
         <div className="flex flex-wrap gap-2 text-sm">
+          <Link className="rounded-xl border px-3 py-2 hover:bg-muted" href="/time-blocks/routines">Standard week</Link>
           <Link className="rounded-xl border px-3 py-2 hover:bg-muted" href="/time-blocks/grid">Detailed grid</Link>
           <a className={afternoon ? "rounded-xl bg-primary px-3 py-2 font-semibold text-primary-foreground" : "rounded-xl border px-3 py-2 hover:bg-muted"} href="#close">Close day</a>
         </div>

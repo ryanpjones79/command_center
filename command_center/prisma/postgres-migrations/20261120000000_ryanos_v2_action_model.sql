@@ -143,6 +143,22 @@ CREATE TABLE "SourceSync" (
     CONSTRAINT "SourceSync_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "ProtectedRoutine" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "domainSlug" TEXT NOT NULL,
+    "weekdays" TEXT NOT NULL,
+    "startMin" INTEGER,
+    "durationMin" INTEGER NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ProtectedRoutine_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "ExecutionTaskEvent_idempotencyKey_key" ON "ExecutionTaskEvent"("idempotencyKey");
 
@@ -184,6 +200,9 @@ CREATE INDEX "AlertDelivery_userId_sentAt_idx" ON "AlertDelivery"("userId", "sen
 
 -- CreateIndex
 CREATE UNIQUE INDEX "SourceSync_userId_sourceSystem_key" ON "SourceSync"("userId", "sourceSystem");
+
+-- CreateIndex
+CREATE INDEX "ProtectedRoutine_userId_active_idx" ON "ProtectedRoutine"("userId", "active");
 
 -- CreateIndex
 CREATE INDEX "ExecutionTask_userId_needsJudgment_idx" ON "ExecutionTask"("userId", "needsJudgment");
@@ -229,4 +248,7 @@ ALTER TABLE "AlertDelivery" ADD CONSTRAINT "AlertDelivery_userId_fkey" FOREIGN K
 
 -- AddForeignKey
 ALTER TABLE "SourceSync" ADD CONSTRAINT "SourceSync_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ProtectedRoutine" ADD CONSTRAINT "ProtectedRoutine_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

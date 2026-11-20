@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { alertsForWindow, MAX_LOOKBACK_MS, sendPushover } from "@/server/now/alerts";
 import { resolveOwnerUserId } from "@/server/v2/inbound-auth";
 import { loadDaySettings } from "@/server/v2/schedule-service";
+import { materializeRoutines } from "@/server/v2/routines";
 import { syncAllSources } from "@/server/v2/sources/sync";
 
 // Runs source syncs and block alerts once (see app/api/cron/now-alerts/route.ts).
@@ -16,6 +17,7 @@ export async function runNowAlerts(
   const userId = await resolveOwnerUserId(db);
   if (!userId) return { ok: false, error: "Owner not configured" };
   const sync = options.sync === false || options.dryRun ? null : await syncAllSources(userId, db, now);
+  if (!options.dryRun) await materializeRoutines(userId, db, now).catch(() => undefined);
   if (process.env.FEATURE_NOW_ALERTS !== "true") return { ok: true, disabled: true, sync };
 
   const settings = await loadDaySettings(userId, db);

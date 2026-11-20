@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { deriveCoverage, type Coverage } from "@/lib/v2/coverage";
 import { addZonedDays, startOfZonedDay, zonedDayRange } from "@/lib/v2/zoned-time";
 import { getCalendarEventsForDate } from "@/server/google-calendar-service";
+import { materializeRoutines } from "@/server/v2/routines";
 import { loadDaySettings, taskMinutes, type CalendarBusy, type CalendarLoader } from "@/server/v2/schedule-service";
 import type { DaySettings } from "@/lib/v2/scheduler";
 
@@ -132,6 +133,7 @@ export function workHref(task: Pick<DayTask, "id" | "sourceUrl">) {
 }
 
 export async function loadDay(userId: string, db: PrismaClient, calendarLoader: CalendarLoader, now = new Date()): Promise<DayModel> {
+  await materializeRoutines(userId, db, now).catch(() => undefined);
   const settings = await loadDaySettings(userId, db);
   const day = zonedDayRange(now, settings.timeZone);
   let meetings: CalendarBusy[] = [];
