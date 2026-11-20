@@ -655,6 +655,7 @@ model ExecutionTask {
   // Same name/uniqueness as the task-connector work so both converge.
   integrationSourceKey String?
   sourceSystem         String?
+  sourceKind           String?
   sourceUrl            String?
   sourceState          String?
   sourceFingerprint    String?

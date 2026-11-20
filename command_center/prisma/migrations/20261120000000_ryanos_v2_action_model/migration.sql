@@ -198,6 +198,7 @@ CREATE TABLE "new_ExecutionTask" (
     "completedAt" DATETIME,
     "integrationSourceKey" TEXT,
     "sourceSystem" TEXT,
+    "sourceKind" TEXT,
     "sourceUrl" TEXT,
     "sourceState" TEXT,
     "sourceFingerprint" TEXT,
