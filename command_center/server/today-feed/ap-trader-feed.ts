@@ -32,6 +32,7 @@ import {
 // raises a card (the maker's own loss stop already does that).
 
 const MAX_BOTS = 6;
+const AUTH_ERROR = "READ_TOKEN_REJECTED";
 const FETCH_TIMEOUT_MS = 15_000;
 export const CACHE_MS = 3 * 60_000;
 const SETTLE_S = 600;
@@ -44,7 +45,12 @@ const MAKER_RESTART_WINDOW_MS = 30 * 60_000;
 const MAKER_RESTART_LIMIT = 5;
 const MEMORY_LIMIT_MB = 13_500;
 
-export type ApBotTarget = { name: string; baseUrl: string };
+// Optional third field names the env var holding that bot's read token, e.g.
+//   "AP Trader|https://ap.rykasinc.com|AP_TRADER_READ_TOKEN"
+// The token itself lives only in the secret store, is sent only to that bot as
+// `Authorization: Bearer`, and is never logged. No env var / empty value means
+// the request goes out unchanged.
+export type ApBotTarget = { name: string; baseUrl: string; tokenEnv?: string };
 
 export function parseApBotTargets(raw: string | undefined): ApBotTarget[] {
   if (!raw) return [];
@@ -52,13 +58,21 @@ export function parseApBotTargets(raw: string | undefined): ApBotTarget[] {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean)
-    .map((entry) => {
-      const [name, url] = entry.includes("|") ? entry.split("|", 2) : [null, entry];
-      const baseUrl = (url ?? "").trim().replace(/\/+$/, "");
-      return { name: (name ?? "").trim() || baseUrl.replace(/^https:\/\//, ""), baseUrl };
+    .map((entry): ApBotTarget => {
+      const parts = entry.split("|").map((part) => part.trim());
+      const [name, url, tokenEnv] = parts.length === 1 ? [null, parts[0], undefined] : parts;
+      const baseUrl = (url ?? "").replace(/\/+$/, "");
+      const target: ApBotTarget = { name: (name ?? "") || baseUrl.replace(/^https:\/\//, ""), baseUrl };
+      if (tokenEnv && /^[A-Z][A-Z0-9_]{0,63}$/.test(tokenEnv)) target.tokenEnv = tokenEnv;
+      return target;
     })
     .filter((target) => /^https:\/\/[^\s/]+/.test(target.baseUrl))
     .slice(0, MAX_BOTS);
+}
+
+function readToken(target: ApBotTarget) {
+  const value = target.tokenEnv ? process.env[target.tokenEnv]?.trim() : "";
+  return value && /^[\x21-\x7e]+$/.test(value) ? value : null;
 }
 
 const num = z.number().finite();
@@ -229,6 +243,16 @@ export function apCardsForBot(reading: ApBotReading, memory: ApMemory = createAp
   });
 
   if (!reading.ok) {
+    if (reading.error === AUTH_ERROR) {
+      return [card(
+        "read-token",
+        `${name}: read token missing/invalid`,
+        reading.target.tokenEnv
+          ? `The bot is up but rejected the read. Check ${reading.target.tokenEnv} in Railway variables.`
+          : "The bot is up but now needs a read token. Add a token variable for it in Railway.",
+        2
+      )];
+    }
     return [card("unreachable", `Can't reach ${name}`, `Status check failed (${reading.error}). Confirm the bot is running.`)];
   }
 
@@ -411,11 +435,17 @@ export function buildApTraderFeed(readings: ApBotReading[], observedAt: Date, me
 
 async function readBot(target: ApBotTarget, fetcher: typeof fetch, nowMs: number): Promise<ApBotReading> {
   try {
+    const token = readToken(target);
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (token) headers.authorization = `Bearer ${token}`;
     const response = await fetcher(`${target.baseUrl}/status.json`, {
       cache: "no-store",
-      headers: { accept: "application/json" },
+      headers,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
     });
+    if (response.status === 401 || response.status === 403) {
+      return { target, ok: false, error: AUTH_ERROR, readAtMs: nowMs };
+    }
     if (!response.ok) return { target, ok: false, error: `HTTP ${response.status}`, readAtMs: nowMs };
     const parsed = statusSchema.safeParse(await response.json());
     return parsed.success

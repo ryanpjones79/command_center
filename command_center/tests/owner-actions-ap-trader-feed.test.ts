@@ -171,6 +171,44 @@ describe("AP Trader Today feed", () => {
     expect(buildApTraderFeed([{ target: props, ok: true, status: { mode: "live" }, readAtMs: NOW_MS }], new Date(NOW_MS)).summary).toBeNull();
   });
 
+  it("parses an optional token variable name per bot and ignores bad names", () => {
+    expect(parseApBotTargets("AP Trader|https://ap.rykasinc.com|AP_TRADER_READ_TOKEN,AP Props|https://props.example|lower-case")).toEqual([
+      { name: "AP Trader", baseUrl: "https://ap.rykasinc.com", tokenEnv: "AP_TRADER_READ_TOKEN" },
+      { name: "AP Props", baseUrl: "https://props.example" }
+    ]);
+  });
+
+  it("sends the read token only to its own bot, only when set, and shows a token card on 401", async () => {
+    process.env.AP_TRADER_STATUS_URLS = "AP Trader|https://trader.example|TEST_AP_READ_TOKEN,AP Props|https://props.example";
+    const seen: Record<string, string | null> = {};
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      seen[url] = headers.get("authorization");
+      if (url.startsWith("https://trader.example")) {
+        return headers.get("authorization") === "Bearer good-token"
+          ? new Response(JSON.stringify({ mode: "live", blocker: "none", startup_jobs: { uptime_s: 9999 } }), { status: 200 })
+          : new Response("{}", { status: 401 });
+      }
+      return new Response(JSON.stringify({ mode: "paper" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    delete process.env.TEST_AP_READ_TOKEN;
+    const missing = await loadApTraderFeed(fakeFetch, () => new Date(NOW_MS));
+    expect(seen["https://trader.example/status.json"]).toBeNull();
+    expect(seen["https://props.example/status.json"]).toBeNull();
+    expect(missing.cards.map((card) => card.title)).toEqual(["AP Trader: read token missing/invalid"]);
+    expect(missing.cards[0].whyNow).toContain("TEST_AP_READ_TOKEN");
+    expect(missing.cards[0].whyNow).not.toContain("good-token");
+
+    resetApTraderCacheForTests();
+    process.env.TEST_AP_READ_TOKEN = "good-token";
+    const ok = await loadApTraderFeed(fakeFetch, () => new Date(NOW_MS));
+    expect(seen["https://trader.example/status.json"]).toBe("Bearer good-token");
+    expect(seen["https://props.example/status.json"]).toBeNull();
+    expect(ok).toMatchObject({ status: "EMPTY", cards: [] });
+    delete process.env.TEST_AP_READ_TOKEN;
+  });
+
   it("reads bots one at a time, GET only, and caches for three minutes", async () => {
     process.env.AP_TRADER_STATUS_URLS = "AP Trader|https://trader.example,AP Props|https://props.example";
     let active = 0;
