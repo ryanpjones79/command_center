@@ -1297,10 +1297,10 @@ export function TimeBlockBoard({
     <div className="space-y-4">
       {taskDetailPanel}
 
+      <CurrentSeasonCard season={currentSeason} />
+
       {variant !== "grid" && (
         <>
-          <CurrentSeasonCard season={currentSeason} />
-
           <MorningLaunchCard
             dailyReading={dailyReading}
             isComplete={isMorningLaunchComplete}

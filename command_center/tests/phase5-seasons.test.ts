@@ -44,7 +44,7 @@ describe("Phase 5 seasons", () => {
   it("surfaces current season on the Today operating screen", () => {
     const planner = read("server/execution-service.ts");
     const board = read("components/execution/time-block-board.tsx");
-    const page = read("app/time-blocks/page.tsx");
+    const page = read("app/time-blocks/grid/page.tsx");
     const card = read("components/execution/current-season-card.tsx");
 
     expect(planner).toContain("getCurrentSeason(userId)");
@@ -58,7 +58,7 @@ describe("Phase 5 seasons", () => {
     const validation = read("lib/execution-validation.ts");
     const actions = read("app/execution-actions.ts");
     const form = read("components/execution/create-project-form.tsx");
-    const projects = read("app/projects/page.tsx");
+    const projects = read("app/projects/manage/page.tsx");
 
     expect(validation).toContain("seasonId: z.string().cuid().optional()");
     expect(actions).toContain("getOwnedSeason");
