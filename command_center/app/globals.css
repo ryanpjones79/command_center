@@ -2,46 +2,66 @@
 @tailwind components;
 @tailwind utilities;
 
+/* RyanOS v2 visual system: warm neutral surfaces, deep ink/forest sidebar,
+   restrained emerald for primary actions, amber/red only for exceptions. */
 :root {
-  --background: 42 32% 97%;
-  --foreground: 222 39% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 39% 11%;
-  --primary: 165 78% 33%;
-  --primary-foreground: 43 44% 97%;
-  --secondary: 210 26% 93%;
-  --secondary-foreground: 222 34% 18%;
-  --muted: 210 24% 94%;
-  --muted-foreground: 215 14% 42%;
-  --accent: 39 91% 57%;
-  --accent-foreground: 222 39% 14%;
-  --destructive: 2 78% 56%;
+  --background: 40 27% 96%;
+  --foreground: 165 22% 11%;
+  --card: 40 33% 99%;
+  --card-foreground: 165 22% 11%;
+  --primary: 158 64% 30%;
+  --primary-foreground: 40 40% 98%;
+  --secondary: 40 18% 91%;
+  --secondary-foreground: 165 20% 16%;
+  --muted: 40 16% 92%;
+  --muted-foreground: 165 8% 36%;
+  --accent: 38 88% 50%;
+  --accent-foreground: 165 22% 11%;
+  --destructive: 4 70% 46%;
   --destructive-foreground: 0 0% 100%;
-  --border: 214 22% 84%;
-  --input: 214 22% 84%;
-  --ring: 165 78% 33%;
-  --radius: 1rem;
+  --border: 40 14% 84%;
+  --input: 40 14% 78%;
+  --ring: 158 64% 30%;
+  --radius: 0.875rem;
+  --sidebar: 165 32% 9%;
+  --sidebar-foreground: 150 14% 90%;
+  --sidebar-muted: 155 12% 64%;
+  --sidebar-active: 158 45% 17%;
 }
 
 .dark {
-  --background: 220 43% 8%;
-  --foreground: 214 30% 94%;
-  --card: 220 38% 11%;
-  --card-foreground: 214 30% 94%;
-  --primary: 164 86% 45%;
-  --primary-foreground: 220 43% 8%;
-  --secondary: 219 23% 18%;
-  --secondary-foreground: 214 30% 94%;
-  --muted: 220 20% 17%;
-  --muted-foreground: 215 16% 72%;
-  --accent: 40 92% 58%;
-  --accent-foreground: 220 43% 8%;
-  --destructive: 0 73% 58%;
+  --background: 165 18% 7%;
+  --foreground: 150 14% 92%;
+  --card: 165 16% 10%;
+  --card-foreground: 150 14% 92%;
+  --primary: 156 55% 46%;
+  --primary-foreground: 165 30% 6%;
+  --secondary: 165 12% 15%;
+  --secondary-foreground: 150 14% 92%;
+  --muted: 165 12% 14%;
+  --muted-foreground: 155 9% 70%;
+  --accent: 38 85% 56%;
+  --accent-foreground: 165 30% 6%;
+  --destructive: 4 72% 60%;
   --destructive-foreground: 0 0% 100%;
-  --border: 217 24% 24%;
-  --input: 217 24% 24%;
-  --ring: 164 86% 45%;
+  --border: 165 10% 20%;
+  --input: 165 10% 26%;
+  --ring: 156 55% 46%;
+  --sidebar: 165 30% 5%;
+  --sidebar-foreground: 150 14% 90%;
+  --sidebar-muted: 155 10% 60%;
+  --sidebar-active: 158 40% 14%;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 
 * {
   @apply border-border;
@@ -54,10 +74,7 @@ html {
 body {
   @apply min-h-screen bg-background text-foreground antialiased;
   font-family: var(--font-body), "Segoe UI", sans-serif;
-  background-image:
-    radial-gradient(circle at 0% 0%, rgba(16, 185, 129, 0.12), transparent 32%),
-    radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.12), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(249, 250, 251, 0.95));
+  background-image: none;
   background-attachment: fixed;
 }
 
@@ -68,16 +85,18 @@ body {
 }
 
 .dark body {
-  background-image:
-    radial-gradient(circle at 0% 0%, rgba(16, 185, 129, 0.18), transparent 30%),
-    radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.1), transparent 22%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(12, 18, 30, 1));
+  background-image: none;
 }
 
 h1,
 h2,
 h3 {
-  font-family: var(--font-display), "Avenir Next", "Segoe UI", sans-serif;
+  font-family: var(--font-body), "Segoe UI", sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-display), Georgia, "Times New Roman", serif;
+  font-optical-sizing: auto;
 }
 
 ::selection {
