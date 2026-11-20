@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { OwnerActionsPanel } from "@/components/execution/owner-actions-panel";
 import { TimeBlockBoard } from "@/components/execution/time-block-board";
 import { Button } from "@/components/ui/button";
+import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { getTimeBlockPlannerData } from "@/server/execution-service";
+import { loadRykasFeed } from "@/server/today-feed/rykas-feed";
 import { getTodaysPrinciple } from "@/server/wisdom-service";
 
 type TimeBlocksPageProps = {
@@ -35,9 +38,10 @@ export default async function TimeBlocksPage({
   const user = await requireUser();
   const params = await searchParams;
   const selectedDate = dateFromParam(firstParam(params.date));
-  const [planner, todaysPrinciple] = await Promise.all([
+  const [planner, todaysPrinciple, rykasFeed] = await Promise.all([
     getTimeBlockPlannerData(user.id, selectedDate),
-    getTodaysPrinciple(user.id)
+    getTodaysPrinciple(user.id),
+    loadRykasFeed(user.id, prisma)
   ]);
 
   return (
@@ -90,6 +94,8 @@ export default async function TimeBlocksPage({
           </div>
         </div>
       </section>
+
+      <OwnerActionsPanel feeds={[rykasFeed]} />
 
       <TimeBlockBoard
         calendarEvents={planner.calendarEvents}
