@@ -141,6 +141,36 @@ describe("AP Trader Today feed", () => {
     expect(run({ mode: "live", execution: { orders_enabled: false, blockers: { novig: ["PROPS_ORDERS_NOT_ENABLED"] } } })).toEqual([]);
   });
 
+  it("shows today's settled P&L as a display-only line, never a card", () => {
+    const status = healthy({
+      pnl: {
+        today: {
+          day: "2026-11-19", settled_usd: -11.67, arb_usd: -19.92, arb_n: 11, td_usd: 60.79, td_n: 2,
+          drops_usd: -34.47, drops_n: 4, maker_usd: -18.07, maker_n: 21, manual_usd: 0, manual_n: 0,
+          arb_locked_open_usd: 14.71, with_locked_usd: 1.75, risk_usd: 367.14
+        },
+        days: [-11.67, 20, 5, -3, 10, 0, 4.5].map((total, index) => ({ day: `d${index}`, total_usd: total }))
+      }
+    });
+    const feed = buildApTraderFeed([{ target: trader, ok: true, status, readAtMs: NOW_MS }], new Date(NOW_MS));
+    expect(feed.cards).toEqual([]);
+    expect(feed.summary).toEqual({
+      headline: "AP Trader today: -$11.67 settled (+$14.71 locked arbs pending)",
+      detail: [
+        "Arb -$19.92 (11) · Top-down +$60.79 (2) · Drops -$34.47 (4) · Maker -$18.07 (21)",
+        "With today's locked arbs: +$1.75",
+        "Open risk today: $367.14",
+        "Last 7 days: +$24.83"
+      ]
+    });
+  });
+
+  it("labels a P&L day that is not today and omits P&L when the bot has none", () => {
+    const old = healthy({ pnl: { today: { day: "2026-11-18", settled_usd: 5 } } });
+    expect(buildApTraderFeed([{ target: trader, ok: true, status: old, readAtMs: NOW_MS }], new Date(NOW_MS)).summary?.headline).toBe("AP Trader 2026-11-18: +$5.00 settled");
+    expect(buildApTraderFeed([{ target: props, ok: true, status: { mode: "live" }, readAtMs: NOW_MS }], new Date(NOW_MS)).summary).toBeNull();
+  });
+
   it("reads bots one at a time, GET only, and caches for three minutes", async () => {
     process.env.AP_TRADER_STATUS_URLS = "AP Trader|https://trader.example,AP Props|https://props.example";
     let active = 0;

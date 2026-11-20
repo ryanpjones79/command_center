@@ -82,6 +82,22 @@ export function OwnerFeedBlock({ feed }: { feed: OwnerActionFeed }) {
         )}
         {observed && <span className="text-[11px] text-muted-foreground">Data as of {observed}</span>}
       </div>
+      {feed.summary && (
+        <details className="mt-1.5 rounded-xl border bg-background/60 px-3 py-2">
+          <summary className="cursor-pointer break-words text-sm font-medium focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {feed.summary.headline}
+          </summary>
+          {feed.summary.detail.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5 text-xs leading-5 text-muted-foreground">
+              {feed.summary.detail.map((line) => (
+                <li className="break-words" key={line}>
+                  {line}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
       {feed.message && <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{feed.message}</p>}
       {feed.cards.length > 0 && (
         <ul className="mt-2 grid gap-2 md:grid-cols-3">

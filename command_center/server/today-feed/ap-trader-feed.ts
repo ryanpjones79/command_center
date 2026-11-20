@@ -3,7 +3,8 @@ import {
   capOwnerActions,
   truncateText,
   type OwnerActionCard,
-  type OwnerActionFeed
+  type OwnerActionFeed,
+  type OwnerFeedSummary
 } from "@/lib/owner-actions";
 
 // AP Trader feed for Today.
@@ -26,7 +27,9 @@ import {
 //   restarts climbing) only fire after this server instance has seen them
 //   persist across readings. A cold instance under-alerts, never over-alerts.
 //   The trader's own Pushover/SMS alerts remain the real pager.
-// Positions, P&L amounts and balances are never stored in RyanOS.
+// Positions and balances are never used. Today's settled P&L (pnl.today) is
+// shown as a display-only line at Ryan's request; it is never stored and never
+// raises a card (the maker's own loss stop already does that).
 
 const MAX_BOTS = 6;
 const FETCH_TIMEOUT_MS = 15_000;
@@ -141,6 +144,35 @@ const statusSchema = z
         blockers: z.record(z.array(z.string()).or(z.string()).or(z.null())).optional()
       })
       .passthrough()
+      .optional(),
+    // Display only (Ryan asked 2026-11-19). Never an alert condition.
+    pnl: z
+      .object({
+        today: z
+          .object({
+            day: z.string().optional(),
+            settled_usd: num.nullable().optional(),
+            arb_usd: num.nullable().optional(),
+            arb_n: num.optional(),
+            td_usd: num.nullable().optional(),
+            td_n: num.optional(),
+            drops_usd: num.nullable().optional(),
+            drops_n: num.optional(),
+            maker_usd: num.nullable().optional(),
+            maker_n: num.optional(),
+            manual_usd: num.nullable().optional(),
+            manual_n: num.optional(),
+            arb_locked_open_usd: num.nullable().optional(),
+            with_locked_usd: num.nullable().optional(),
+            risk_usd: num.nullable().optional()
+          })
+          .passthrough()
+          .nullable()
+          .optional(),
+        days: z.array(z.object({ day: z.string().optional(), total_usd: num.nullable().optional() }).passthrough()).optional()
+      })
+      .passthrough()
+      .nullable()
       .optional()
   })
   .passthrough();
@@ -314,6 +346,45 @@ export function apCardsForBot(reading: ApBotReading, memory: ApMemory = createAp
   return cards;
 }
 
+function usd(value: number) {
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
+}
+
+// Settled P&L today from the first live bot that reports it (the core trader;
+// props has none while its orders are off). Pacific day, per the trader.
+export function apPnlSummary(readings: ApBotReading[]): OwnerFeedSummary | null {
+  for (const reading of readings) {
+    if (!reading.ok) continue;
+    const today = reading.status.pnl?.today;
+    if (!today || typeof today.settled_usd !== "number") continue;
+    const nowMs = reading.status.now_ms ?? reading.readAtMs;
+    const isToday = !today.day || today.day === pacificDateKey(nowMs);
+    const locked = today.arb_locked_open_usd;
+    const lockedText = typeof locked === "number" && locked !== 0 ? ` (${usd(locked)} locked arbs pending)` : "";
+    const headline = `${reading.target.name} ${isToday ? "today" : today.day}: ${usd(today.settled_usd)} settled${lockedText}`;
+
+    const engines: [string, number | null | undefined, number | undefined][] = [
+      ["Arb", today.arb_usd, today.arb_n],
+      ["Top-down", today.td_usd, today.td_n],
+      ["Drops", today.drops_usd, today.drops_n],
+      ["Maker", today.maker_usd, today.maker_n],
+      ["Manual", today.manual_usd, today.manual_n]
+    ];
+    const split = engines
+      .filter(([, value, n]) => typeof value === "number" && (value !== 0 || (n ?? 0) > 0))
+      .map(([label, value, n]) => `${label} ${usd(value as number)}${typeof n === "number" ? ` (${n})` : ""}`);
+    const detail: string[] = [];
+    if (split.length) detail.push(split.join(" · "));
+    if (typeof today.with_locked_usd === "number") detail.push(`With today's locked arbs: ${usd(today.with_locked_usd)}`);
+    if (typeof today.risk_usd === "number") detail.push(`Open risk today: $${today.risk_usd.toFixed(2)}`);
+    const week = (reading.status.pnl?.days ?? []).slice(0, 7).filter((day) => typeof day.total_usd === "number");
+    if (week.length === 7) detail.push(`Last 7 days: ${usd(week.reduce((sum, day) => sum + (day.total_usd as number), 0))}`);
+    return { headline, detail };
+  }
+  return null;
+}
+
 export function buildApTraderFeed(readings: ApBotReading[], observedAt: Date, memory: ApMemory = createApMemory()): OwnerActionFeed {
   if (readings.length === 0) {
     return {
@@ -333,7 +404,8 @@ export function buildApTraderFeed(readings: ApBotReading[], observedAt: Date, me
     status: cards.length ? "READY" : "EMPTY",
     message: cards.length ? modes : `All clear: ${modes}.`,
     observedAt: observedAt.toISOString(),
-    cards
+    cards,
+    summary: apPnlSummary(readings)
   };
 }
 

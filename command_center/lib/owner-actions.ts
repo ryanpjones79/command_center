@@ -53,12 +53,20 @@ export type OwnerActionCard = {
 
 export type OwnerFeedStatus = "READY" | "EMPTY" | "STALE" | "OFF" | "UNAVAILABLE";
 
+// Optional display-only status line for an area (never an alert condition),
+// e.g. AP Trader's settled P&L today. `detail` lines show on tap.
+export type OwnerFeedSummary = {
+  headline: string;
+  detail: string[];
+};
+
 export type OwnerActionFeed = {
   area: OwnerActionArea;
   status: OwnerFeedStatus;
   message: string | null;
   observedAt: string | null;
   cards: OwnerActionCard[];
+  summary?: OwnerFeedSummary | null;
 };
 
 const KIND_RANK: Record<OwnerActionKind, number> = {
