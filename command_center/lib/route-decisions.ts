@@ -1,9 +1,10 @@
 export const rootRoutes = {
-  authenticated: "/time-blocks",
+  authenticated: "/now",
   unauthenticated: "/login"
 } as const;
 
 export const primaryRyanOsRoutes = [
+  "/now",
   "/time-blocks",
   "/work",
   "/review",
@@ -24,7 +25,7 @@ export function getRootRedirectPath(isAuthenticated: boolean) {
   return isAuthenticated ? rootRoutes.authenticated : rootRoutes.unauthenticated;
 }
 
-export type RyanOsNavKey = "today" | "work" | "review" | "library";
+export type RyanOsNavKey = "now" | "today" | "work" | "review" | "library";
 
 export type RyanOsNavItem = {
   href: string;
@@ -34,6 +35,7 @@ export type RyanOsNavItem = {
 };
 
 export const primaryRyanOsNavItems: RyanOsNavItem[] = [
+  { href: "/now", key: "now", label: "Now", mark: "NW" },
   { href: "/time-blocks", key: "today", label: "Today", mark: "TD" },
   { href: "/work", key: "work", label: "Work", mark: "WK" },
   { href: "/review", key: "review", label: "Review", mark: "RV" },
@@ -45,7 +47,11 @@ export function getActiveRyanOsNavKey(pathname: string | null | undefined): Ryan
     return null;
   }
 
-  if (pathname === "/" || pathname === "/today" || pathname.startsWith("/time-blocks")) {
+  if (pathname === "/" || pathname === "/now" || pathname.startsWith("/now/")) {
+    return "now";
+  }
+
+  if (pathname === "/today" || pathname.startsWith("/time-blocks")) {
     return "today";
   }
 

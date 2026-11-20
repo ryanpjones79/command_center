@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ScheduleCardButton } from "@/components/execution/schedule-card-button";
 import {
   OWNER_ACTION_AREA_LABELS,
   type OwnerActionCard,
@@ -53,6 +54,7 @@ function ActionRow({ card }: { card: OwnerActionCard }) {
         {card.external && <span className="sr-only"> (opens in a new tab)</span>}
       </Link>
       <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{card.whyNow}</p>
+      <ScheduleCardButton card={card} />
     </li>
   );
 }

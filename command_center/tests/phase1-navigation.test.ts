@@ -21,14 +21,20 @@ function sourceForRoute(route: string) {
 }
 
 describe("Phase 1 navigation information architecture", () => {
-  it("defines exactly the four primary RyanOS destinations", () => {
+  it("defines exactly the five primary RyanOS destinations, Now first", () => {
     expect(primaryRyanOsNavItems.map((item) => item.label)).toEqual([
+      "Now",
       "Today",
       "Work",
       "Review",
       "Library"
     ]);
-    expect(primaryRyanOsRoutes).toEqual(["/time-blocks", "/work", "/review", "/library"]);
+    expect(primaryRyanOsRoutes).toEqual(["/now", "/time-blocks", "/work", "/review", "/library"]);
+  });
+
+  it("makes Now the landing tab", () => {
+    expect(getActiveRyanOsNavKey("/now")).toBe("now");
+    expect(getActiveRyanOsNavKey("/")).toBe("now");
   });
 
   it("hides desktop primary nav on mobile and renders one mobile bottom nav", () => {

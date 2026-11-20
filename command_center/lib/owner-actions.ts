@@ -14,7 +14,8 @@ export const OWNER_ACTION_AREAS = [
   "EBAY",
   "AP_TRADER",
   "CASINO_AP",
-  "PERSONAL"
+  "PERSONAL",
+  "INBOX"
 ] as const;
 
 export type OwnerActionArea = (typeof OWNER_ACTION_AREAS)[number];
@@ -27,7 +28,8 @@ export const OWNER_ACTION_AREA_LABELS: Record<OwnerActionArea, string> = {
   EBAY: "eBay",
   AP_TRADER: "AP Trader",
   CASINO_AP: "Casino AP",
-  PERSONAL: "Personal"
+  PERSONAL: "Personal",
+  INBOX: "Idea inbox"
 };
 
 // DECISION: an owner decision is waiting (approve / choose).
@@ -49,6 +51,9 @@ export type OwnerActionCard = {
   href: string;
   external: boolean;
   source: string;
+  // Set when the card is an existing RyanOS task (scheduling moves that task
+  // instead of creating a new one).
+  taskId?: string;
 };
 
 export type OwnerFeedStatus = "READY" | "EMPTY" | "STALE" | "OFF" | "UNAVAILABLE";

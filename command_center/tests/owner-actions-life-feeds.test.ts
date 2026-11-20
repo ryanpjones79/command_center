@@ -10,7 +10,7 @@ const day = {
 
 function task(id: string, overrides: Partial<LifeTask> = {}): LifeTask {
   return {
-    id, title: `Task ${id}`, domainSlug: "health", domainId: "health-domain",
+    id, title: `Task ${id}`, domainSlug: "health", domainId: "health-domain", blockType: null,
     whenBucket: "LATER", dueDate: null, scheduledStart: null, pinToTodayUntilDone: false,
     ...overrides
   };
@@ -64,6 +64,44 @@ describe("Kids and Health Today feeds", () => {
   it("counts a completed check-in as handled", () => {
     const feed = buildLifeFeed("HEALTH", { domainIds: ["health-domain"], openTasks: [], doneTodayCount: 2, day });
     expect(feed).toMatchObject({ status: "EMPTY", cards: [], message: "2 done today." });
+  });
+
+  it("links task-backed cards to their task so they can be scheduled in place", () => {
+    const feed = buildLifeFeed("HEALTH", { domainIds: ["health-domain"], openTasks: [task("w", { whenBucket: "TODAY" })], doneTodayCount: 0, day });
+    expect(feed.cards[0].taskId).toBe("w");
+  });
+
+  it("CCHCS uses Work tasks but not Pipeline blocks, and nags only on weekdays", () => {
+    const work = (id: string, overrides: Partial<LifeTask> = {}) => task(id, { domainSlug: "work", domainId: "work-domain", ...overrides });
+    const thursday = buildLifeFeed("CCHCS", {
+      domainIds: ["work-domain"],
+      openTasks: [work("pipe", { blockType: "pipeline", whenBucket: "TODAY" }), work("memo", { title: "OPPE memo", whenBucket: "TODAY" })],
+      doneTodayCount: 0,
+      day
+    });
+    expect(thursday.cards.map((card) => card.id)).toEqual(["cchcs:unscheduled:memo"]);
+
+    const empty = buildLifeFeed("CCHCS", { domainIds: ["work-domain"], openTasks: [], doneTodayCount: 0, day });
+    expect(empty.cards.map((card) => card.id)).toEqual(["cchcs:none-planned"]);
+
+    const saturday = {
+      start: new Date("2026-11-21T08:00:00.000Z"),
+      end: new Date("2026-11-22T08:00:00.000Z"),
+      timeZone: "America/Los_Angeles"
+    };
+    expect(buildLifeFeed("CCHCS", { domainIds: ["work-domain"], openTasks: [], doneTodayCount: 0, day: saturday }).cards).toEqual([]);
+  });
+
+  it("Casino AP surfaces due plays but never nags when nothing is planned", () => {
+    const casino = buildLifeFeed("CASINO_AP", {
+      domainIds: ["casino-domain"],
+      openTasks: [task("promo", { domainSlug: "casino-ap", domainId: "casino-domain", title: "Use free play before Sunday", dueDate: new Date("2026-11-18T20:00:00.000Z") })],
+      doneTodayCount: 0,
+      day
+    });
+    expect(casino.cards.map((card) => card.id)).toEqual(["casino_ap:overdue:promo"]);
+    const quiet = buildLifeFeed("CASINO_AP", { domainIds: ["casino-domain"], openTasks: [], doneTodayCount: 0, day });
+    expect(quiet).toMatchObject({ status: "EMPTY", cards: [], message: "Nothing planned for Casino AP." });
   });
 
   it("caps at three actions", () => {

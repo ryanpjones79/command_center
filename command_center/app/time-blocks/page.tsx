@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { getTimeBlockPlannerData } from "@/server/execution-service";
 import { getCalendarDayRange } from "@/server/google-calendar-service";
+import { loadInboxFeed } from "@/server/inbox/inbox-feed";
 import { loadLifeFeeds, toLifeTasks } from "@/server/today-feed/life-feeds";
 import { loadRykasFeed } from "@/server/today-feed/rykas-feed";
 import { getTodaysPrinciple } from "@/server/wisdom-service";
@@ -41,10 +42,11 @@ export default async function TimeBlocksPage({
   const user = await requireUser();
   const params = await searchParams;
   const selectedDate = dateFromParam(firstParam(params.date));
-  const [planner, todaysPrinciple, rykasFeed] = await Promise.all([
+  const [planner, todaysPrinciple, rykasFeed, inboxFeed] = await Promise.all([
     getTimeBlockPlannerData(user.id, selectedDate),
     getTodaysPrinciple(user.id),
-    loadRykasFeed(user.id, prisma)
+    loadRykasFeed(user.id, prisma),
+    loadInboxFeed(user.id, prisma)
   ]);
   const lifeFeeds = await loadLifeFeeds(user.id, prisma, {
     domains: planner.domains,
@@ -105,7 +107,7 @@ export default async function TimeBlocksPage({
 
       <OwnerActionsPanel
         deferred={<DeferredOwnerFeed area="AP_TRADER" endpoint="/api/today/ap-trader" />}
-        feeds={[...lifeFeeds, rykasFeed]}
+        feeds={[...lifeFeeds, rykasFeed, inboxFeed]}
       />
 
       <TimeBlockBoard
