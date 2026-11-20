@@ -140,7 +140,7 @@ model User {
   executionDomains  ExecutionDomain[]
   executionProjects ExecutionProject[]
   executionTasks    ExecutionTask[]
-  taskReferences    ExecutionTaskReference[]
+  taskReferences     ExecutionTaskReference[]
   dailyPlans        DailyPlan[]
   queueItems        QueueItem[]
   pipelineActions   PipelineAction[]
@@ -650,7 +650,7 @@ model ExecutionTask {
   user                 User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
   domain               ExecutionDomain              @relation(fields: [domainId], references: [id], onDelete: Cascade)
   project              ExecutionProject?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  references           ExecutionTaskReference[]
+  references          ExecutionTaskReference[]
   // RyanOS v2: one persistent action from arrival to outcome (docs/RYANOS_V2_MODEL.md).
   // Same name/uniqueness as the task-connector work so both converge.
   integrationSourceKey String?
