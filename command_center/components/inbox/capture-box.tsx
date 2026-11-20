@@ -7,9 +7,9 @@ import { captureTextAction, undoCaptureAction } from "@/app/inbox/capture-action
 // One sentence and Save. Enter saves; Shift+Enter or a paste allows many lines
 // (each line becomes its own item). The receipt says when it comes back and
 // offers Undo; a failed save says so and keeps the text.
-export function CaptureBox({ autoFocus = false, compact = false }: { autoFocus?: boolean; compact?: boolean }) {
+export function CaptureBox({ autoFocus = false, compact = false, initialText = "" }: { autoFocus?: boolean; compact?: boolean; initialText?: string }) {
   const router = useRouter();
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText);
   const [receipt, setReceipt] = useState<{ ids: string[]; label: string; count: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
