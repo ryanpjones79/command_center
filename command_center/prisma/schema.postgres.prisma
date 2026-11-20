@@ -159,6 +159,14 @@ model User {
   agentEvents       AgentEvent[]
   agentActions      AgentActionRequest[]
   agentRunners      AgentRunner[]
+  taskEvents        ExecutionTaskEvent[]
+  captureFiles      CaptureAttachment[]
+  goals             Goal[]
+  goalResults       GoalResult[]
+  projectAttention  ProjectAttention[]
+  alertDeliveries   AlertDelivery[]
+  sourceSyncs       SourceSync[]
+  protectedRoutines ProtectedRoutine[]
 }
 
 model UserSettings {
@@ -173,6 +181,14 @@ model UserSettings {
   concentrationLimit     Int      @default(4)
   updatedAt              DateTime @updatedAt
   user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // RyanOS v2 day settings (minutes after local midnight)
+  timeZone               String   @default("America/Los_Angeles")
+  workdayStartMin        Int      @default(480)
+  workdayEndMin          Int      @default(1050)
+  dayEndMin              Int      @default(1260)
+  quietStartMin          Int      @default(1290)
+  quietEndMin            Int      @default(390)
+  bufferMinutes          Int      @default(30)
 }
 
 model WatchlistTicker {
@@ -300,6 +316,16 @@ model ExecutionProject {
   agentDecisions  AgentDecision[]
   agentEvents     AgentEvent[]
   agentActions    AgentActionRequest[]
+  // RyanOS v2 project coverage
+  desiredOutcome  String?
+  sourceSystem    String?
+  sourceKey       String?
+  sourceUrl       String?
+  sourceStatus    String?
+  monitoring      Boolean                @default(false)
+  closedAt        DateTime?
+  goals           Goal[]
+  attention       ProjectAttention[]
 
   @@unique([userId, name])
   @@index([userId, activeStatus, weeklyFocus, priority])
@@ -589,44 +615,68 @@ model RunnerRequestNonce {
 }
 
 model ExecutionTask {
-  id                  String                       @id @default(cuid())
-  userId              String
-  domainId            String
-  projectId           String?
-  title               String
-  type                ExecutionTaskType            @default(ACTION)
-  estimatedDuration   ExecutionDurationBucket?
-  status              ExecutionTaskStatus          @default(NOT_STARTED)
-  priority            ExecutionPriority            @default(MEDIUM)
-  whenBucket          ExecutionWhenBucket          @default(LATER)
-  dueDate             DateTime?
-  followUpDate        DateTime?
-  waitingOn           String?
-  note                String?
-  source              String?
-  isBlocked           Boolean                      @default(false)
-  pinToTodayUntilDone Boolean                      @default(false)
-  recurrenceFrequency ExecutionRecurrenceFrequency @default(NONE)
-  recurrenceWeekdays  String?
-  recurrenceEndDate   DateTime?
-  recurrenceParentId  String?
-  scheduledStart      DateTime?
-  scheduledEnd        DateTime?
+  id                   String                       @id @default(cuid())
+  userId               String
+  domainId             String
+  projectId            String?
+  title                String
+  type                 ExecutionTaskType            @default(ACTION)
+  estimatedDuration    ExecutionDurationBucket?
+  status               ExecutionTaskStatus          @default(NOT_STARTED)
+  priority             ExecutionPriority            @default(MEDIUM)
+  whenBucket           ExecutionWhenBucket          @default(LATER)
+  dueDate              DateTime?
+  followUpDate         DateTime?
+  waitingOn            String?
+  note                 String?
+  source               String?
+  isBlocked            Boolean                      @default(false)
+  pinToTodayUntilDone  Boolean                      @default(false)
+  recurrenceFrequency  ExecutionRecurrenceFrequency @default(NONE)
+  recurrenceWeekdays   String?
+  recurrenceEndDate    DateTime?
+  recurrenceParentId   String?
+  scheduledStart       DateTime?
+  scheduledEnd         DateTime?
   // RyanOS extensions. Allowed blockType values: cchcs, pipeline, rykas, admin, personal.
-  blockType           String?
-  isNeedle            Boolean                      @default(false)
-  isBuild             Boolean                      @default(false)
-  recipient           String?
-  owedToLeadership    Boolean                      @default(false)
-  shippedAt           DateTime?
-  createdAt           DateTime                     @default(now())
-  updatedAt           DateTime                     @updatedAt
-  completedAt         DateTime?
-  user                User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  domain              ExecutionDomain              @relation(fields: [domainId], references: [id], onDelete: Cascade)
-  project             ExecutionProject?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  blockType            String?
+  isNeedle             Boolean                      @default(false)
+  isBuild              Boolean                      @default(false)
+  recipient            String?
+  owedToLeadership     Boolean                      @default(false)
+  shippedAt            DateTime?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  completedAt          DateTime?
+  user                 User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain               ExecutionDomain              @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  project              ExecutionProject?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
   references          ExecutionTaskReference[]
+  // RyanOS v2: one persistent action from arrival to outcome (docs/RYANOS_V2_MODEL.md).
+  // Same name/uniqueness as the task-connector work so both converge.
+  integrationSourceKey String?
+  sourceSystem         String?
+  sourceKind           String?
+  sourceUrl            String?
+  sourceState          String?
+  sourceFingerprint    String?
+  sourceObservedAt     DateTime?
+  sourceCheckedAt      DateTime?
+  sourceVerifiedAt     DateTime?
+  localConfirmedAt     DateTime?
+  doneWhen             String?
+  expiresAt            DateTime?
+  remainingMinutes     Int?
+  workContext          String?
+  postponeCount        Int                          @default(0)
+  successorTaskId      String?
+  goalKey              String?
+  needsJudgment        Boolean                      @default(false)
+  captureKind          String?
+  events               ExecutionTaskEvent[]
+  attachments          CaptureAttachment[]
 
+  @@unique([userId, integrationSourceKey])
   @@index([userId, whenBucket, status, priority, dueDate])
   @@index([userId, followUpDate])
   @@index([userId, recurrenceFrequency])
@@ -636,6 +686,8 @@ model ExecutionTask {
   @@index([userId, isNeedle, scheduledStart])
   @@index([userId, shippedAt])
   @@index([projectId, status])
+  @@index([userId, needsJudgment])
+  @@index([userId, expiresAt])
 }
 
 model ExecutionTaskReference {
@@ -878,4 +930,142 @@ model ContactLead {
 
   @@index([createdAt])
   @@index([email, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// RyanOS v2 additions (additive; see docs/RYANOS_V2_MODEL.md)
+// ---------------------------------------------------------------------------
+
+model ExecutionTaskEvent {
+  id             String        @id @default(cuid())
+  userId         String
+  taskId         String
+  type           String
+  detail         String?
+  idempotencyKey String?       @unique
+  at             DateTime      @default(now())
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task           ExecutionTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, at])
+  @@index([userId, type, at])
+}
+
+model CaptureAttachment {
+  id           String         @id @default(cuid())
+  userId       String
+  taskId       String?
+  mimeType     String
+  sizeBytes    Int
+  data         Bytes
+  locationNote String?
+  createdAt    DateTime       @default(now())
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task         ExecutionTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([taskId])
+}
+
+model Goal {
+  id               String            @id @default(cuid())
+  userId           String
+  projectId        String?
+  owner            String
+  sourceSystem     String?
+  sourceKey        String?
+  sourceUrl        String?
+  title            String
+  desiredOutcome   String?
+  measureKind      String            @default("OUTCOME")
+  metricName       String?
+  metricDefinition String?
+  unit             String?
+  target           Float?
+  period           String            @default("WEEK")
+  active           Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project          ExecutionProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  results          GoalResult[]
+
+  @@unique([userId, sourceSystem, sourceKey])
+  @@index([userId, active])
+}
+
+model GoalResult {
+  id          String   @id @default(cuid())
+  userId      String
+  goalId      String
+  periodStart DateTime
+  periodEnd   DateTime
+  value       Float?
+  evidence    String
+  observedAt  DateTime
+  sourceRef   String?
+  note        String?
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal        Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, periodStart, evidence])
+  @@index([userId, periodStart])
+}
+
+model ProjectAttention {
+  id             String           @id @default(cuid())
+  userId         String
+  projectId      String
+  weekOf         DateTime
+  plannedMinutes Int
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project        ExecutionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, weekOf])
+  @@index([userId, weekOf])
+}
+
+model AlertDelivery {
+  id     String   @id @default(cuid())
+  userId String
+  key    String   @unique
+  kind   String
+  status String
+  sentAt DateTime @default(now())
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sentAt])
+}
+
+model SourceSync {
+  id            String    @id @default(cuid())
+  userId        String
+  sourceSystem  String
+  status        String    @default("UNKNOWN")
+  lastAttemptAt DateTime?
+  lastSuccessAt DateTime?
+  lastError     String?
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceSystem])
+}
+
+// Standard week: protected commitments placed automatically each day.
+model ProtectedRoutine {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  domainSlug  String
+  weekdays    String // comma-separated 0-6 (0 = Sunday)
+  startMin    Int? // minutes after local midnight; null = any time that day
+  durationMin Int
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active])
 }

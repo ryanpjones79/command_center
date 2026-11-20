@@ -119,7 +119,7 @@ describe("Phase 3 Notebook Bridge", () => {
   it("exposes Notebook Index from Library and project-linked entries as read-only project references", () => {
     const libraryPage = readSource("app", "library", "page.tsx");
     const notebookPage = readSource("app", "library", "notebooks", "page.tsx");
-    const projectsPage = readSource("app", "projects", "page.tsx");
+    const projectsPage = readSource("app", "projects", "manage", "page.tsx");
 
     expect(libraryPage).toContain('href: "/library/notebooks"');
     expect(notebookPage).toContain("Find the page. Do not transcribe the life.");

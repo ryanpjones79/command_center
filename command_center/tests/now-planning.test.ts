@@ -72,19 +72,27 @@ describe("skip tracking", () => {
 
 describe("block alerts", () => {
   const blocks = [
-    { title: "Workout", domainSlug: "health", scheduledStart: at("16:00"), scheduledEnd: at("16:58") },
-    { title: "School pickup", domainSlug: "family", scheduledStart: at("15:00"), scheduledEnd: at("16:59") },
-    { title: "CCHCS", domainSlug: "work", scheduledStart: at("16:57"), scheduledEnd: at("18:27") }
+    { id: "w", title: "Workout", domainSlug: "health", scheduledStart: at("16:00"), scheduledEnd: at("16:58") },
+    { id: "p", title: "School pickup", domainSlug: "family", scheduledStart: at("14:00"), scheduledEnd: at("16:59") },
+    { id: "c", title: "CCHCS", domainSlug: "work", scheduledStart: at("17:00"), scheduledEnd: at("18:30") }
   ];
 
-  it("sends end pings first, then start pings, and never pings the end of a Kids block", () => {
+  it("sends end pings first, then start pings, never the end of a Kids block, and not inside other protected time", () => {
     const alerts = alertsForWindow(blocks, at("16:55"), at("17:00"));
-    expect(alerts.map((alert) => alert.title)).toEqual(["Time's up: Workout", "Now: CCHCS"]);
-    expect(alerts[1].message).toBe("90 min block. Tap for the plan.");
+    // Workout's end falls inside School pickup (protected) -> silent; pickup end is a Kids block -> silent
+    expect(alerts.map((alert) => alert.title)).toEqual(["Now: CCHCS"]);
+    expect(alerts[0].message).toBe("90 min block. Tap for the plan.");
+    expect(alerts[0].key).toBe(`start:c:${at("17:00").toISOString()}`);
   });
 
   it("sends nothing when no block changes in the window", () => {
     expect(alertsForWindow(blocks, at("17:00"), at("17:05"))).toEqual([]);
+  });
+
+  it("respects quiet hours", () => {
+    const late = [{ id: "l", title: "Late admin", domainSlug: "admin", scheduledStart: new Date("2026-11-20T06:00:00.000Z"), scheduledEnd: new Date("2026-11-20T06:30:00.000Z") }];
+    // 22:00 PT is inside 21:30-06:30 quiet hours
+    expect(alertsForWindow(late, new Date("2026-11-20T05:55:00.000Z"), new Date("2026-11-20T06:01:00.000Z"), { timeZone: "America/Los_Angeles", quietStartMin: 1290, quietEndMin: 390 })).toEqual([]);
   });
 
   it("does nothing without Pushover keys", async () => {

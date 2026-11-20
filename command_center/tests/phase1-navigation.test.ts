@@ -5,6 +5,7 @@ import {
   getActiveRyanOsNavKey,
   primaryRyanOsNavItems,
   primaryRyanOsRoutes,
+  secondaryRyanOsNavItems,
   secondaryRyanOsRoutes,
   temporaryLegacyToolRoutes
 } from "@/lib/route-decisions";
@@ -21,15 +22,9 @@ function sourceForRoute(route: string) {
 }
 
 describe("Phase 1 navigation information architecture", () => {
-  it("defines exactly the five primary RyanOS destinations, Now first", () => {
-    expect(primaryRyanOsNavItems.map((item) => item.label)).toEqual([
-      "Now",
-      "Today",
-      "Work",
-      "Review",
-      "Library"
-    ]);
-    expect(primaryRyanOsRoutes).toEqual(["/now", "/time-blocks", "/work", "/review", "/library"]);
+  it("defines exactly the four primary RyanOS v2 destinations, Now first", () => {
+    expect(primaryRyanOsNavItems.map((item) => item.label)).toEqual(["Now", "Today", "Projects", "Inbox"]);
+    expect(primaryRyanOsRoutes).toEqual(["/now", "/time-blocks", "/projects", "/inbox"]);
   });
 
   it("makes Now the landing tab", () => {
@@ -37,15 +32,13 @@ describe("Phase 1 navigation information architecture", () => {
     expect(getActiveRyanOsNavKey("/")).toBe("now");
   });
 
-  it("hides desktop primary nav on mobile and renders one mobile bottom nav", () => {
+  it("uses a desktop sidebar and one mobile bottom nav", () => {
     const source = readFileSync(shellPath, "utf8");
 
     expect(source).toContain('aria-label="Primary"');
-    expect(source).toContain("app-shell-nav hidden items-center");
-    expect(source).toContain("sm:flex");
     expect(source).toContain('aria-label="Mobile primary"');
-    expect(source).toContain("fixed inset-x-3 bottom-3");
-    expect(source).toContain("sm:hidden");
+    expect(source).toContain("lg:hidden");
+    expect(source).toContain("hidden lg:flex");
   });
 
   it("keeps Settings and Sign Out accessible outside the primary nav", () => {
@@ -56,19 +49,16 @@ describe("Phase 1 navigation information architecture", () => {
     expect(source).toContain("Sign Out");
   });
 
-  it("maps active route state to the intended primary tab", () => {
+  it("maps active route state to the intended primary tab and keeps old areas in More", () => {
     expect(getActiveRyanOsNavKey("/time-blocks")).toBe("today");
     expect(getActiveRyanOsNavKey("/today")).toBe("today");
-    expect(getActiveRyanOsNavKey("/work")).toBe("work");
-    expect(getActiveRyanOsNavKey("/work/areas")).toBe("work");
-    expect(getActiveRyanOsNavKey("/tasks?whenBucket=PARKING_LOT")).toBe("work");
-    expect(getActiveRyanOsNavKey("/projects")).toBe("work");
-    expect(getActiveRyanOsNavKey("/review")).toBe("review");
-    expect(getActiveRyanOsNavKey("/weekly-review")).toBe("review");
-    expect(getActiveRyanOsNavKey("/daily-brief")).toBe("review");
-    expect(getActiveRyanOsNavKey("/library")).toBe("library");
-    expect(getActiveRyanOsNavKey("/library/method")).toBe("library");
+    expect(getActiveRyanOsNavKey("/projects")).toBe("projects");
+    expect(getActiveRyanOsNavKey("/projects/progress")).toBe("projects");
+    expect(getActiveRyanOsNavKey("/inbox")).toBe("inbox");
     expect(getActiveRyanOsNavKey("/watchlist")).toBeNull();
+    expect(secondaryRyanOsNavItems.map((item) => item.href)).toEqual(
+      expect.arrayContaining(["/tasks", "/work", "/review", "/daily-brief", "/library", "/agent-hq"])
+    );
   });
 
   it("renders Work landing with Tasks and Projects links", () => {

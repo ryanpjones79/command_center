@@ -1,14 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Camera } from "lucide-react";
 import { CaptureBox } from "@/components/inbox/capture-box";
 import { SortCard } from "@/components/inbox/sort-card";
-import { OWNER_ACTION_AREA_LABELS, OWNER_ACTION_AREAS, type OwnerActionArea } from "@/lib/owner-actions";
+import { TriageCard } from "@/components/inbox/triage-card";
+import { OWNER_ACTION_AREAS, type OwnerActionArea } from "@/lib/owner-actions";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { localDateKey } from "@/lib/v2/zoned-time";
 import { guessLane, IDEA_LANES, INBOX_STATUS, isDueForReview } from "@/server/inbox/inbox";
+import { dayTaskSelect, toDayTask } from "@/server/v2/day";
+import { loadDaySettings } from "@/server/v2/schedule-service";
 
 export const metadata: Metadata = { title: "Inbox" };
 export const dynamic = "force-dynamic";
+
+const SLUG_LANE: Record<string, OwnerActionArea> = { family: "KIDS", kids: "KIDS", health: "HEALTH", work: "CCHCS", rykas: "RYKAS", "casino-ap": "CASINO_AP", "betting-models": "AP_TRADER" };
 
 function ageText(from: Date, now: Date) {
   const days = Math.floor((now.getTime() - from.getTime()) / 86_400_000);
@@ -26,82 +33,84 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   const params = await searchParams;
   const reviewMode = params.mode === "review";
   const now = new Date();
+  const settings = await loadDaySettings(user.id, prisma);
 
-  const [unsorted, parked, notes] = await Promise.all([
+  const [judgmentRows, legacyUnsorted, parked, notesCount] = await Promise.all([
+    prisma.executionTask.findMany({ where: { userId: user.id, needsJudgment: true, status: { notIn: ["DONE", "DROPPED"] } }, select: dayTaskSelect, orderBy: { createdAt: "asc" }, take: 300 }),
     prisma.parkedIdea.findMany({ where: { userId: user.id, status: INBOX_STATUS }, orderBy: { parkedAt: "asc" }, take: 500 }),
     prisma.parkedIdea.findMany({ where: { userId: user.id, status: "parked" }, orderBy: { touchedAt: "asc" }, take: 500 }),
-    prisma.parkedIdea.findMany({ where: { userId: user.id, status: "note" }, orderBy: { touchedAt: "desc" }, take: 50 })
+    prisma.parkedIdea.count({ where: { userId: user.id, status: "note" } })
   ]);
-  const dueForReview = parked.filter((idea) => isDueForReview(idea, now));
-  const queue = reviewMode ? dueForReview : unsorted;
-  const current = queue[0] ?? null;
+  const judgment = judgmentRows.map(toDayTask);
+  // Items whose review time hasn't come yet stay out of the way (but counted).
+  const dueNow = judgment.filter((task) => !task.followUpDate || task.followUpDate <= now);
+  const later = judgment.length - dueNow.length;
+  const current = dueNow[0] ?? null;
+  const legacyQueue = reviewMode ? parked.filter((idea) => isDueForReview(idea, now)) : legacyUnsorted;
+  const legacyCurrent = legacyQueue[0] ?? null;
 
   return (
-    <main className="mx-auto max-w-3xl space-y-4 sm:space-y-5">
-      <section className="rounded-[1.5rem] border bg-card/95 p-4 shadow-sm sm:p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Capture</p>
-        <div className="mt-2">
-          <CaptureBox autoFocus={!current} />
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Moving off Apple Notes: open a note, select all, copy, and paste it here. Each line becomes one idea to sort.
-        </p>
+    <div className="space-y-5">
+      <section className="rounded-2xl border bg-card p-4 sm:p-5">
+        <CaptureBox />
+        <Link className="mt-1 inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline" href="/inbox/capture">
+          <Camera aria-hidden="true" className="h-4 w-4" /> Photo of paper or a screenshot
+        </Link>
       </section>
 
-      <section className="rounded-[1.75rem] border bg-card/95 p-5 shadow-sm sm:p-7">
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
-          <Link
-            aria-current={!reviewMode ? "page" : undefined}
-            className={`rounded-full border px-3 py-1 font-medium ${!reviewMode ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground"}`}
-            href="/inbox"
-          >
-            To sort ({unsorted.length})
-          </Link>
-          <Link
-            aria-current={reviewMode ? "page" : undefined}
-            className={`rounded-full border px-3 py-1 font-medium ${reviewMode ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground"}`}
-            href="/inbox?mode=review"
-          >
-            Parked, due for review ({dueForReview.length})
-          </Link>
-          <span className="text-muted-foreground">· {parked.length} parked · {notes.length} notes</span>
-        </div>
+      <section aria-labelledby="judgment-title" className="rounded-[1.5rem] border bg-card p-5 shadow-sm sm:p-7">
+        <h1 className="sr-only" id="judgment-title">Needs your judgment</h1>
         {current ? (
-          <SortCard
-            idea={{ id: current.id, idea: current.idea, ageText: ageText(current.parkedAt, now) }}
-            initialLane={laneFor(current.lane, current.idea)}
+          <TriageCard
+            initialLane={current.captureKind ? guessLane(current.title) : SLUG_LANE[current.domainSlug] ?? guessLane(current.title)}
+            item={{
+              id: current.id,
+              title: current.title,
+              note: current.note,
+              captureKind: current.captureKind,
+              attachmentId: current.attachmentId,
+              ageText: ageText(current.createdAt, now),
+              sourceLabel: current.sourceSystem && current.sourceSystem !== "CAPTURE" ? `from ${current.sourceSystem.replace("_", " ").toLowerCase()}` : null,
+              dueDate: current.dueDate ? localDateKey(current.dueDate, settings.timeZone) : null
+            }}
             key={current.id}
             lanes={IDEA_LANES}
-            position={`${reviewMode ? "Review" : "Idea"} 1 of ${queue.length}`}
+            position={`1 of ${dueNow.length}`}
           />
         ) : (
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{reviewMode ? "No parked ideas are due." : "Inbox zero."}</h1>
+            <p className="text-2xl font-semibold tracking-tight">Nothing needs your judgment right now.</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {reviewMode ? "Parked ideas come back here 30 days after you last touched them." : "Every idea has a decision. Capture the next one above."}
+              {later > 0 ? `${later} capture${later === 1 ? " is" : "s are"} scheduled to come back at review time.` : "Everything captured has a decision."}
             </p>
-            <Link className="mt-3 inline-block text-sm font-medium underline-offset-4 hover:underline" href="/now">
-              Back to Now
-            </Link>
           </div>
         )}
       </section>
 
-      {notes.length > 0 && (
-        <details className="rounded-[1.5rem] border bg-card/80 p-4 sm:p-5">
-          <summary className="cursor-pointer text-sm font-semibold">Notes you kept ({notes.length})</summary>
-          <ul className="mt-3 space-y-2">
-            {notes.map((note) => (
-              <li className="break-words rounded-xl border bg-background/60 px-3 py-2 text-sm" key={note.id}>
-                <span className="mr-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  {OWNER_ACTION_AREA_LABELS[laneFor(note.lane, note.idea)]}
-                </span>
-                {note.idea}
-              </li>
-            ))}
-          </ul>
-        </details>
+      {(legacyUnsorted.length > 0 || parked.some((idea) => isDueForReview(idea, now))) && (
+        <section className="rounded-2xl border bg-card p-5 sm:p-6">
+          <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-semibold">Earlier ideas</span>
+            <Link aria-current={!reviewMode ? "page" : undefined} className={`rounded-full border px-3 py-1 ${!reviewMode ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground"}`} href="/inbox">To sort ({legacyUnsorted.length})</Link>
+            <Link aria-current={reviewMode ? "page" : undefined} className={`rounded-full border px-3 py-1 ${reviewMode ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground"}`} href="/inbox?mode=review">Parked, due for review ({parked.filter((idea) => isDueForReview(idea, now)).length})</Link>
+          </div>
+          {legacyCurrent ? (
+            <SortCard
+              idea={{ id: legacyCurrent.id, idea: legacyCurrent.idea, ageText: ageText(legacyCurrent.parkedAt, now) }}
+              initialLane={laneFor(legacyCurrent.lane, legacyCurrent.idea)}
+              key={legacyCurrent.id}
+              lanes={IDEA_LANES}
+              position={`${reviewMode ? "Review" : "Idea"} 1 of ${legacyQueue.length}`}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">Nothing here.</p>
+          )}
+        </section>
       )}
-    </main>
+
+      <p className="px-1 text-sm text-muted-foreground">
+        {notesCount} reference note{notesCount === 1 ? "" : "s"} kept · <Link className="underline underline-offset-4" href="/search">search them</Link>
+      </p>
+    </div>
   );
 }

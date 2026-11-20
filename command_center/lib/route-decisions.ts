@@ -3,13 +3,8 @@ export const rootRoutes = {
   unauthenticated: "/login"
 } as const;
 
-export const primaryRyanOsRoutes = [
-  "/now",
-  "/time-blocks",
-  "/work",
-  "/review",
-  "/library"
-] as const;
+// RyanOS v2 primary navigation: Now · Today · Projects · Inbox.
+export const primaryRyanOsRoutes = ["/now", "/time-blocks", "/projects", "/inbox"] as const;
 
 export const secondaryRyanOsRoutes = ["/dashboard", "/print/action-sheet"] as const;
 export const agentHqRoute = "/agent-hq" as const;
@@ -25,7 +20,7 @@ export function getRootRedirectPath(isAuthenticated: boolean) {
   return isAuthenticated ? rootRoutes.authenticated : rootRoutes.unauthenticated;
 }
 
-export type RyanOsNavKey = "now" | "today" | "work" | "review" | "library";
+export type RyanOsNavKey = "now" | "today" | "projects" | "inbox";
 
 export type RyanOsNavItem = {
   href: string;
@@ -37,47 +32,27 @@ export type RyanOsNavItem = {
 export const primaryRyanOsNavItems: RyanOsNavItem[] = [
   { href: "/now", key: "now", label: "Now", mark: "NW" },
   { href: "/time-blocks", key: "today", label: "Today", mark: "TD" },
-  { href: "/work", key: "work", label: "Work", mark: "WK" },
-  { href: "/review", key: "review", label: "Review", mark: "RV" },
-  { href: "/library", key: "library", label: "Library", mark: "LB" }
+  { href: "/projects", key: "projects", label: "Projects", mark: "PR" },
+  { href: "/inbox", key: "inbox", label: "Inbox", mark: "IN" }
+];
+
+// Existing features stay reachable from the secondary "More" menu.
+export const secondaryRyanOsNavItems: { href: string; label: string }[] = [
+  { href: "/tasks", label: "All tasks" },
+  { href: "/work", label: "Work areas" },
+  { href: "/review", label: "Review" },
+  { href: "/review/weekly-reset", label: "Weekly reset" },
+  { href: "/daily-brief", label: "Daily Brief" },
+  { href: "/library", label: "Library" },
+  { href: "/agent-hq", label: "Agent HQ" }
 ];
 
 export function getActiveRyanOsNavKey(pathname: string | null | undefined): RyanOsNavKey | null {
-  if (!pathname) {
-    return null;
-  }
-
-  if (pathname === "/" || pathname === "/now" || pathname.startsWith("/now/")) {
-    return "now";
-  }
-
-  if (pathname === "/today" || pathname.startsWith("/time-blocks")) {
-    return "today";
-  }
-
-  if (
-    pathname === "/work" ||
-    pathname.startsWith("/work/") ||
-    pathname.startsWith("/tasks") ||
-    pathname.startsWith("/projects")
-  ) {
-    return "work";
-  }
-
-  if (
-    pathname === "/review" ||
-    pathname.startsWith("/review/") ||
-    pathname.startsWith("/weekly-review") ||
-    pathname.startsWith("/daily-brief") ||
-    pathname.startsWith("/dashboard") ||
-    pathname.startsWith("/print/action-sheet")
-  ) {
-    return "review";
-  }
-
-  if (pathname === "/library" || pathname.startsWith("/library/")) {
-    return "library";
-  }
-
+  if (!pathname) return null;
+  const path = pathname.split("?")[0];
+  if (path === "/" || path === "/now" || path.startsWith("/now/")) return "now";
+  if (path === "/today" || path.startsWith("/time-blocks")) return "today";
+  if (path === "/projects" || path.startsWith("/projects/")) return "projects";
+  if (path === "/inbox" || path.startsWith("/inbox/")) return "inbox";
   return null;
 }
