@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { getTimeBlockPlannerData } from "@/server/execution-service";
+import { getCalendarDayRange } from "@/server/google-calendar-service";
+import { loadLifeFeeds, toLifeTasks } from "@/server/today-feed/life-feeds";
 import { loadRykasFeed } from "@/server/today-feed/rykas-feed";
 import { getTodaysPrinciple } from "@/server/wisdom-service";
 
@@ -43,6 +45,11 @@ export default async function TimeBlocksPage({
     getTodaysPrinciple(user.id),
     loadRykasFeed(user.id, prisma)
   ]);
+  const lifeFeeds = await loadLifeFeeds(user.id, prisma, {
+    domains: planner.domains,
+    openTasks: toLifeTasks([...planner.scheduledTasks, ...planner.unscheduledTasks]),
+    day: getCalendarDayRange(selectedDate)
+  });
 
   return (
     <main className="space-y-5 sm:space-y-6">
@@ -95,7 +102,7 @@ export default async function TimeBlocksPage({
         </div>
       </section>
 
-      <OwnerActionsPanel feeds={[rykasFeed]} />
+      <OwnerActionsPanel feeds={[...lifeFeeds, rykasFeed]} />
 
       <TimeBlockBoard
         calendarEvents={planner.calendarEvents}
