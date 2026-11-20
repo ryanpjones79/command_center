@@ -71,7 +71,8 @@ export async function createCapture(userId: string, input: CaptureInput, db: Pri
           needsJudgment: true,
           sourceSystem: "CAPTURE",
           captureKind: kind,
-          source: "Capture"
+          source: "Capture",
+          createdAt: now
         },
         select: { id: true }
       });

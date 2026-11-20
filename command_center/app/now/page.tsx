@@ -1,26 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { DeferredOwnerFeed } from "@/components/execution/deferred-owner-feed";
-import { OwnerActionsPanel } from "@/components/execution/owner-actions-panel";
-import { OwnerFeedBlock } from "@/components/execution/owner-feed-block";
+import { ArrowUpRight } from "lucide-react";
 import { CaptureBox } from "@/components/inbox/capture-box";
-import { NowAutoRefresh, NowControls } from "@/components/now/now-controls";
-import { OWNER_ACTION_AREA_LABELS } from "@/lib/owner-actions";
+import { NowAutoRefresh } from "@/components/now/now-controls";
+import { BlockControls, ScheduleButton } from "@/components/now/v2-controls";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
-import { getTimeBlockPlannerData } from "@/server/execution-service";
-import { getCalendarDayRange } from "@/server/google-calendar-service";
-import { loadInboxFeed } from "@/server/inbox/inbox-feed";
-import { deriveNowState, skipCount, type NowTask } from "@/server/now/planning";
-import { loadLifeFeeds, toLifeTasks } from "@/server/today-feed/life-feeds";
-import { loadRykasFeed } from "@/server/today-feed/rykas-feed";
+import { localClock, localDateKey } from "@/lib/v2/zoned-time";
+import { googleCalendarLoader, loadDay, recommendNow, workHref, type DayTask } from "@/server/v2/day";
 
 export const metadata: Metadata = { title: "Now" };
 export const dynamic = "force-dynamic";
-
-function clock(value: Date, timeZone: string) {
-  return value.toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" });
-}
 
 function minutesText(value: number) {
   if (value < 60) return `${value} min`;
@@ -29,124 +19,154 @@ function minutesText(value: number) {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
-// The Now screen: one thing at a time. RyanOS decides what matters, the grid
-// decides when, and this screen says what to do this minute.
+function whyHere(task: DayTask, timeZone: string) {
+  if (task.isProtected) return "Protected time. It was placed before work.";
+  if (task.expiresAt) return `The opportunity expires ${localClock(task.expiresAt, timeZone)} ${localDateKey(task.expiresAt, timeZone) === localDateKey(new Date(), timeZone) ? "today" : task.expiresAt.toLocaleDateString("en-US", { timeZone, month: "short", day: "numeric" })}.`;
+  if (task.dueDate) return `Due ${task.dueDate.toLocaleDateString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric" })}.`;
+  if (task.projectName) return `Next step for ${task.projectName}.`;
+  return null;
+}
+
+function WorkLink({ task }: { task: DayTask }) {
+  const external = Boolean(task.sourceUrl);
+  return (
+    <a
+      className="inline-flex items-center gap-1.5 rounded-lg text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      href={workHref(task)}
+      {...(external ? { rel: "noopener noreferrer", target: "_blank" } : {})}
+    >
+      {external ? `Open in ${task.sourceSystem?.replace("_", " ").toLowerCase() ?? "source"}` : "Open task"}
+      <ArrowUpRight aria-hidden="true" className="h-4 w-4" />
+      {external && <span className="sr-only">(opens in a new tab)</span>}
+    </a>
+  );
+}
+
+function Context({ task, timeZone }: { task: DayTask; timeZone: string }) {
+  const why = whyHere(task, timeZone);
+  const sourceUnknown = task.sourceSystem && task.sourceSystem !== "CAPTURE" && (task.sourceState === "GONE" || task.sourceState === "UNKNOWN");
+  return (
+    <div className="mt-4 space-y-2 text-[15px] leading-6">
+      {task.doneWhen && (
+        <p>
+          <span className="font-semibold">Done when: </span>
+          {task.doneWhen}
+        </p>
+      )}
+      {why && <p className="text-muted-foreground">{why}</p>}
+      {sourceUnknown && (
+        <p className="text-amber-700 dark:text-amber-300">The source no longer shows this or couldn't be reached. Your commitment is kept; check the source before closing it.</p>
+      )}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <WorkLink task={task} />
+        {task.projectName && <span className="text-sm text-muted-foreground">Project: {task.projectName}</span>}
+      </div>
+    </div>
+  );
+}
+
 export default async function NowPage() {
   const user = await requireUser();
-  const now = new Date();
-  const [planner, rykasFeed, inboxFeed] = await Promise.all([
-    getTimeBlockPlannerData(user.id, now),
-    loadRykasFeed(user.id, prisma),
-    loadInboxFeed(user.id, prisma, now)
-  ]);
-  const lifeFeeds = await loadLifeFeeds(user.id, prisma, {
-    domains: planner.domains,
-    openTasks: toLifeTasks([...planner.scheduledTasks, ...planner.unscheduledTasks]),
-    day: getCalendarDayRange(now)
-  });
-  const timeZone = planner.timeZone;
+  const model = await loadDay(user.id, prisma, googleCalendarLoader());
+  const { settings, now } = model;
+  const tz = settings.timeZone;
+  const current = model.current;
+  const closeOut = !current ? model.endedOpen[0] ?? null : null;
+  const recommendation = !current && !closeOut && !model.currentMeeting ? recommendNow(model) : null;
+  const freeUntil = model.next?.start ?? null;
 
-  const todaysBlocks: NowTask[] = planner.scheduledTasks
-    .filter((task) => task.scheduledStart && task.scheduledEnd)
-    .map((task) => ({
-      id: task.id,
-      title: task.title,
-      domainSlug: task.domain.slug,
-      domainName: task.domain.name,
-      note: task.note,
-      scheduledStart: task.scheduledStart as Date,
-      scheduledEnd: task.scheduledEnd as Date
-    }));
-  const state = deriveNowState(todaysBlocks, now);
-  const meeting = planner.calendarEvents.find((event) => !event.isAllDay && event.start <= now && event.end > now) ?? null;
-  const feeds = [...lifeFeeds, rykasFeed, inboxFeed];
-  const topCard = feeds.flatMap((feed) => feed.cards)[0] ?? null;
-  const current = state.current;
-  const skips = current ? skipCount(current.note) : 0;
+  const exceptions = [
+    model.endedOpen.length > (closeOut ? 1 : 0) ? `${model.endedOpen.length - (closeOut ? 1 : 0)} ended block${model.endedOpen.length - (closeOut ? 1 : 0) === 1 ? "" : "s"} to close` : null,
+    model.expired.length ? `${model.expired.length} expired offer${model.expired.length === 1 ? "" : "s"}` : null,
+    model.judgment.length ? `${model.judgment.length} to sort` : null,
+    model.stillWorthIt.length ? `${model.stillWorthIt.length} put off 3+ times` : null,
+    model.sourceProblems.length ? `${model.sourceProblems.map((problem) => problem.sourceSystem.replace("_", " ").toLowerCase()).join(", ")} not reachable` : null,
+    !model.calendarKnown ? "calendar not reachable" : null
+  ].filter(Boolean);
+  const urgentIncident = [...model.blocks, ...model.queue].find((task) => task.sourceKind === "INCIDENT" && task.sourceState === "OPEN");
 
   return (
-    <main className="mx-auto max-w-3xl space-y-4 sm:space-y-5">
+    <div className="space-y-5">
       <NowAutoRefresh />
 
-      <section aria-label="Quick capture" className="rounded-[1.25rem] border bg-card/80 p-3">
-        <CaptureBox compact />
-      </section>
-
-      {state.overdueBlock && state.overdueBlock.id !== current?.id && (
-        <section className="rounded-[1.5rem] border border-amber-500/50 bg-amber-500/10 p-4 sm:p-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 dark:text-amber-300">Close this out</p>
-          <h2 className="mt-1 break-words text-lg font-semibold">{state.overdueBlock.title}</h2>
-          <p className="mb-3 mt-1 text-xs text-muted-foreground">
-            Ended at {clock(state.overdueBlock.scheduledEnd, timeZone)}. Mark it done or decide where it goes.
-          </p>
-          <NowControls allowExtend={false} taskId={state.overdueBlock.id} />
-        </section>
+      {urgentIncident && urgentIncident.id !== current?.id && (
+        <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm" role="status">
+          <span className="font-semibold">Incident: </span>
+          {urgentIncident.title} · <a className="font-medium underline underline-offset-4" href={workHref(urgentIncident)}>Inspect</a>
+        </div>
       )}
 
-      <section className="rounded-[1.75rem] border bg-card/95 p-5 shadow-sm sm:p-7">
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-          Now · {clock(now, timeZone)}
+      <section aria-label="Current action" className="rounded-[1.75rem] border bg-card p-6 shadow-[0_1px_0_rgba(0,0,0,0.02),0_12px_40px_-24px_rgba(0,0,0,0.35)] sm:p-9">
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+          Now · {localClock(now, tz)}
+          {current?.isProtected && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-primary">Protected</span>}
         </p>
+
         {current ? (
           <>
-            <h1 className="mt-2 break-words text-3xl font-semibold tracking-tight sm:text-4xl">{current.title}</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {current.domainName} · until {clock(current.scheduledEnd, timeZone)} ·{" "}
-              <span className="font-semibold text-foreground">{minutesText(state.minutesLeft ?? 0)} left</span>
+            <h1 className="font-display mt-3 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{current.title}</h1>
+            <p className="mt-3 text-base">
+              <span className="font-semibold">{minutesText(Math.max(0, Math.ceil(((current.scheduledEnd as Date).getTime() - now.getTime()) / 60_000)))} left</span>
+              <span className="text-muted-foreground"> · until {localClock(current.scheduledEnd as Date, tz)}</span>
             </p>
-            {current.note && (
-              <p className="mt-3 line-clamp-3 whitespace-pre-line break-words text-sm leading-6 text-muted-foreground">{current.note}</p>
+            <Context task={current} timeZone={tz} />
+            {current.postponeCount >= 3 && (
+              <p className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">Put off {current.postponeCount} times. Is it still worth doing? If not, Move → Drop or Park.</p>
             )}
-            {skips >= 3 && (
-              <p className="mt-3 rounded-xl border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-                Skipped {skips} times. Does this still matter? Park or drop it if not.
-              </p>
-            )}
-            <div className="mt-5">
-              <NowControls taskId={current.id} />
-            </div>
+            <div className="mt-6"><BlockControls protectedTime={current.isProtected} taskId={current.id} /></div>
           </>
-        ) : meeting ? (
+        ) : closeOut ? (
           <>
-            <h1 className="mt-2 break-words text-3xl font-semibold tracking-tight">{meeting.summary}</h1>
-            <p className="mt-2 text-sm text-muted-foreground">Calendar · until {clock(meeting.end, timeZone)}</p>
+            <p className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-300">Ended at {localClock(closeOut.scheduledEnd as Date, tz)} without an outcome</p>
+            <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{closeOut.title}</h1>
+            <Context task={closeOut} timeZone={tz} />
+            <div className="mt-6"><BlockControls ended protectedTime={closeOut.isProtected} taskId={closeOut.id} /></div>
+          </>
+        ) : model.currentMeeting ? (
+          <>
+            <h1 className="font-display mt-3 break-words text-4xl font-medium leading-[1.1] tracking-tight">{model.currentMeeting.title}</h1>
+            <p className="mt-3 text-muted-foreground">Calendar · until {localClock(model.currentMeeting.end, tz)}</p>
+          </>
+        ) : recommendation ? (
+          <>
+            <p className="mt-3 text-base text-muted-foreground">
+              You&apos;re free{freeUntil ? ` until ${localClock(freeUntil, tz)}` : ""}. One thing that fits:
+            </p>
+            <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{recommendation.title}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">About {minutesText(recommendation.minutes)}</p>
+            <Context task={recommendation} timeZone={tz} />
+            <div className="mt-6"><ScheduleButton label="Do it now" taskId={recommendation.id} /></div>
+            <p className="mt-2 text-xs text-muted-foreground">Or keep the time free; buffer is part of the plan.</p>
           </>
         ) : (
           <>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight">You&apos;re free{state.next ? ` for ${minutesText(state.minutesUntilNext ?? 0)}` : ""}.</h1>
-            {topCard ? (
-              <div className="mt-4 rounded-2xl border bg-background/70 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  Best use of it · {OWNER_ACTION_AREA_LABELS[topCard.area]}
-                </p>
-                <OwnerFeedBlock feed={{ area: topCard.area, status: "READY", message: null, observedAt: null, cards: [topCard] }} />
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-muted-foreground">Nothing is waiting on you. Pick from the queue on Today, or take the break.</p>
-            )}
+            <h1 className="font-display mt-3 text-4xl font-medium leading-[1.1] tracking-tight">
+              Nothing needs you{freeUntil ? ` until ${localClock(freeUntil, tz)}` : " right now"}.
+            </h1>
+            <p className="mt-3 text-muted-foreground">Keep the buffer, or look at <Link className="font-medium text-foreground underline underline-offset-4" href="/time-blocks">today&apos;s plan</Link>.</p>
           </>
         )}
       </section>
 
-      <section className="rounded-[1.5rem] border bg-card/80 p-4 sm:p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Up next</p>
-        {state.next ? (
-          <p className="mt-1 break-words text-base font-medium">
-            {clock(state.next.scheduledStart, timeZone)} · {state.next.title}
-            <span className="text-sm text-muted-foreground"> · in {minutesText(state.minutesUntilNext ?? 0)}</span>
-          </p>
-        ) : (
-          <p className="mt-1 text-sm text-muted-foreground">Nothing else on the grid today.</p>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-1 text-sm">
+        <p>
+          <span className="text-muted-foreground">Next: </span>
+          {model.next ? (
+            <span className="font-medium">{localClock(model.next.start, tz)} · {model.next.title}</span>
+          ) : (
+            <span className="text-muted-foreground">nothing else scheduled today</span>
+          )}
+        </p>
+        {exceptions.length > 0 && (
+          <Link className="rounded-full border px-3 py-1 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="/time-blocks#decisions">
+            {exceptions.join(" · ")} →
+          </Link>
         )}
-        <Link className="mt-2 inline-block text-xs font-medium underline-offset-4 hover:underline" href="/time-blocks">
-          Open the full day
-        </Link>
-      </section>
+      </div>
 
-      <OwnerActionsPanel
-        deferred={<DeferredOwnerFeed area="AP_TRADER" endpoint="/api/today/ap-trader" />}
-        feeds={feeds}
-      />
-    </main>
+      <section aria-label="Quick capture" className="rounded-2xl border bg-card/70 p-3 sm:p-4">
+        <CaptureBox compact />
+      </section>
+    </div>
   );
 }

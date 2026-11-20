@@ -62,18 +62,18 @@ export function deriveCoverage(project: CoverageProject, tasks: CoverageTask[], 
       .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
   const base = { lastMeaningfulStepAt, openCount: open.length };
 
-  if (project.closedAt) return { ...base, state: "CLOSED", nextAction: null, reservedAt: null, message: "Closed." };
-
   const sourceComplete = (project.sourceStatus ?? "").toUpperCase() === "COMPLETE";
-  if (sourceComplete && open.length > 0) {
+  const markedDone = Boolean(project.closedAt) || project.activeStatus === "COMPLETED";
+  if ((sourceComplete || markedDone) && open.length > 0) {
     return {
       ...base,
       state: "SOURCE_COMPLETE_OPEN",
       nextAction: open[0],
       reservedAt: null,
-      message: `Source marks this complete, but ${open.length} obligation${open.length === 1 ? " is" : "s are"} still open.`
+      message: `${sourceComplete ? "Source marks this complete" : "Marked closed"}, but ${open.length} obligation${open.length === 1 ? " is" : "s are"} still open.`
     };
   }
+  if (project.closedAt) return { ...base, state: "CLOSED", nextAction: null, reservedAt: null, message: "Closed." };
   if (project.activeStatus === "PARKED" || project.activeStatus === "ACTIVE_LATER") {
     return { ...base, state: "PAUSED", nextAction: null, reservedAt: null, message: "Paused on purpose." };
   }

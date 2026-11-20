@@ -1,246 +1,123 @@
-import {
-  deleteExecutionProjectAction,
-  updateExecutionProjectAction
-} from "@/app/execution-actions";
-import { CreateDomainForm } from "@/components/execution/create-domain-form";
-import { CreateProjectForm } from "@/components/execution/create-project-form";
-import { AgentProjectSection } from "@/components/agent/agent-project-section";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { executionSelectOptions, formatExecutionLabel } from "@/lib/execution-options";
-import { formatNotebookTitle } from "@/lib/notebook-format";
-import { formatNotebookEntryType } from "@/lib/notebook-options";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { ScheduleButton } from "@/components/now/v2-controls";
+import { AttentionInput, NextStepForm, OutcomeEditor, ProjectsTabs, ProjectStateMenu } from "@/components/projects/project-controls";
+import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
-import { getProjectMaintenanceData } from "@/server/execution-service";
-import { ensureInitialAgentProjects } from "@/server/agent/setup-service";
+import { COVERAGE_NEEDS_DECISION, type CoverageState } from "@/lib/v2/coverage";
+import { localClock } from "@/lib/v2/zoned-time";
+import { loadProjectCoverage } from "@/server/v2/day";
+import { loadDaySettings } from "@/server/v2/schedule-service";
+import { loadWeekly } from "@/server/v2/weekly";
 
-function formatNotebookEntryDate(value: Date | null) {
-  if (!value) return "No date";
-  return value.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+export const metadata: Metadata = { title: "Projects" };
+export const dynamic = "force-dynamic";
+
+const STATE_LABEL: Record<CoverageState, string> = {
+  COVERED: "Has time",
+  NEEDS_TIME: "Needs time",
+  NEEDS_NEXT_ACTION: "Needs a next step",
+  WAITING: "Waiting",
+  WAITING_OVERDUE: "Waiting: follow-up overdue",
+  MONITORING: "Monitoring",
+  PAUSED: "Paused",
+  SOURCE_COMPLETE_OPEN: "Open obligations",
+  COMPLETE: "Complete",
+  CLOSED: "Closed"
+};
+
+function hours(minutes: number) {
+  return Math.round((minutes / 60) * 10) / 10;
 }
 
 export default async function ProjectsPage() {
   const user = await requireUser();
-  await ensureInitialAgentProjects(user.id);
-  const { projects, domains, seasons } = await getProjectMaintenanceData(user.id);
+  const now = new Date();
+  const [projects, weekly, settings] = await Promise.all([loadProjectCoverage(user.id, prisma, now), loadWeekly(user.id, prisma, now), loadDaySettings(user.id, prisma)]);
+  const tz = settings.timeZone;
+  const planned = new Map(weekly.allocations.map((row) => [row.projectId, row]));
+  const selected = projects.filter((project) => planned.has(project.id) && (planned.get(project.id)?.plannedMinutes ?? 0) > 0);
+  const plannedTotal = weekly.allocations.reduce((sum, row) => sum + row.plannedMinutes, 0);
+  const starved = selected.filter((project) => (planned.get(project.id)?.reservedMinutes ?? 0) === 0);
+  const needsDecision = projects.filter((project) => COVERAGE_NEEDS_DECISION.includes(project.coverage.state));
+  const ordered = [...needsDecision, ...projects.filter((project) => !needsDecision.includes(project))];
 
   return (
-    <main className="space-y-6">
-      <section>
-        <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Project List</p>
-        <h2 className="text-4xl font-semibold tracking-tight">Project Reference</h2>
-        <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          This is the lighter maintenance view. Projects exist to support weekly clarity, not to become your daily operating surface.
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <ProjectsTabs />
+        <Link className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/projects/manage">Add or edit projects</Link>
+      </div>
+
+      <section aria-labelledby="weekly-title" className="rounded-2xl border bg-card p-5 sm:p-6">
+        <h1 className="text-lg font-semibold tracking-tight" id="weekly-title">This week&apos;s attention</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          About {hours(weekly.capacityMinutes)} h of focus time left this week before meetings; {hours(weekly.scheduledMinutes)} h already booked.
+          You&apos;ve set {hours(plannedTotal)} h across {selected.length} project{selected.length === 1 ? "" : "s"}.
+          {plannedTotal > weekly.capacityMinutes ? " That's more than fits; trim something." : ""}
         </p>
+        {starved.length > 0 && (
+          <p className="mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+            No time booked yet this week for: {starved.map((project) => project.name).join(", ")}.
+          </p>
+        )}
+        <p className="mt-2 text-xs text-muted-foreground">Set hours on the projects you mean to advance. Others can rest; not every area needs time every week.</p>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[320px_320px_minmax(0,1fr)]">
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle className="text-base">Add Domain</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CreateDomainForm />
-          </CardContent>
-        </Card>
-
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle className="text-base">Add Project</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CreateProjectForm
-              domains={domains.map((domain) => ({ id: domain.id, name: domain.name }))}
-              seasons={seasons.map((season) => ({
-                id: season.id,
-                isCurrent: season.isCurrent,
-                title: season.title
-              }))}
-            />
-          </CardContent>
-        </Card>
-
-        <div className="space-y-4">
-          {projects.length === 0 && (
-            <Card>
-              <CardContent className="pt-5">
-                <p className="text-sm text-muted-foreground">No projects yet.</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {projects.map((project) => (
-            <Card key={project.id}>
-              <CardHeader className="pb-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-lg">{project.name}</CardTitle>
-                    <p className="mt-1 text-sm text-muted-foreground">{project.domain.name}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="outline">{formatExecutionLabel(project.status)}</Badge>
-                    <Badge variant="outline">{formatExecutionLabel(project.activeStatus)}</Badge>
-                    <Badge variant={project.season ? "secondary" : "outline"}>
-                      {project.season?.title ?? "No Season"}
-                    </Badge>
-                    <Badge variant={project.weeklyFocus === "TOP_3" ? "default" : "secondary"}>
-                      {formatExecutionLabel(project.weeklyFocus)}
-                    </Badge>
-                    <Badge variant="secondary">{formatExecutionLabel(project.priority)}</Badge>
-                  </div>
+      <ul className="space-y-3">
+        {ordered.map((project) => {
+          const coverage = project.coverage;
+          const decision = COVERAGE_NEEDS_DECISION.includes(coverage.state);
+          const allocation = planned.get(project.id);
+          return (
+            <li className="scroll-mt-20 rounded-2xl border bg-card p-5" id={`project-${project.id}`} key={project.id}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="break-words text-lg font-semibold">{project.name}</h2>
+                  <p className="text-xs text-muted-foreground">
+                    {[project.domain.name, project.sourceSystem ? `from ${project.sourceSystem.replace("_", " ").toLowerCase()}` : null].filter(Boolean).join(" · ")}
+                    {project.sourceUrl && <> · <a className="underline underline-offset-2" href={project.sourceUrl} rel="noopener noreferrer" target="_blank">source</a></>}
+                  </p>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Next Action</p>
-                    <p className="mt-1 text-sm">{project.nextAction || "Missing next action"}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Waiting On</p>
-                    <p className="mt-1 text-sm">{project.waitingOn || "None"}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last Updated</p>
-                    <p className="mt-1 text-sm">{project.updatedAt.toLocaleDateString()}</p>
-                  </div>
+                <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${decision ? "bg-amber-500/15 text-amber-800 dark:text-amber-200" : coverage.state === "COVERED" || coverage.state === "MONITORING" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                  {STATE_LABEL[coverage.state]}
+                </span>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                <OutcomeEditor outcome={project.desiredOutcome} projectId={project.id} />
+                <p className="text-sm text-muted-foreground">{coverage.message}</p>
+                {coverage.nextAction && (
+                  <p className="text-[15px]">
+                    <span className="text-muted-foreground">Next: </span>
+                    <span className="font-medium">{coverage.nextAction.title}</span>
+                    {coverage.reservedAt && <span className="text-muted-foreground"> · {coverage.reservedAt.toLocaleDateString("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric" })} {localClock(coverage.reservedAt, tz)}</span>}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Last real progress: {coverage.lastMeaningfulStepAt ? coverage.lastMeaningfulStepAt.toLocaleDateString("en-US", { timeZone: tz, month: "short", day: "numeric" }) : "none recorded"}
+                  {" · "}{coverage.openCount} open
+                </p>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {coverage.state === "NEEDS_TIME" && coverage.nextAction && <ScheduleButton label="Give it time" taskId={coverage.nextAction.id} />}
+                {(coverage.state === "NEEDS_NEXT_ACTION" || coverage.state === "COVERED" || coverage.state === "NEEDS_TIME") && (
+                  <details className="group" open={coverage.state === "NEEDS_NEXT_ACTION"}>
+                    <summary className="cursor-pointer text-sm font-medium text-muted-foreground group-open:text-foreground">Add a next step</summary>
+                    <div className="mt-2"><NextStepForm projectId={project.id} /></div>
+                  </details>
+                )}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+                  <AttentionInput hours={hours(allocation?.plannedMinutes ?? 0)} projectId={project.id} />
+                  <ProjectStateMenu projectId={project.id} />
                 </div>
-
-                {project.note && <p className="text-sm text-muted-foreground">{project.note}</p>}
-
-                <AgentProjectSection
-                  projectId={project.id}
-                  config={
-                    project.agentConfig
-                      ? {
-                          ...project.agentConfig,
-                          projectWorkItems: project.agentWorkItems,
-                          projectDecisions: project.agentDecisions,
-                          projectEvents: project.agentEvents
-                        }
-                      : null
-                  }
-                />
-
-                {project.tasks.length > 0 && (
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Linked Tasks</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {project.tasks.map((task) => (
-                        <span key={task.id} className="rounded-full border px-3 py-1 text-xs">
-                          {task.title}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {project.notebookEntries.length > 0 && (
-                  <div className="rounded-xl border border-border/70 bg-background/30 p-3">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                      Linked Notebook Entries
-                    </p>
-                    <div className="mt-3 grid gap-2">
-                      {project.notebookEntries.map((entry) => (
-                        <div
-                          className="rounded-lg border bg-card/70 p-3 text-sm"
-                          key={entry.id}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="font-medium">{entry.title}</p>
-                            <Badge variant="outline">{formatNotebookEntryType(entry.entryType)}</Badge>
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {formatNotebookTitle(entry.notebook)} / Page {entry.pageNumber} /{" "}
-                            {formatNotebookEntryDate(entry.date)}
-                          </p>
-                          {entry.summary && (
-                            <p className="mt-2 text-sm text-muted-foreground">{entry.summary}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <details className="rounded-lg border border-border/70 p-3">
-                  <summary className="cursor-pointer text-sm font-medium">Edit Project</summary>
-                  <form action={updateExecutionProjectAction} className="mt-3 grid gap-3">
-                    <input name="projectId" type="hidden" value={project.id} />
-                    <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.domainId} name="domainId">
-                      {domains.map((domain) => (
-                        <option key={domain.id} value={domain.id}>
-                          {domain.name}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                      defaultValue={project.seasonId ?? ""}
-                      name="seasonId"
-                    >
-                      <option value="">No season</option>
-                      {seasons.map((season) => (
-                        <option key={season.id} value={season.id}>
-                          {season.isCurrent ? "Current - " : ""}
-                          {season.title}
-                        </option>
-                      ))}
-                    </select>
-                    <input className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.name} name="name" required />
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                      <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.status} name="status">
-                        {executionSelectOptions.projectStatuses.map((value) => (
-                          <option key={value} value={value}>
-                            {formatExecutionLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.activeStatus} name="activeStatus">
-                        {executionSelectOptions.activeStatuses.map((value) => (
-                          <option key={value} value={value}>
-                            {formatExecutionLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.weeklyFocus} name="weeklyFocus">
-                        {executionSelectOptions.weeklyFocuses.map((value) => (
-                          <option key={value} value={value}>
-                            {formatExecutionLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <select className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.priority} name="priority">
-                        {executionSelectOptions.priorities.map((value) => (
-                          <option key={value} value={value}>
-                            {formatExecutionLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <input className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.nextAction ?? ""} name="nextAction" placeholder="Next action" />
-                    <input className="h-9 rounded-md border border-input bg-background px-3 text-sm" defaultValue={project.waitingOn ?? ""} name="waitingOn" placeholder="Waiting on" />
-                    <textarea className="min-h-[96px] rounded-md border border-input bg-background px-3 py-2 text-sm" defaultValue={project.note ?? ""} name="note" />
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <input className="h-4 w-4" defaultChecked={project.blocked} name="blocked" type="checkbox" />
-                      Blocked
-                    </label>
-                    <button className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground" type="submit">
-                      Save
-                    </button>
-                  </form>
-                  <form action={deleteExecutionProjectAction} className="mt-3">
-                    <input name="projectId" type="hidden" value={project.id} />
-                    <button className="h-9 rounded-md border border-destructive px-4 text-sm text-destructive" type="submit">
-                      Delete Project
-                    </button>
-                  </form>
-                </details>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </section>
-    </main>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {projects.length === 0 && <p className="text-sm text-muted-foreground">No projects yet. <Link className="underline" href="/projects/manage">Add one</Link>.</p>}
+    </div>
   );
 }

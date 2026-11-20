@@ -56,7 +56,9 @@ const themeScript = `
 async function judgmentCount(userId: string) {
   try {
     const [tasks, ideas] = await Promise.all([
-      prisma.executionTask.count({ where: { userId, needsJudgment: true, status: { notIn: ["DONE", "DROPPED"] } } }),
+      prisma.executionTask.count({
+        where: { userId, needsJudgment: true, status: { notIn: ["DONE", "DROPPED"] }, OR: [{ followUpDate: null }, { followUpDate: { lte: new Date() } }] }
+      }),
       prisma.parkedIdea.count({ where: { userId, status: INBOX_STATUS } })
     ]);
     return tasks + ideas;

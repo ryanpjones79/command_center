@@ -84,6 +84,8 @@ type AgendaItem =
     };
 
 type TimeBlockBoardProps = {
+  // "grid": v2 detailed grid only (no season/reading/needle-move cards).
+  variant?: "classic" | "grid";
   calendarEvents: BoardCalendarEvent[];
   currentSeason: {
     description: string | null;
@@ -457,7 +459,8 @@ export function TimeBlockBoard({
   todaysPrinciple,
   scheduledTasks,
   timeZone,
-  unscheduledTasks
+  unscheduledTasks,
+  variant = "classic"
 }: TimeBlockBoardProps) {
   const router = useRouter();
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
@@ -469,7 +472,7 @@ export function TimeBlockBoard({
   );
   const [buildRecipient, setBuildRecipient] = useState("");
   const [hasEightyPercentItem, setHasEightyPercentItem] = useState(false);
-  const [isMorningLaunchComplete, setIsMorningLaunchComplete] = useState(false);
+  const [isMorningLaunchComplete, setIsMorningLaunchComplete] = useState(variant === "grid");
   const [presenceIntention, setPresenceIntention] = useState("");
   const [wayOfBeing, setWayOfBeing] = useState("");
   const [rykasBacklog, setRykasBacklog] = useState(
@@ -1294,16 +1297,20 @@ export function TimeBlockBoard({
     <div className="space-y-4">
       {taskDetailPanel}
 
-      <CurrentSeasonCard season={currentSeason} />
+      {variant !== "grid" && (
+        <>
+          <CurrentSeasonCard season={currentSeason} />
 
-      <MorningLaunchCard
-        dailyReading={dailyReading}
-        isComplete={isMorningLaunchComplete}
-        onComplete={() => setIsMorningLaunchComplete(true)}
-        onExpand={() => setIsMorningLaunchComplete(false)}
-      />
+          <MorningLaunchCard
+            dailyReading={dailyReading}
+            isComplete={isMorningLaunchComplete}
+            onComplete={() => setIsMorningLaunchComplete(true)}
+            onExpand={() => setIsMorningLaunchComplete(false)}
+          />
 
-      <TodayPrincipleCard principle={todaysPrinciple} />
+          <TodayPrincipleCard principle={todaysPrinciple} />
+        </>
+      )}
 
       <div
         className={`space-y-4 transition duration-300 ease-out ${
@@ -1312,6 +1319,7 @@ export function TimeBlockBoard({
             : "pointer-events-none opacity-55"
         }`}
       >
+        {variant !== "grid" && (
         <MorningCard
           blockTypes={blockTypes}
           buildNeedsRecipient={buildNeedsRecipient}
@@ -1333,8 +1341,9 @@ export function TimeBlockBoard({
           wayOfBeing={wayOfBeing}
           wayOfBeingOptions={wayOfBeingOptions}
         />
+        )}
 
-        <HowRyanOSWorksCard />
+        {variant !== "grid" && <HowRyanOSWorksCard />}
 
         <section className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(2,6,23,0.32)] lg:hidden">
           <div className="relative p-4">
