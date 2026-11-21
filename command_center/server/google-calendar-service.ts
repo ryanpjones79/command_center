@@ -245,25 +245,20 @@ export function parseWorkdayWindow(referenceDate: Date, input?: string | null) {
   return { start, end };
 }
 
-export async function getCalendarEventsForDate(referenceDate = new Date()) {
-  const { calendarEnabled, calendarId } = getGoogleConfigSnapshot();
-  if (!calendarEnabled) {
-    return [];
-  }
+type GoogleEventItem = {
+  id?: string | null;
+  summary?: string | null;
+  location?: string | null;
+  status?: string | null;
+  start?: { date?: string | null; dateTime?: string | null } | null;
+  end?: { date?: string | null; dateTime?: string | null } | null;
+};
 
-  const calendar = getGoogleCalendarClient();
-  const timeZone = getBriefTimeZone();
-
-  const response = await calendar.events.list({
-    calendarId,
-    timeMin: startOfDay(referenceDate, timeZone).toISOString(),
-    timeMax: endOfDay(referenceDate, timeZone).toISOString(),
-    timeZone,
-    singleEvents: true,
-    orderBy: "startTime"
-  });
-
-  return (response.data.items ?? [])
+// Owner preference (2026-11-20): all-day events are hidden from Calendar, Now
+// and Today. Only the daily email brief keeps them (includeAllDay: true).
+// They never blocked time in scheduling either way.
+export function toCalendarEvents(items: GoogleEventItem[], options: { includeAllDay?: boolean } = {}): CalendarEvent[] {
+  return items
     .map((event) => {
       const start = parseGoogleDate(event.start);
       const end = parseGoogleDate(event.end);
@@ -285,12 +280,35 @@ export async function getCalendarEventsForDate(referenceDate = new Date()) {
     })
     .filter((event): event is CalendarEvent & { status: string } => Boolean(event))
     .filter((event) => event.status !== "cancelled" && !isCancelledSummary(event.summary))
+    .filter((event) => options.includeAllDay || !event.isAllDay)
     .sort((left, right) => left.start.getTime() - right.start.getTime())
     .map(({ status: _status, ...event }) => event);
 }
 
+export async function getCalendarEventsForDate(referenceDate = new Date(), options: { includeAllDay?: boolean } = {}) {
+  const { calendarEnabled, calendarId } = getGoogleConfigSnapshot();
+  if (!calendarEnabled) {
+    return [];
+  }
+
+  const calendar = getGoogleCalendarClient();
+  const timeZone = getBriefTimeZone();
+
+  const response = await calendar.events.list({
+    calendarId,
+    timeMin: startOfDay(referenceDate, timeZone).toISOString(),
+    timeMax: endOfDay(referenceDate, timeZone).toISOString(),
+    timeZone,
+    singleEvents: true,
+    orderBy: "startTime"
+  });
+
+  return toCalendarEvents(response.data.items ?? [], options);
+}
+
+// Used by the daily email brief, which still lists all-day events.
 export async function getTodaysCalendarEvents(referenceDate = new Date()) {
-  return getCalendarEventsForDate(referenceDate);
+  return getCalendarEventsForDate(referenceDate, { includeAllDay: true });
 }
 
 export function deriveWorkBlocksFromEvents(events: CalendarEvent[], referenceDate = new Date(), workdayWindow?: string | null) {
