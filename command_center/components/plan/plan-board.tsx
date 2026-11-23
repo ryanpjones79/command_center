@@ -595,9 +595,11 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                   const length = (Date.parse(task.end as string) - Date.parse(task.start as string)) / MIN;
                   const shownEnd = resize?.taskId === task.id ? resize.endMin : startMin + length;
                   const top = (startMin - range.start) * PX_PER_MIN;
+                  // Short blocks get one line (title + time) so nothing overflows; full text is in the tooltip.
+                  const short = shownEnd - startMin < 35;
                   return (
                     <div
-                      className={`absolute left-1 right-1 cursor-grab overflow-hidden rounded-lg border border-white/20 bg-gradient-to-br px-1.5 py-0.5 text-[11px] leading-tight text-white shadow-lg transition-shadow hover:shadow-xl active:cursor-grabbing ${areaLook(task.areaSlug).block}`}
+                      className={`absolute left-1 right-1 cursor-grab overflow-hidden rounded-lg border border-white/20 bg-gradient-to-br px-1.5 ${short ? "py-0 text-[10.5px] leading-[13px]" : "py-0.5 text-[11px] leading-tight"} text-white shadow-lg transition-shadow hover:shadow-xl active:cursor-grabbing ${areaLook(task.areaSlug).block}`}
                       draggable={!resize}
                       key={task.id}
                       onClick={() => { if (!picked) onOpenBlock(task); }}
@@ -610,13 +612,16 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                       title={`${task.title} ${clock(task.start as string, tz)}–${clock(task.end as string, tz)}. Drag to move; drag the bottom edge to change length; drag to the list to unschedule.`}
                     >
                       <div className="flex items-start justify-between gap-1">
-                        <p className="min-w-0 break-words font-semibold">{task.title}</p>
+                        <p className={`min-w-0 font-semibold ${short ? "truncate" : "line-clamp-2 break-words"}`}>
+                          {task.title}
+                          {short && <span className="font-normal text-white/75"> · {clock(task.start as string, tz)}</span>}
+                        </p>
                         <span className="flex shrink-0 gap-0.5">
                           <button aria-label={`Done: ${task.title}`} className="rounded px-1 hover:bg-white/25" onClick={(event) => { event.stopPropagation(); onDone(task.id); }} type="button">✓</button>
                           <button aria-label={`Back to list: ${task.title}`} className="rounded px-1 hover:bg-white/25" onClick={(event) => { event.stopPropagation(); onUnschedule(task.id); }} type="button">×</button>
                         </span>
                       </div>
-                      <p className="text-white/80">{clock(task.start as string, tz)} · {fmtLength(Math.round(shownEnd - startMin))}{task.source ? ` · ${SOURCE_LABEL[task.source] ?? task.source}` : ""}</p>
+                      {!short && <p className="truncate text-white/80">{clock(task.start as string, tz)} · {fmtLength(Math.round(shownEnd - startMin))}{task.source ? ` · ${SOURCE_LABEL[task.source] ?? task.source}` : ""}</p>}
                       <div
                         aria-label={`Change length of ${task.title}`}
                         className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize hover:bg-white/30"
