@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
-import { CaptureBox } from "@/components/inbox/capture-box";
 import { NowAutoRefresh } from "@/components/now/now-controls";
 import { BlockControls, ScheduleButton } from "@/components/now/v2-controls";
+import { QuickAddBox } from "@/components/plan/plan-board";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { localClock, localDateKey } from "@/lib/v2/zoned-time";
@@ -143,7 +143,7 @@ export default async function NowPage() {
             <h1 className="font-display mt-3 text-4xl font-medium leading-[1.1] tracking-tight">
               Nothing needs you{freeUntil ? ` until ${localClock(freeUntil, tz)}` : " right now"}.
             </h1>
-            <p className="mt-3 text-muted-foreground">Keep the buffer, or look at <Link className="font-medium text-foreground underline underline-offset-4" href="/time-blocks">today&apos;s plan</Link>.</p>
+            <p className="mt-3 text-muted-foreground">Keep the buffer, or look at <Link className="font-medium text-foreground underline underline-offset-4" href="/plan">your plan</Link>.</p>
           </>
         )}
       </section>
@@ -164,8 +164,11 @@ export default async function NowPage() {
         )}
       </div>
 
-      <section aria-label="Quick capture" className="rounded-2xl border bg-card/70 p-3 sm:p-4">
-        <CaptureBox compact />
+      <section aria-label="Add a task" className="rounded-2xl border bg-card/70 p-3 sm:p-4">
+        <QuickAddBox />
+        <p className="mt-1 text-xs text-muted-foreground">
+          Loose idea or photo? <Link className="underline underline-offset-2" href="/inbox/capture">Capture it</Link> instead. <Link className="ml-2 font-medium underline underline-offset-2" href="/plan">Open Plan →</Link>
+        </p>
       </section>
     </div>
   );

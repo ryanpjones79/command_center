@@ -23,8 +23,8 @@ function sourceForRoute(route: string) {
 
 describe("Phase 1 navigation information architecture", () => {
   it("defines exactly the four primary RyanOS v2 destinations, Now first", () => {
-    expect(primaryRyanOsNavItems.map((item) => item.label)).toEqual(["Now", "Today", "Projects", "Inbox"]);
-    expect(primaryRyanOsRoutes).toEqual(["/now", "/time-blocks", "/projects", "/inbox"]);
+    expect(primaryRyanOsNavItems.map((item) => item.label)).toEqual(["Now", "Plan", "Projects", "Inbox"]);
+    expect(primaryRyanOsRoutes).toEqual(["/now", "/plan", "/projects", "/inbox"]);
   });
 
   it("makes Now the landing tab", () => {
@@ -52,6 +52,7 @@ describe("Phase 1 navigation information architecture", () => {
   it("maps active route state to the intended primary tab and keeps old areas in More", () => {
     expect(getActiveRyanOsNavKey("/time-blocks")).toBe("today");
     expect(getActiveRyanOsNavKey("/today")).toBe("today");
+    expect(getActiveRyanOsNavKey("/plan")).toBe("today");
     expect(getActiveRyanOsNavKey("/projects")).toBe("projects");
     expect(getActiveRyanOsNavKey("/projects/progress")).toBe("projects");
     expect(getActiveRyanOsNavKey("/inbox")).toBe("inbox");

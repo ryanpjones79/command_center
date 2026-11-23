@@ -1,0 +1,564 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { fillDayAction, moveBlockAction, planDoneAction, quickAddAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
+import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
+
+// Plan: every open task on the left (grouped by area and project, feed items labelled by source), the calendar
+// on the right. Drag a task onto the calendar to schedule it, drag a block to move it, pull its bottom edge to
+// change its length, drag it back to the list to unschedule it. On a phone, tap Schedule and pick a time.
+
+const PX_PER_MIN = 1;
+const SNAP = 15;
+const DRAG_TYPE = "application/x-ryanos-task";
+const MIN = 60_000;
+
+const AREA_STYLE: Record<string, string> = {
+  ebay: "border-l-amber-500 bg-amber-500/10",
+  rykas: "border-l-orange-600 bg-orange-600/10",
+  "betting-models": "border-l-violet-500 bg-violet-500/10",
+  "casino-ap": "border-l-fuchsia-500 bg-fuchsia-500/10",
+  work: "border-l-sky-600 bg-sky-600/10",
+  health: "border-l-emerald-600 bg-emerald-600/10",
+  golf: "border-l-lime-600 bg-lime-600/10",
+  family: "border-l-rose-500 bg-rose-500/10",
+  opportunities: "border-l-teal-600 bg-teal-600/10"
+};
+const areaStyle = (slug: string) => AREA_STYLE[slug] ?? "border-l-slate-500 bg-slate-500/10";
+
+const SOURCE_LABEL: Record<string, string> = {
+  EBAY: "eBay", RYKAS: "Supplier OS", STORE_ROUTE: "Store route", AP_TRADER: "AP Trader", CASINO_AP: "Field Book", CCHCS: "CCHCS", EMAIL: "Email"
+};
+
+type DragPayload = { taskId: string; minutes: number; mode: "task" | "block"; grabMin: number };
+type Override = { start: string | null; end: string | null };
+
+function minutesInZone(iso: string, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso));
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return get("hour") * 60 + get("minute");
+}
+const clock = (iso: string, timeZone: string) => new Date(iso).toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" });
+const dayLabel = (iso: string, timeZone: string) => new Date(iso).toLocaleDateString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric" });
+const dateKey = (iso: string, timeZone: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone });
+const shortDate = (iso: string, timeZone: string) => new Date(iso).toLocaleDateString("en-US", { timeZone, month: "short", day: "numeric" });
+const snap = (minutes: number) => Math.round(minutes / SNAP) * SNAP;
+// Dropping inside a quarter-hour slot starts the block at that slot's top.
+const snapDown = (minutes: number) => Math.floor(minutes / SNAP) * SNAP;
+const fmtLength = (minutes: number) => (minutes >= 60 ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${minutes}m`);
+
+function readPayload(event: React.DragEvent): DragPayload | null {
+  try {
+    const raw = event.dataTransfer.getData(DRAG_TYPE);
+    return raw ? (JSON.parse(raw) as DragPayload) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "week" }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [message, setMessage] = useState<PlanMessage | null>(null);
+  const [overrides, setOverrides] = useState<Record<string, Override>>({});
+  const [tab, setTab] = useState<"lists" | "calendar">("lists");
+  const [scheduling, setScheduling] = useState<BoardTask | null>(null);
+  const tz = board.timeZone;
+
+  useEffect(() => setOverrides({}), [board]);
+
+  function run(action: () => Promise<PlanMessage>, optimistic?: Record<string, Override>) {
+    if (optimistic) setOverrides((current) => ({ ...current, ...optimistic }));
+    startTransition(async () => {
+      const result = await action();
+      setMessage(result);
+      if (!result.ok && optimistic) setOverrides({});
+      router.refresh();
+    });
+  }
+
+  const allTasks = useMemo(() => {
+    const map = new Map<string, BoardTask>();
+    for (const area of board.areas) {
+      for (const project of area.projects) for (const task of project.tasks) map.set(task.id, task);
+      for (const task of area.loose) map.set(task.id, task);
+    }
+    for (const task of [...board.blocks, ...board.waiting]) map.set(task.id, task);
+    return map;
+  }, [board]);
+
+  const withOverride = (task: BoardTask): BoardTask => (overrides[task.id] ? { ...task, ...overrides[task.id] } : task);
+  const blocks = [...new Set([...board.blocks.map((task) => task.id), ...Object.keys(overrides)])]
+    .map((id) => allTasks.get(id))
+    .filter((task): task is BoardTask => Boolean(task))
+    .map(withOverride)
+    .filter((task) => task.start && task.end);
+
+  const schedule = (task: BoardTask, start: Date, minutes: number) => {
+    const end = new Date(start.getTime() + minutes * MIN);
+    run(() => moveBlockAction(task.id, start.toISOString(), end.toISOString()), { [task.id]: { start: start.toISOString(), end: end.toISOString() } });
+  };
+  const unschedule = (taskId: string) => run(() => moveBlockAction(taskId, null, null), { [taskId]: { start: null, end: null } });
+  const done = (taskId: string) => run(() => planDoneAction(taskId));
+
+  const first = board.days[0];
+  const step = view === "week" ? 7 : view === "3" ? 3 : 1;
+  const shift = (days: number) => dateKey(new Date(Date.parse(first) + days * 86_400_000 + 12 * 3_600_000).toISOString(), tz);
+  const viewHref = (nextView: string, date?: string) => `/plan?view=${nextView}${date ? `&date=${date}` : ""}`;
+
+  return (
+    <div className="space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Plan</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+            {dayLabel(first, tz)}
+            {board.days.length > 1 ? ` – ${dayLabel(board.days[board.days.length - 1], tz)}` : ""}
+          </h1>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <nav aria-label="Days shown" className="flex overflow-hidden rounded-xl border">
+            {(["day", "3", "week"] as const).map((option) => (
+              <Link aria-current={option === view ? "page" : undefined} className={`px-3 py-2 ${option === view ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} href={viewHref(option, dateKey(first, tz))} key={option}>
+                {option === "day" ? "Day" : option === "3" ? "3 days" : "Week"}
+              </Link>
+            ))}
+          </nav>
+          <div className="flex overflow-hidden rounded-xl border">
+            <Link aria-label="Earlier" className="px-3 py-2 hover:bg-muted" href={viewHref(view, shift(-step))}>‹</Link>
+            <Link className="border-x px-3 py-2 hover:bg-muted" href={viewHref(view)}>Today</Link>
+            <Link aria-label="Later" className="px-3 py-2 hover:bg-muted" href={viewHref(view, shift(step))}>›</Link>
+          </div>
+          <button className="rounded-xl bg-primary px-3 py-2 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending} onClick={() => run(() => fillDayAction())} type="button">
+            Fill my day
+          </button>
+        </div>
+      </header>
+
+      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} />
+
+      <div aria-live="polite" className="min-h-6 text-sm">
+        {message && <p className={message.ok ? "text-muted-foreground" : "font-medium text-destructive"}>{message.message}</p>}
+        {!board.calendarKnown && <p className="text-amber-700 dark:text-amber-400">Google Calendar couldn&apos;t be read, so meetings may be missing.</p>}
+        {board.calendarSync.enabled && !board.calendarSync.ok && <p className="text-amber-700 dark:text-amber-400">Google Calendar sync: {board.calendarSync.message}</p>}
+      </div>
+
+      <div className="flex gap-2 lg:hidden" role="tablist">
+        {(["lists", "calendar"] as const).map((option) => (
+          <button aria-selected={tab === option} className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${tab === option ? "bg-primary text-primary-foreground" : ""}`} key={option} onClick={() => setTab(option)} role="tab" type="button">
+            {option === "lists" ? "Projects & tasks" : "Calendar"}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(320px,400px)_1fr]">
+        <section
+          aria-label="Projects and tasks"
+          className={`${tab === "lists" ? "" : "hidden"} min-w-0 space-y-3 lg:block lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto lg:pr-1`}
+          onDragOver={(event) => { if (event.dataTransfer.types.includes(DRAG_TYPE)) event.preventDefault(); }}
+          onDrop={(event) => {
+            const payload = readPayload(event);
+            if (payload?.mode === "block") { event.preventDefault(); unschedule(payload.taskId); }
+          }}
+        >
+          {board.areas.map((area) => (
+            <AreaList area={area} key={area.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onSchedule={setScheduling} overrides={overrides} timeZone={tz} />
+          ))}
+          {board.waiting.length > 0 && (
+            <details className="rounded-2xl border bg-card p-3" open>
+              <summary className="cursor-pointer text-sm font-semibold">Waiting on others ({board.waiting.length})</summary>
+              <ul className="mt-2 space-y-1.5">
+                {board.waiting.map((task) => (
+                  <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onSchedule={setScheduling} task={withOverride(task)} timeZone={tz} />
+                ))}
+              </ul>
+            </details>
+          )}
+          {board.areas.length === 0 && board.waiting.length === 0 && <p className="rounded-2xl border p-4 text-sm text-muted-foreground">No open tasks. Add one above.</p>}
+        </section>
+
+        <section aria-label="Calendar" className={`${tab === "calendar" ? "" : "hidden"} min-w-0 lg:block`}>
+          <CalendarGrid allTasks={allTasks} blocks={blocks} board={board} onDone={done} onSchedule={schedule} onUnschedule={unschedule} />
+        </section>
+      </div>
+
+      {scheduling && <ScheduleSheet blocks={blocks} board={board} onClose={() => setScheduling(null)} onPick={(start, minutes) => { schedule(scheduling, start, minutes); setScheduling(null); }} onUnschedule={() => { unschedule(scheduling.id); setScheduling(null); }} task={withOverride(scheduling)} />}
+    </div>
+  );
+}
+
+// Stand-alone quick add (used on Now): shows its own result line.
+export function QuickAddBox() {
+  const router = useRouter();
+  const [message, setMessage] = useState<PlanMessage | null>(null);
+  return (
+    <div className="space-y-2">
+      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} />
+      <p aria-live="polite" className={`min-h-5 text-sm ${message && !message.ok ? "font-medium text-destructive" : "text-muted-foreground"}`}>{message?.message}</p>
+    </div>
+  );
+}
+
+function QuickAdd({ onDone, projectId = null, compact = false }: { onDone: (result: PlanMessage) => void; projectId?: string | null; compact?: boolean }) {
+  const [text, setText] = useState("");
+  const [pending, startTransition] = useTransition();
+  const save = () => {
+    if (!text.trim() || pending) return;
+    startTransition(async () => {
+      const result = await quickAddAction(text, projectId);
+      if (result.ok) setText("");
+      onDone(result);
+    });
+  };
+  const id = compact ? `add-${projectId}` : "quick-add";
+  return (
+    <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); save(); }}>
+      <label className="sr-only" htmlFor={id}>{compact ? "Add a task to this project" : "Add a task"}</label>
+      <input
+        autoComplete="off"
+        className={`min-w-0 flex-1 rounded-xl border bg-background px-3 ${compact ? "py-1.5 text-sm" : "py-2.5"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary`}
+        id={id}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={compact ? "Add task…" : "Add a task — e.g. Call Redstone about MOQ #wholesale fri 30m"}
+        value={text}
+      />
+      <button className={`rounded-xl border px-3 ${compact ? "text-sm" : ""} font-medium hover:bg-muted disabled:opacity-60`} disabled={pending || !text.trim()} type="submit">Add</button>
+      {!compact && (
+        <details className="relative">
+          <summary className="flex h-full cursor-pointer list-none items-center rounded-xl border px-3 text-sm text-muted-foreground hover:bg-muted">Tips</summary>
+          <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border bg-card p-3 text-sm shadow-lg">
+            <ul className="space-y-1">
+              <li><b>#name</b> project or area (#xmas won&apos;t match; #christmas will)</li>
+              <li><b>fri</b>, <b>tomorrow</b>, <b>11/30</b> due that day</li>
+              <li><b>at 3pm</b> also puts it on the calendar</li>
+              <li><b>30m</b>, <b>1h</b> how long it takes</li>
+              <li><b>@Heidi</b> waiting on Heidi</li>
+              <li><b>!</b> high priority, <b>!!</b> critical</li>
+            </ul>
+          </div>
+        </details>
+      )}
+    </form>
+  );
+}
+
+type CardHandlers = { onDone: (id: string) => void; onSchedule: (task: BoardTask) => void; onMessage: (result: PlanMessage) => void };
+
+function AreaList({ area, overrides, timeZone, ...handlers }: { area: BoardArea; overrides: Record<string, Override>; timeZone: string } & CardHandlers) {
+  const unplaced = (tasks: BoardTask[]) => tasks.map((task) => (overrides[task.id] ? { ...task, ...overrides[task.id] } : task));
+  const count = area.projects.reduce((sum, project) => sum + project.tasks.length, 0) + area.loose.length;
+  return (
+    <details className="rounded-2xl border bg-card" open={count > 0}>
+      <summary className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 text-sm font-semibold">
+        <span>{area.name}</span>
+        <span className="text-xs font-normal text-muted-foreground">{count} open</span>
+      </summary>
+      <div className="space-y-3 px-3 pb-3">
+        {area.projects.map((project) => (
+          <div key={project.id}>
+            <p className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{project.name}</p>
+            <ul className="mt-1 space-y-1.5">
+              {unplaced(project.tasks).map((task) => <TaskCard key={task.id} task={task} timeZone={timeZone} {...handlers} />)}
+            </ul>
+            <div className="mt-1.5"><QuickAdd compact onDone={handlers.onMessage} projectId={project.id} /></div>
+          </div>
+        ))}
+        {area.loose.length > 0 && (
+          <div>
+            <p className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">No project</p>
+            <ul className="mt-1 space-y-1.5">
+              {unplaced(area.loose).map((task) => <TaskCard key={task.id} task={task} timeZone={timeZone} {...handlers} />)}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function TaskCard({ task, timeZone, onDone, onSchedule, onMessage }: { task: BoardTask; timeZone: string } & CardHandlers) {
+  const [waiting, setWaiting] = useState(false);
+  const [who, setWho] = useState(task.waitingOn ?? "");
+  const [pending, startTransition] = useTransition();
+  const deadline = task.expiresAt ? `expires ${shortDate(task.expiresAt, timeZone)}` : task.dueDate ? `due ${shortDate(task.dueDate, timeZone)}` : null;
+  const saveWaiting = (name: string | null) => startTransition(async () => { onMessage(await waitingOnAction(task.id, name)); setWaiting(false); });
+  return (
+    <li
+      className={`group rounded-xl border border-l-4 px-3 py-2 ${areaStyle(task.areaSlug)} ${task.start ? "opacity-60" : ""}`}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ taskId: task.id, minutes: task.minutes, mode: task.start ? "block" : "task", grabMin: 0 } satisfies DragPayload));
+        event.dataTransfer.effectAllowed = "move";
+      }}
+    >
+      <div className="flex items-start gap-2">
+        <button aria-label={`Mark done: ${task.title}`} className="mt-0.5 h-5 w-5 shrink-0 rounded-md border-2 border-muted-foreground/50 hover:border-primary" onClick={() => onDone(task.id)} type="button" />
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-sm font-medium leading-snug">{task.title}</p>
+          <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+            {task.source && <span className="rounded bg-background/70 px-1 font-medium">{SOURCE_LABEL[task.source] ?? task.source}</span>}
+            {deadline && <span className={task.urgent ? "font-semibold text-destructive" : ""}>{deadline}</span>}
+            <span>{fmtLength(task.minutes)}</span>
+            {task.start && <span>{dayLabel(task.start, timeZone)} {clock(task.start, timeZone)}</span>}
+            {task.waitingOn && <span>waiting on {task.waitingOn}</span>}
+            {(task.priority === "HIGH" || task.priority === "CRITICAL") && <span className="font-semibold">{task.priority === "CRITICAL" ? "!!" : "!"}</span>}
+          </p>
+        </div>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+        <button className="rounded-lg border bg-background px-2 py-1 hover:bg-muted" onClick={() => onSchedule(task)} type="button">{task.start ? "Move" : "Schedule"}</button>
+        <button className="rounded-lg border bg-background px-2 py-1 hover:bg-muted" onClick={() => setWaiting((open) => !open)} type="button">{task.waitingOn ? "Waiting…" : "Waiting on…"}</button>
+        <a className="rounded-lg border bg-background px-2 py-1 hover:bg-muted" href={task.href} {...(task.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>Open</a>
+      </div>
+      {waiting && (
+        <form className="mt-2 flex gap-1.5" onSubmit={(event) => { event.preventDefault(); saveWaiting(who); }}>
+          <label className="sr-only" htmlFor={`who-${task.id}`}>Waiting on</label>
+          <input autoFocus className="min-w-0 flex-1 rounded-lg border bg-background px-2 py-1 text-sm" id={`who-${task.id}`} onChange={(event) => setWho(event.target.value)} placeholder="Who?" value={who} />
+          <button className="rounded-lg border bg-background px-2 text-sm" disabled={pending || !who.trim()} type="submit">Save</button>
+          {task.waitingOn && <button className="rounded-lg border bg-background px-2 text-sm" disabled={pending} onClick={() => saveWaiting(null)} type="button">Not waiting</button>}
+        </form>
+      )}
+    </li>
+  );
+}
+
+function gridRange(board: Board, blocks: BoardTask[]) {
+  let start = Math.min(6 * 60, board.workdayStartMin - 60);
+  let end = Math.max(22 * 60, board.dayEndMin + 60);
+  for (const item of [...blocks.map((task) => ({ start: task.start as string, end: task.end as string })), ...board.meetings]) {
+    start = Math.min(start, minutesInZone(item.start, board.timeZone));
+    const endMin = minutesInZone(item.end, board.timeZone);
+    if (endMin > 0) end = Math.max(end, endMin);
+  }
+  return { start: Math.max(0, Math.floor(start / 60) * 60), end: Math.min(24 * 60, Math.ceil(end / 60) * 60) };
+}
+
+function CalendarGrid({ board, blocks, allTasks, onSchedule, onUnschedule, onDone }: {
+  board: Board; blocks: BoardTask[]; allTasks: Map<string, BoardTask>;
+  onSchedule: (task: BoardTask, start: Date, minutes: number) => void; onUnschedule: (taskId: string) => void; onDone: (id: string) => void;
+}) {
+  const tz = board.timeZone;
+  const range = gridRange(board, blocks);
+  const height = (range.end - range.start) * PX_PER_MIN;
+  const scroller = useRef<HTMLDivElement>(null);
+  const [resize, setResize] = useState<{ taskId: string; endMin: number } | null>(null);
+  const [hover, setHover] = useState<{ day: number; minute: number } | null>(null);
+  const nowMin = minutesInZone(board.now, tz);
+  const todayKey = dateKey(board.now, tz);
+
+  useEffect(() => {
+    // Open the day around the current time (or the workday start).
+    const target = board.days.some((day) => dateKey(day, tz) === todayKey) ? nowMin - 90 : board.workdayStartMin - 30;
+    scroller.current?.scrollTo({ top: Math.max(0, (target - range.start) * PX_PER_MIN) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board.days.join()]);
+
+  const columnOf = (iso: string) => board.days.findIndex((day, index) => {
+    const next = board.days[index + 1] ?? new Date(Date.parse(day) + 86_400_000).toISOString();
+    return Date.parse(iso) >= Date.parse(day) && Date.parse(iso) < Date.parse(next);
+  });
+  const minuteAt = (event: React.DragEvent | React.PointerEvent, column: HTMLElement) => range.start + (event.clientY - column.getBoundingClientRect().top) / PX_PER_MIN;
+  const toInstant = (dayIndex: number, minute: number) => new Date(Date.parse(board.days[dayIndex]) + minute * MIN);
+
+  return (
+    <div className="rounded-2xl border bg-card">
+      <div className="grid border-b" style={{ gridTemplateColumns: `3.5rem repeat(${board.days.length}, minmax(0, 1fr))` }}>
+        <div />
+        {board.days.map((day) => (
+          <div className={`px-2 py-2 text-center text-sm font-semibold ${dateKey(day, tz) === todayKey ? "text-primary" : ""}`} key={day}>{dayLabel(day, tz)}</div>
+        ))}
+      </div>
+      <div className="max-h-[calc(100vh-14rem)] overflow-y-auto" ref={scroller}>
+        <div className="relative grid" style={{ gridTemplateColumns: `3.5rem repeat(${board.days.length}, minmax(0, 1fr))`, height }}>
+          <div className="relative">
+            {Array.from({ length: (range.end - range.start) / 60 }, (_, index) => (
+              <span className="absolute right-2 -translate-y-1/2 text-[11px] tabular-nums text-muted-foreground" key={index} style={{ top: index * 60 * PX_PER_MIN }}>
+                {index === 0 ? "" : new Date(Date.UTC(2000, 0, 1, (range.start / 60 + index) % 24)).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric" })}
+              </span>
+            ))}
+          </div>
+          {board.days.map((day, dayIndex) => {
+            const isToday = dateKey(day, tz) === todayKey;
+            const dayMeetings = board.meetings.filter((meeting) => columnOf(meeting.start) === dayIndex);
+            const dayBlocks = blocks.filter((task) => columnOf(task.start as string) === dayIndex);
+            return (
+              <div
+                aria-label={`Calendar for ${dayLabel(day, tz)}`}
+                className="relative border-l"
+                key={day}
+                onDragLeave={() => setHover(null)}
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes(DRAG_TYPE)) return;
+                  event.preventDefault();
+                  setHover({ day: dayIndex, minute: snapDown(minuteAt(event, event.currentTarget)) });
+                }}
+                onDrop={(event) => {
+                  const payload = readPayload(event);
+                  setHover(null);
+                  if (!payload) return;
+                  event.preventDefault();
+                  const task = allTasks.get(payload.taskId);
+                  if (!task) return;
+                  // A list card starts at the slot under the pointer; a moved block keeps where it was grabbed.
+                  const pointer = minuteAt(event, event.currentTarget);
+                  const minute = payload.grabMin ? snap(pointer - payload.grabMin) : snapDown(pointer);
+                  onSchedule(task, toInstant(dayIndex, Math.max(0, minute)), payload.minutes);
+                }}
+                style={{ backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${60 * PX_PER_MIN - 1}px, hsl(var(--border)) ${60 * PX_PER_MIN - 1}px, hsl(var(--border)) ${60 * PX_PER_MIN}px)` }}
+              >
+                {[{ from: range.start, to: board.workdayStartMin }, { from: board.dayEndMin, to: range.end }].map((shade) => shade.to > shade.from && (
+                  <div aria-hidden className="absolute inset-x-0 bg-muted/40" key={shade.from} style={{ top: (shade.from - range.start) * PX_PER_MIN, height: (shade.to - shade.from) * PX_PER_MIN }} />
+                ))}
+                {dayMeetings.map((meeting) => {
+                  const top = (minutesInZone(meeting.start, tz) - range.start) * PX_PER_MIN;
+                  const length = Math.max(15, (Date.parse(meeting.end) - Date.parse(meeting.start)) / MIN);
+                  return (
+                    <div className="absolute inset-x-1 overflow-hidden rounded-md border border-slate-400/50 bg-slate-500/15 px-1.5 py-0.5 text-[11px] leading-tight" key={`${meeting.start}-${meeting.title}`} style={{ top, height: length * PX_PER_MIN - 2 }} title={`${meeting.title} ${clock(meeting.start, tz)}–${clock(meeting.end, tz)}`}>
+                      <p className="truncate font-medium">{meeting.title}</p>
+                      <p className="text-muted-foreground">{clock(meeting.start, tz)}</p>
+                    </div>
+                  );
+                })}
+                {dayBlocks.map((task) => {
+                  const startMin = minutesInZone(task.start as string, tz);
+                  const length = (Date.parse(task.end as string) - Date.parse(task.start as string)) / MIN;
+                  const shownEnd = resize?.taskId === task.id ? resize.endMin : startMin + length;
+                  const top = (startMin - range.start) * PX_PER_MIN;
+                  return (
+                    <div
+                      className={`absolute left-1 right-1 cursor-grab overflow-hidden rounded-md border border-l-4 px-1.5 py-0.5 text-[11px] leading-tight shadow-sm active:cursor-grabbing ${areaStyle(task.areaSlug)}`}
+                      draggable={!resize}
+                      key={task.id}
+                      onDragStart={(event) => {
+                        const grabMin = (event.clientY - event.currentTarget.getBoundingClientRect().top) / PX_PER_MIN;
+                        event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ taskId: task.id, minutes: length, mode: "block", grabMin } satisfies DragPayload));
+                        event.dataTransfer.effectAllowed = "move";
+                      }}
+                      style={{ top, height: Math.max(15, shownEnd - startMin) * PX_PER_MIN - 2 }}
+                      title={`${task.title} ${clock(task.start as string, tz)}–${clock(task.end as string, tz)}. Drag to move; drag the bottom edge to change length; drag to the list to unschedule.`}
+                    >
+                      <div className="flex items-start justify-between gap-1">
+                        <p className="min-w-0 break-words font-semibold">{task.title}</p>
+                        <span className="flex shrink-0 gap-0.5">
+                          <button aria-label={`Done: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={() => onDone(task.id)} type="button">✓</button>
+                          <button aria-label={`Back to list: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={() => onUnschedule(task.id)} type="button">×</button>
+                        </span>
+                      </div>
+                      <p className="text-muted-foreground">{clock(task.start as string, tz)} · {fmtLength(Math.round(shownEnd - startMin))}{task.source ? ` · ${SOURCE_LABEL[task.source] ?? task.source}` : ""}</p>
+                      <div
+                        aria-label={`Change length of ${task.title}`}
+                        className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize hover:bg-foreground/20"
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          const column = event.currentTarget.closest("[aria-label^='Calendar for']") as HTMLElement;
+                          event.currentTarget.setPointerCapture(event.pointerId);
+                          const move = (pointer: PointerEvent) => setResize({ taskId: task.id, endMin: Math.max(startMin + SNAP, snap(range.start + (pointer.clientY - column.getBoundingClientRect().top) / PX_PER_MIN)) });
+                          const up = (pointer: PointerEvent) => {
+                            window.removeEventListener("pointermove", move);
+                            window.removeEventListener("pointerup", up);
+                            const endMin = Math.max(startMin + SNAP, snap(range.start + (pointer.clientY - column.getBoundingClientRect().top) / PX_PER_MIN));
+                            setResize(null);
+                            if (endMin !== startMin + length) onSchedule(task, new Date(task.start as string), endMin - startMin);
+                          };
+                          window.addEventListener("pointermove", move);
+                          window.addEventListener("pointerup", up);
+                        }}
+                        role="separator"
+                      />
+                    </div>
+                  );
+                })}
+                {hover?.day === dayIndex && (
+                  <div aria-hidden className="pointer-events-none absolute inset-x-1 border-t-2 border-primary" style={{ top: (hover.minute - range.start) * PX_PER_MIN }}>
+                    <span className="rounded bg-primary px-1 text-[10px] text-primary-foreground">{new Date(Date.UTC(2000, 0, 1, 0, hover.minute)).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" })}</span>
+                  </div>
+                )}
+                {isToday && nowMin >= range.start && nowMin <= range.end && (
+                  <div aria-hidden className="pointer-events-none absolute inset-x-0 border-t-2 border-destructive" style={{ top: (nowMin - range.start) * PX_PER_MIN }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Free starts that fit the task, from now (or the workday start) to the end of the day, around meetings and blocks.
+export function freeStarts(board: Board, blocks: BoardTask[], dayStartIso: string, minutes: number, excludeId: string, limit = 6) {
+  const dayStart = Date.parse(dayStartIso);
+  const busy = [
+    ...board.meetings.map((meeting) => [Date.parse(meeting.start), Date.parse(meeting.end)] as const),
+    ...blocks.filter((task) => task.id !== excludeId).map((task) => [Date.parse(task.start as string), Date.parse(task.end as string)] as const)
+  ];
+  const nowRounded = Math.ceil(Date.parse(board.now) / (SNAP * MIN)) * SNAP * MIN;
+  const out: Date[] = [];
+  for (let t = Math.max(dayStart + board.workdayStartMin * MIN, nowRounded); t + minutes * MIN <= dayStart + board.dayEndMin * MIN && out.length < limit; t += SNAP * MIN) {
+    const end = t + minutes * MIN;
+    if (busy.every(([s, e]) => e <= t || s >= end)) {
+      out.push(new Date(t));
+      t = end - SNAP * MIN; // the next choice starts after this one
+    }
+  }
+  return out;
+}
+
+function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose }: {
+  task: BoardTask; board: Board; blocks: BoardTask[]; onPick: (start: Date, minutes: number) => void; onUnschedule: () => void; onClose: () => void;
+}) {
+  const tz = board.timeZone;
+  const [minutes, setMinutes] = useState(task.minutes);
+  const [custom, setCustom] = useState("");
+  const options = board.soonDays.map((day, index) => ({ label: index === 0 ? "Today" : "Tomorrow", starts: freeStarts(board, blocks, day, minutes, task.id) }));
+  const pickCustom = () => {
+    if (!custom) return;
+    // datetime-local is wall time in Ryan's zone: shift by the zone offset at that moment.
+    const naive = new Date(`${custom}:00Z`);
+    const offset = minutesInZone(naive.toISOString(), tz) - (naive.getUTCHours() * 60 + naive.getUTCMinutes());
+    const wrapped = offset > 720 ? offset - 1440 : offset < -720 ? offset + 1440 : offset;
+    onPick(new Date(naive.getTime() - wrapped * MIN), minutes);
+  };
+  return (
+    <div aria-modal className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose} role="dialog">
+      <div className="w-full max-w-md rounded-t-2xl border bg-card p-4 shadow-xl sm:rounded-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{task.start ? "Move" : "Schedule"}</p>
+            <p className="break-words font-semibold">{task.title}</p>
+          </div>
+          <button aria-label="Close" className="rounded-lg border px-2 py-1" onClick={onClose} type="button">×</button>
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          Length
+          <select className="rounded-lg border bg-background px-2 py-1" onChange={(event) => setMinutes(Number(event.target.value))} value={minutes}>
+            {[...new Set([15, 30, 45, 60, 90, 120, 180, task.minutes])].sort((a, b) => a - b).map((value) => <option key={value} value={value}>{fmtLength(value)}</option>)}
+          </select>
+        </label>
+        {options.map((option) => (
+          <div className="mt-3" key={option.label}>
+            <p className="text-sm font-semibold">{option.label}</p>
+            {option.starts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No free time that fits.</p>
+            ) : (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {option.starts.map((start) => (
+                  <button className="rounded-lg border px-3 py-2 text-sm hover:bg-muted" key={start.toISOString()} onClick={() => onPick(start, minutes)} type="button">{clock(start.toISOString(), tz)}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        <form className="mt-4 flex gap-2" onSubmit={(event) => { event.preventDefault(); pickCustom(); }}>
+          <label className="sr-only" htmlFor="custom-time">Pick a time</label>
+          <input className="min-w-0 flex-1 rounded-lg border bg-background px-2 py-1.5 text-sm" id="custom-time" onChange={(event) => setCustom(event.target.value)} type="datetime-local" value={custom} />
+          <button className="rounded-lg border px-3 text-sm" disabled={!custom} type="submit">Set</button>
+        </form>
+        {task.start && <button className="mt-3 w-full rounded-lg border px-3 py-2 text-sm hover:bg-muted" onClick={onUnschedule} type="button">Take it off the calendar</button>}
+      </div>
+    </div>
+  );
+}

@@ -6,7 +6,8 @@ import { google } from "googleapis";
 
 const REQUIRED_ENV_KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"];
 const SCOPES = [
-  "https://www.googleapis.com/auth/calendar.readonly",
+  // calendar.events: read events and write RyanOS time blocks (two-way sync, owner decision 2026-11-22).
+  "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/spreadsheets.readonly",
   "https://www.googleapis.com/auth/gmail.send"
 ];
