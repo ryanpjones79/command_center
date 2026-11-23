@@ -38,7 +38,7 @@ describe("Phase 1 navigation information architecture", () => {
     expect(source).toContain('aria-label="Primary"');
     expect(source).toContain('aria-label="Mobile primary"');
     expect(source).toContain("lg:hidden");
-    expect(source).toContain("hidden lg:flex");
+    expect(source).toContain("lg:flex"); // desktop sidebar (full, or the icon strip on Plan)
   });
 
   it("keeps Settings and Sign Out accessible outside the primary nav", () => {

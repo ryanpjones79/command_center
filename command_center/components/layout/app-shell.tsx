@@ -118,11 +118,65 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
   const activeKey = getActiveRyanOsNavKey(pathname);
   const [moreOpen, setMoreOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  // Plan is calendar first: the sidebar shrinks to an icon strip and the page uses the full width.
+  const rail = Boolean(pathname?.startsWith("/plan"));
+  const railButton = cn("relative inline-flex h-10 w-10 items-center justify-center rounded-xl text-sidebar-foreground/75 hover:bg-white/[0.06] hover:text-sidebar-foreground", focusRing);
 
   return (
     <div className="min-h-screen lg:flex">
+      {/* Desktop icon strip (Plan) */}
+      {rail && (
+        <aside className="sticky top-0 hidden h-screen w-[4.25rem] shrink-0 flex-col items-center gap-2 border-r border-white/5 bg-sidebar py-4 text-sidebar-foreground lg:flex">
+          <Link aria-label="RyanOS home" className={cn("mb-3 rounded-xl", focusRing)} href="/now" title="RyanOS">
+            <LogoMark />
+          </Link>
+          <CaptureDialog
+            trigger={
+              <button aria-label="Capture" className={cn("inline-flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground", focusRing)} title="Capture" type="button">
+                <Plus aria-hidden="true" className="h-4 w-4" />
+              </button>
+            }
+          />
+          <Link aria-label="Search" className={railButton} href="/search" title="Search">
+            <Search aria-hidden="true" className="h-4 w-4" />
+          </Link>
+          <nav aria-label="Primary" className="mt-3 flex flex-col items-center gap-1.5">
+            {primaryRyanOsNavItems.map((item) => {
+              const active = activeKey === item.key;
+              const Icon = NAV_ICONS[item.key] ?? Zap;
+              return (
+                <Link
+                  aria-current={active ? "page" : undefined}
+                  aria-label={item.label}
+                  className={cn(railButton, "h-11 w-11", active && "bg-white/[0.08] text-emerald-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]")}
+                  href={item.href}
+                  key={item.href}
+                  title={item.label}
+                >
+                  <Icon aria-hidden="true" className="h-5 w-5" />
+                  {item.key === "inbox" && inboxCount > 0 && (
+                    <span aria-label={`${inboxCount} need a decision`} className="absolute -right-0.5 -top-0.5 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">{inboxCount}</span>
+                  )}
+                </Link>
+              );
+            })}
+          </nav>
+          <div className="mt-auto flex flex-col items-center gap-1 border-t border-white/10 pt-3">
+            <Link aria-label="Settings" className={railButton} href="/settings" title="Settings">
+              <Settings aria-hidden="true" className="h-4 w-4" />
+            </Link>
+            <ThemeToggle className="text-sidebar-foreground/75 hover:bg-white/[0.06]" />
+            <form action={logoutAction}>
+              <button aria-label="Sign out" className={railButton} title="Sign out" type="submit">
+                <LogOut aria-hidden="true" className="h-4 w-4" />
+              </button>
+            </form>
+          </div>
+        </aside>
+      )}
+
       {/* Desktop sidebar */}
-      <aside className="hidden lg:flex sticky top-0 h-screen w-64 shrink-0 flex-col border-r border-white/5 bg-sidebar bg-[radial-gradient(420px_260px_at_0%_0%,rgba(52,211,153,0.10),transparent_70%),radial-gradient(360px_300px_at_100%_100%,rgba(139,92,246,0.10),transparent_70%)] px-3 py-5 text-sidebar-foreground">
+      <aside className={cn("sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/5 bg-sidebar bg-[radial-gradient(420px_260px_at_0%_0%,rgba(52,211,153,0.10),transparent_70%),radial-gradient(360px_300px_at_100%_100%,rgba(139,92,246,0.10),transparent_70%)] px-3 py-5 text-sidebar-foreground", !rail && "lg:flex")}>
         <Link className={cn("mb-6 flex items-center gap-2 rounded-lg px-3", focusRing)} href="/now">
           <LogoMark />
           <span className="text-lg font-semibold tracking-tight">Ryan<span className="text-gradient">OS</span></span>
@@ -268,8 +322,8 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
         </Dialog.Root>
       </header>
 
-      <main className="min-w-0 flex-1 px-4 pb-28 pt-4 sm:px-6 lg:px-10 lg:pb-12 lg:pt-8">
-        <div className="mx-auto w-full max-w-5xl">{children}</div>
+      <main className={cn("min-w-0 flex-1 px-4 pb-28 pt-4 sm:px-6 lg:pb-12", rail ? "lg:px-6 lg:pt-5" : "lg:px-10 lg:pt-8")}>
+        <div className={cn("mx-auto w-full", rail ? "max-w-[1600px]" : "max-w-5xl")}>{children}</div>
       </main>
 
       {/* Mobile bottom nav */}

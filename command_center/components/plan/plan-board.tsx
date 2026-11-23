@@ -3,39 +3,24 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { addHabitAction, fillDayAction, habitDoneAction, moveBlockAction, planDoneAction, quickAddAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
+import { addHabitAction, fillDayAction, habitDoneAction, moveBlockAction, planDoneAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
 import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
 import type { Habit } from "@/server/v2/habits";
-import { parseQuickAdd, type QuickTarget } from "@/lib/v2/quick-add";
-import { QUICK_FILTERS, SOURCE_LABEL, suggestTargets, TAG_AT_END, taskMatches, type QuickFilter } from "@/lib/v2/plan-filters";
+import type { QuickTarget } from "@/lib/v2/quick-add";
+import { NewTaskButton } from "@/components/plan/task-composer";
+import { QUICK_FILTERS, SOURCE_LABEL, taskMatches, type QuickFilter } from "@/lib/v2/plan-filters";
+import { dayLoad } from "@/lib/v2/day-load";
+import { areaLook } from "@/lib/v2/area-look";
 
-// Plan: every open task on the left (grouped by area and project, feed items labelled by source), the calendar
-// on the right. Drag a task onto the calendar to schedule it, drag a block to move it, pull its bottom edge to
-// change its length, drag it back to the list to unschedule it. On a phone, tap Schedule and pick a time.
+// Plan, calendar first: the calendar fills the screen and every open task sits in a drawer on the right (grouped
+// by area and project, feed items labelled by source). Drag a task onto the calendar to schedule it, drag a block
+// to move it, pull its bottom edge to change its length, drag it back to the drawer to unschedule it. On a phone
+// the day's calendar is pinned on top with the tasks below; tap a task, then a time.
 
 const PX_PER_MIN = 1;
 const SNAP = 15;
 const DRAG_TYPE = "application/x-ryanos-task";
 const MIN = 60_000;
-
-// One colour per area. card = list cards (accent edge + faint wash), block = calendar blocks (solid gradient),
-// dot = area markers. Full class names are written out so Tailwind keeps them.
-type AreaLook = { card: string; block: string; dot: string };
-const look = (card: string, block: string, dot: string): AreaLook => ({ card, block, dot });
-const AREA_LOOK: Record<string, AreaLook> = {
-  ebay: look("border-l-amber-400 bg-gradient-to-r from-amber-400/[0.13] to-transparent", "from-amber-400 to-orange-500 shadow-orange-500/30", "bg-amber-400"),
-  rykas: look("border-l-orange-500 bg-gradient-to-r from-orange-500/[0.13] to-transparent", "from-orange-500 to-rose-500 shadow-rose-500/30", "bg-orange-500"),
-  "betting-models": look("border-l-violet-500 bg-gradient-to-r from-violet-500/[0.14] to-transparent", "from-violet-500 to-indigo-500 shadow-indigo-500/30", "bg-violet-500"),
-  "casino-ap": look("border-l-fuchsia-500 bg-gradient-to-r from-fuchsia-500/[0.13] to-transparent", "from-fuchsia-500 to-pink-500 shadow-pink-500/30", "bg-fuchsia-500"),
-  work: look("border-l-sky-500 bg-gradient-to-r from-sky-500/[0.13] to-transparent", "from-sky-500 to-blue-600 shadow-blue-600/30", "bg-sky-500"),
-  health: look("border-l-emerald-500 bg-gradient-to-r from-emerald-500/[0.13] to-transparent", "from-emerald-500 to-teal-500 shadow-teal-500/30", "bg-emerald-500"),
-  golf: look("border-l-lime-500 bg-gradient-to-r from-lime-500/[0.13] to-transparent", "from-lime-500 to-emerald-600 shadow-emerald-600/30", "bg-lime-500"),
-  family: look("border-l-rose-500 bg-gradient-to-r from-rose-500/[0.13] to-transparent", "from-rose-500 to-pink-600 shadow-pink-600/30", "bg-rose-500"),
-  kids: look("border-l-pink-500 bg-gradient-to-r from-pink-500/[0.13] to-transparent", "from-pink-500 to-rose-500 shadow-rose-500/30", "bg-pink-500"),
-  opportunities: look("border-l-teal-500 bg-gradient-to-r from-teal-500/[0.13] to-transparent", "from-teal-500 to-cyan-600 shadow-cyan-600/30", "bg-teal-500")
-};
-const DEFAULT_LOOK = look("border-l-slate-400 bg-gradient-to-r from-slate-400/[0.12] to-transparent", "from-slate-500 to-slate-600 shadow-slate-600/30", "bg-slate-400");
-const areaLook = (slug: string) => AREA_LOOK[slug] ?? DEFAULT_LOOK;
 
 type DragPayload = { taskId: string; minutes: number; mode: "task" | "block"; grabMin: number };
 type Override = { start: string | null; end: string | null };
@@ -163,6 +148,9 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   const shownWaiting = board.waiting.filter((task) => (!areaFilter || task.areaSlug === areaFilter) && keep(task));
   const shownCount = shownAreas.reduce((sum, area) => sum + area.loose.length + area.projects.reduce((n, project) => n + project.tasks.length, 0), 0) + shownWaiting.length;
 
+  const openTasks = [...board.areas.flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)]), ...board.waiting];
+  const load = dayLoad(board, blocks, openTasks);
+
   const schedule = (task: BoardTask, start: Date, minutes: number) => {
     const end = new Date(start.getTime() + minutes * MIN);
     run(() => moveBlockAction(task.id, start.toISOString(), end.toISOString()), { [task.id]: { start: start.toISOString(), end: end.toISOString() } });
@@ -208,8 +196,6 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
         </div>
       </header>
 
-      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} targets={board.targets} timeZone={tz} />
-
       <div aria-live="polite" className="text-sm empty:-mt-4">
         {message && <p className={message.ok ? "text-muted-foreground" : "font-medium text-destructive"}>{message.message}</p>}
         {!board.calendarKnown && <p className="text-amber-700 dark:text-amber-400">Google Calendar couldn&apos;t be read, so meetings may be missing.</p>}
@@ -217,6 +203,8 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
       </div>
 
       <HabitStrip
+        dueCount={load.dueCount}
+        freeMin={load.freeMin}
         habits={board.habits}
         onMessage={(result) => { setMessage(result); router.refresh(); }}
         onPlace={(taskId) => { const task = allTasks.get(taskId); if (task) togglePick(task); }}
@@ -224,8 +212,8 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
       />
 
       {/* Phone: today's calendar stays pinned above the lists. Tablet and up: lists left, calendar right. */}
-      <div className="flex flex-col gap-4 md:grid md:grid-cols-[minmax(300px,380px)_1fr]">
-        <section aria-label="Calendar" className="sticky top-[3.6rem] z-30 order-first -mx-4 min-w-0 border-b bg-background px-4 pb-2 pt-1 sm:-mx-6 sm:px-6 md:static md:order-last md:mx-0 md:border-0 md:bg-transparent md:p-0">
+      <div className="flex flex-col gap-4 md:grid md:grid-cols-[minmax(0,1fr)_minmax(300px,360px)] md:items-start">
+        <section aria-label="Calendar" className="sticky top-[3.6rem] z-30 -mx-4 min-w-0 border-b bg-background px-4 pb-2 pt-1 sm:-mx-6 sm:px-6 md:static md:mx-0 md:border-0 md:bg-transparent md:p-0">
           {picked && (
             <div className="mb-2 flex items-center justify-between gap-2 rounded-2xl border border-primary/40 bg-gradient-to-r from-primary/15 to-accent/10 px-3 py-2 text-sm shadow-[0_0_24px_-8px_hsl(var(--primary)/0.6)]" role="status">
               <span className="min-w-0 truncate">Tap a time for <b>{picked.title}</b> ({fmtLength(picked.minutes)})</span>
@@ -249,14 +237,19 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
 
         <section
           aria-label="Projects and tasks"
-          className="min-w-0 space-y-3 md:max-h-[calc(100vh-12rem)] md:overflow-y-auto md:pr-1"
+          className="min-w-0 space-y-3 md:sticky md:top-4 md:max-h-[calc(100vh-11rem)] md:overflow-y-auto md:rounded-2xl md:border md:bg-card md:p-3"
           onDragOver={(event) => { if (event.dataTransfer.types.includes(DRAG_TYPE)) event.preventDefault(); }}
           onDrop={(event) => {
             const payload = readPayload(event);
             if (payload?.mode === "block") { event.preventDefault(); unschedule(payload.taskId); }
           }}
         >
-          <div className="space-y-2 rounded-2xl border bg-card p-3">
+          <div className="flex items-baseline justify-between gap-2 px-1">
+            <h2 className="text-sm font-semibold">Tasks</h2>
+            <span className="text-xs text-muted-foreground">{totalOpen} open<span className="hidden md:inline"> · drag onto the calendar</span></span>
+          </div>
+          <NewTaskButton onDone={setMessage} targets={board.targets} timeZone={tz} />
+          <div className="space-y-2">
             <label className="sr-only" htmlFor="plan-search">Search tasks</label>
             <input
               className="w-full rounded-xl border bg-background/60 px-3 py-2 text-sm placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -300,12 +293,13 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
               open={filtering || !closed.has(area.slug)}
               overrides={overrides}
               pickedId={picked?.id ?? null}
+              targets={board.targets}
               timeZone={tz}
             />
           ))}
-          {filtering && shownCount === 0 && <p className="rounded-2xl border p-4 text-sm text-muted-foreground">Nothing matches. <button className="underline underline-offset-2" onClick={() => { setQuery(""); setAreaFilter(null); setQuick(new Set()); }} type="button">Clear filters</button></p>}
+          {filtering && shownCount === 0 && <p className="rounded-xl border p-4 text-sm text-muted-foreground">Nothing matches. <button className="underline underline-offset-2" onClick={() => { setQuery(""); setAreaFilter(null); setQuick(new Set()); }} type="button">Clear filters</button></p>}
           {shownWaiting.length > 0 && (
-            <details className="rounded-2xl border bg-card p-3" onToggle={(event) => { if (!filtering) setAreaOpen("__waiting", event.currentTarget.open); }} open={filtering || !closed.has("__waiting")}>
+            <details className="rounded-xl border bg-background/40 p-3" onToggle={(event) => { if (!filtering) setAreaOpen("__waiting", event.currentTarget.open); }} open={filtering || !closed.has("__waiting")}>
               <summary className="cursor-pointer text-sm font-semibold">Waiting on others ({shownWaiting.length})</summary>
               <ul className="mt-2 space-y-1.5">
                 {shownWaiting.map((task) => (
@@ -314,7 +308,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
               </ul>
             </details>
           )}
-          {board.areas.length === 0 && board.waiting.length === 0 && <p className="rounded-2xl border p-4 text-sm text-muted-foreground">No open tasks. Add one above.</p>}
+          {board.areas.length === 0 && board.waiting.length === 0 && <p className="rounded-xl border p-4 text-sm text-muted-foreground">No open tasks. Add one above.</p>}
         </section>
 
       </div>
@@ -329,8 +323,8 @@ const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "
 
 // Today's routines as one-tap check-offs with a streak. Tap "place" to put one on the calendar (tap a task,
 // then a time, same as the lists). "+ Habit" adds a new routine.
-function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
-  habits: Habit[]; placedIds: Set<string>; onMessage: (result: PlanMessage) => void; onPlace: (taskId: string) => void;
+function HabitStrip({ habits, placedIds, onMessage, onPlace, freeMin, dueCount }: {
+  habits: Habit[]; placedIds: Set<string>; onMessage: (result: PlanMessage) => void; onPlace: (taskId: string) => void; freeMin: number; dueCount: number;
 }) {
   const [pending, startTransition] = useTransition();
   const [doneNow, setDoneNow] = useState<Record<string, boolean>>({});
@@ -353,50 +347,45 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
     onMessage(result);
   });
   const doneCount = habits.filter((habit) => doneNow[habit.routineId] ?? habit.done).length;
-  const share = habits.length ? doneCount / habits.length : 0;
 
   return (
-    <section aria-label="Daily habits" className="rounded-2xl border bg-card p-3 sm:p-4">
-      <div className="flex items-center gap-3">
-        <ProgressRing value={share} />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold">Daily habits</p>
-          <p className="text-xs text-muted-foreground">{habits.length ? (doneCount === habits.length ? "All done today. Nice." : `${doneCount} of ${habits.length} done today`) : "None scheduled today"}</p>
-        </div>
-        <button className="rounded-full border px-3 py-1 text-xs font-medium hover:bg-muted" onClick={() => setAdding((open) => !open)} type="button">{adding ? "Close" : "+ Habit"}</button>
-      </div>
-      {habits.length > 0 && (
-        <ul className="mt-3 flex flex-wrap gap-2">
-          {habits.map((habit) => {
-            const done = doneNow[habit.routineId] ?? habit.done;
-            const streak = habit.streak + (done && !habit.done ? 1 : !done && habit.done ? -1 : 0);
-            const placed = habit.todayTaskId ? placedIds.has(habit.todayTaskId) : false;
-            return (
-              <li className={`flex items-center overflow-hidden rounded-full border text-sm transition-all ${done ? "border-transparent bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_6px_18px_-8px_rgba(16,185,129,0.8)]" : "bg-background/50 hover:border-foreground/25"}`} key={habit.routineId}>
-                <button
-                  aria-pressed={done}
-                  className={`flex items-center gap-2 py-1.5 pl-2.5 pr-2 ${done ? "font-semibold" : ""}`}
-                  disabled={pending || !habit.todayTaskId}
-                  onClick={() => toggle(habit)}
-                  title={done ? "Done today. Tap to undo." : "Tap when done"}
-                  type="button"
-                >
-                  <span aria-hidden className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${done ? "bg-white/25 text-white" : "border-2 border-muted-foreground/40"}`}>{done ? "✓" : ""}</span>
-                  {!done && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${areaLook(habit.areaSlug).dot}`} />}
-                  <span>{habit.title}</span>
-                  <span className={`text-xs ${done ? "text-white/80" : "text-muted-foreground"}`}>{fmtLength(habit.minutes)}</span>
-                  {streak > 0 && <span className="text-xs" title={`${streak} scheduled day${streak === 1 ? "" : "s"} in a row`}>🔥{streak}</span>}
+    <section aria-label="Daily habits">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="sr-only">Daily habits: {doneCount} of {habits.length} done today.</span>
+        {habits.map((habit) => {
+          const done = doneNow[habit.routineId] ?? habit.done;
+          const streak = habit.streak + (done && !habit.done ? 1 : !done && habit.done ? -1 : 0);
+          const placed = habit.todayTaskId ? placedIds.has(habit.todayTaskId) : false;
+          return (
+            <span className={`flex items-center overflow-hidden rounded-full border text-sm transition-all ${done ? "border-transparent bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_6px_18px_-8px_rgba(16,185,129,0.8)]" : "bg-card hover:border-foreground/25"}`} key={habit.routineId}>
+              <button
+                aria-pressed={done}
+                className="flex items-center gap-1.5 py-1 pl-2 pr-2.5"
+                disabled={pending || !habit.todayTaskId}
+                onClick={() => toggle(habit)}
+                title={done ? "Done today. Tap to undo." : "Tap when done"}
+                type="button"
+              >
+                <span aria-hidden className={`flex h-[18px] w-[18px] items-center justify-center rounded-full text-[10px] ${done ? "bg-white/25 text-white" : "border-2 border-muted-foreground/40"}`}>{done ? "✓" : ""}</span>
+                <span>{habit.title}</span>
+                <span className={`text-xs ${done ? "text-white/80" : "text-muted-foreground"}`}>{fmtLength(habit.minutes)}</span>
+                {streak > 0 && <span className="text-xs" title={`${streak} scheduled day${streak === 1 ? "" : "s"} in a row`}>🔥{streak}</span>}
+              </button>
+              {!done && habit.todayTaskId && (
+                <button aria-label={placed ? `${habit.title} is on the calendar; tap to move` : `Place ${habit.title} on the calendar`} className="border-l px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => onPlace(habit.todayTaskId as string)} type="button">
+                  {placed ? "move" : "place"}
                 </button>
-                {!done && habit.todayTaskId && (
-                  <button aria-label={placed ? `${habit.title} is on the calendar; tap to move` : `Place ${habit.title} on the calendar`} className="border-l px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => onPlace(habit.todayTaskId as string)} type="button">
-                    {placed ? "moved?" : "place"}
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+              )}
+            </span>
+          );
+        })}
+        <button aria-expanded={adding} className="rounded-full border border-dashed px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setAdding((open) => !open)} type="button">{adding ? "Close" : "+ Habit"}</button>
+        <p className="ml-auto text-xs text-muted-foreground">
+          <span className="font-semibold text-foreground">{fmtLength(freeMin)}</span> free today
+          <span aria-hidden> · </span>
+          <span className={dueCount ? "font-semibold text-destructive" : ""}>{dueCount} due</span>
+        </p>
+      </div>
       {adding && (
         <form className="mt-3 space-y-2 rounded-xl border bg-background p-3" onSubmit={(event) => { event.preventDefault(); add(); }}>
           <div className="flex gap-2">
@@ -438,181 +427,13 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
   );
 }
 
-function ProgressRing({ value }: { value: number }) {
-  const radius = 17;
-  const length = 2 * Math.PI * radius;
-  return (
-    <div aria-hidden className="relative h-11 w-11 shrink-0">
-      <svg className="-rotate-90" height="44" viewBox="0 0 44 44" width="44">
-        <defs>
-          <linearGradient id="habit-ring" x1="0" x2="1" y1="0" y2="1">
-            <stop offset="0%" stopColor="hsl(var(--primary))" />
-            <stop offset="100%" stopColor="hsl(var(--accent))" />
-          </linearGradient>
-        </defs>
-        <circle cx="22" cy="22" fill="none" r={radius} stroke="hsl(var(--muted))" strokeWidth="5" />
-        <circle cx="22" cy="22" fill="none" r={radius} stroke="url(#habit-ring)" strokeDasharray={length} strokeDashoffset={length * (1 - value)} strokeLinecap="round" strokeWidth="5" style={{ transition: "stroke-dashoffset 400ms ease" }} />
-      </svg>
-      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold tabular-nums">{Math.round(value * 100)}%</span>
-    </div>
-  );
-}
-
-// Stand-alone quick add (used on Now): shows its own result line.
+// New task button with its own result line (used on Now).
 export function QuickAddBox({ targets, timeZone }: { targets: QuickTarget[]; timeZone: string }) {
-  const router = useRouter();
   const [message, setMessage] = useState<PlanMessage | null>(null);
   return (
     <div className="space-y-2">
-      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} targets={targets} timeZone={timeZone} />
+      <NewTaskButton label="New task — pick the project, day and length" onDone={setMessage} targets={targets} timeZone={timeZone} />
       <p aria-live="polite" className={`min-h-5 text-sm ${message && !message.ok ? "font-medium text-destructive" : "text-muted-foreground"}`}>{message?.message}</p>
-    </div>
-  );
-}
-
-function areaNameFor(target: QuickTarget, targets: QuickTarget[]) {
-  return targets.find((other) => other.kind === "AREA" && other.id === target.domainId)?.name ?? null;
-}
-
-// Where the task will land and what was understood, shown before it is saved.
-function previewLine(text: string, targets: QuickTarget[], chosen: QuickTarget | null, timeZone: string) {
-  if (!text.trim()) return null;
-  const parsed = parseQuickAdd(text, targets, new Date(), timeZone, chosen);
-  const target = targets.find((item) => item.kind === "PROJECT" && item.id === parsed.projectId)
-    ?? targets.find((item) => item.kind === "AREA" && item.id === parsed.domainId) ?? null;
-  const where = target
-    ? target.kind === "PROJECT"
-      ? `${target.name}${areaNameFor(target, targets) && areaNameFor(target, targets) !== target.name ? ` (${areaNameFor(target, targets)})` : ""}`
-      : `${target.name} · no project`
-    : "Admin · no project (add #project to file it)";
-  const day = (value: Date) => value.toLocaleDateString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric" });
-  const bits = [
-    parsed.start ? `on calendar ${day(parsed.start)} ${parsed.start.toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" })}` : null,
-    parsed.dueDate ? `due ${day(parsed.dueDate)}` : null,
-    parsed.minutes ? fmtLength(parsed.minutes) : null,
-    parsed.waitingOn ? `waiting on ${parsed.waitingOn}` : null,
-    parsed.priority !== "MEDIUM" ? (parsed.priority === "CRITICAL" ? "critical" : "high priority") : null
-  ].filter(Boolean);
-  return { where, bits, unknown: parsed.unmatchedTag, title: parsed.title };
-}
-
-function QuickAdd({ onDone, projectId = null, compact = false, targets = [], timeZone = "America/Los_Angeles" }: {
-  onDone: (result: PlanMessage) => void; projectId?: string | null; compact?: boolean; targets?: QuickTarget[]; timeZone?: string;
-}) {
-  const [text, setText] = useState("");
-  const [chosen, setChosen] = useState<QuickTarget | null>(null);
-  const [pending, startTransition] = useTransition();
-  const tag = compact ? null : text.match(TAG_AT_END);
-  const suggestions = tag ? suggestTargets(tag[2], targets) : [];
-  const preview = compact ? null : previewLine(text, targets, chosen, timeZone);
-
-  const choose = (target: QuickTarget) => {
-    setChosen(target);
-    setText((current) => current.replace(TAG_AT_END, "$1").replace(/\s+$/, "") + (current.replace(TAG_AT_END, "").trim() ? " " : ""));
-  };
-  const save = () => {
-    if (!text.trim() || pending) return;
-    startTransition(async () => {
-      const result = await quickAddAction(text, compact ? projectId : chosen?.id ?? null);
-      if (result.ok) { setText(""); setChosen(null); }
-      onDone(result);
-    });
-  };
-  const id = compact ? `add-${projectId}` : "quick-add";
-  const byArea = targets.filter((target) => target.kind === "AREA").map((area) => ({ area, projects: targets.filter((target) => target.kind === "PROJECT" && target.domainId === area.id) }));
-
-  return (
-    <div className="relative">
-      <form
-        className="flex gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (suggestions.length) choose(suggestions[0]); // Enter while picking a #project takes the first match
-          else save();
-        }}
-      >
-        <label className="sr-only" htmlFor={id}>{compact ? "Add a task to this project" : "Add a task"}</label>
-        <input
-          aria-autocomplete={compact ? undefined : "list"}
-          aria-controls={suggestions.length ? `${id}-suggestions` : undefined}
-          autoComplete="off"
-          className={`min-w-0 flex-1 rounded-xl border px-3 placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${compact ? "border-dashed bg-transparent py-1.5 text-sm" : "bg-card py-3 text-[15px] shadow-sm"}`}
-          id={id}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Escape" && tag) setText((current) => current.replace(TAG_AT_END, "$1")); }}
-          placeholder={compact ? "Add task…" : "Add a task — type # to pick a project"}
-          value={text}
-        />
-        {!compact && targets.length > 0 && (
-          <>
-            {/* A native picker (works well on phones) behind a small folder button. */}
-            <div className="relative w-11 shrink-0">
-              <span aria-hidden className={`pointer-events-none flex h-full items-center justify-center rounded-xl border text-base ${chosen ? "border-primary bg-primary/10" : "bg-card"}`}>📁</span>
-              <label className="sr-only" htmlFor={`${id}-project`}>Choose a project</label>
-              <select
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                id={`${id}-project`}
-                onChange={(event) => setChosen(targets.find((target) => target.id === event.target.value) ?? null)}
-                title="Choose a project"
-                value={chosen?.id ?? ""}
-              >
-                <option value="">No project</option>
-                {byArea.map(({ area, projects }) => (
-                  <optgroup key={area.id} label={area.name}>
-                    <option value={area.id}>{area.name} (no project)</option>
-                    {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-                  </optgroup>
-                ))}
-              </select>
-            </div>
-          </>
-        )}
-        <button className={compact ? "rounded-xl border px-3 text-sm font-medium hover:bg-muted disabled:opacity-50" : "rounded-xl bg-primary px-4 font-semibold text-primary-foreground disabled:opacity-50"} disabled={pending || !text.trim()} type="submit">Add</button>
-        {!compact && (
-          <details className="relative hidden sm:block">
-            <summary className="flex h-full cursor-pointer list-none items-center rounded-xl border bg-card px-3 text-sm text-muted-foreground hover:bg-muted">Tips</summary>
-            <div className="absolute right-0 z-40 mt-2 w-72 rounded-xl border bg-card p-3 text-sm shadow-lg">
-              <ul className="space-y-1">
-                <li><b>#</b> then a few letters: pick a project from the list</li>
-                <li><b>fri</b>, <b>tomorrow</b>, <b>11/30</b> due that day</li>
-                <li><b>at 3pm</b> puts it on the calendar</li>
-                <li><b>30m</b>, <b>1h</b> how long it takes</li>
-                <li><b>@Heidi</b> waiting on Heidi</li>
-                <li><b>!</b> high priority, <b>!!</b> critical</li>
-              </ul>
-            </div>
-          </details>
-        )}
-      </form>
-
-      {suggestions.length > 0 && (
-        <ul className="absolute inset-x-0 top-full z-40 mt-1 max-h-72 overflow-y-auto rounded-xl border bg-card p-1 shadow-lg" id={`${id}-suggestions`} role="listbox">
-          {suggestions.map((target, index) => (
-            <li aria-selected={index === 0} key={target.id} role="option">
-              <button className="flex w-full items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted" onClick={() => choose(target)} onMouseDown={(event) => event.preventDefault()} type="button">
-                <span className="font-medium">{target.name}</span>
-                <span className="text-xs text-muted-foreground">{target.kind === "AREA" ? "area" : areaNameFor(target, targets)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {!compact && (chosen || preview) && (
-        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-          <span aria-hidden>→</span>
-          {chosen ? (
-            <span className="inline-flex items-center gap-1 rounded-lg border border-primary/50 bg-primary/10 px-2 py-0.5 font-medium text-foreground">
-              {chosen.kind === "AREA" ? `${chosen.name} · no project` : chosen.name}
-              <button aria-label="Clear project" className="px-0.5" onClick={() => setChosen(null)} type="button">×</button>
-            </span>
-          ) : (
-            <span className={preview?.where.startsWith("Admin") ? "" : "font-medium text-foreground"}>{preview?.where}</span>
-          )}
-          {preview?.bits.map((bit) => <span key={bit}>· {bit}</span>)}
-          {preview?.unknown && !chosen && <span className="text-amber-700 dark:text-amber-400">· no project matches #{preview.unknown}</span>}
-        </p>
-      )}
     </div>
   );
 }
@@ -622,13 +443,13 @@ type CardHandlers = {
   onPick: (task: BoardTask) => void; pickedId: string | null;
 };
 
-function AreaList({ area, overrides, timeZone, open, filtering, onOpenChange, ...handlers }: {
-  area: BoardArea; overrides: Record<string, Override>; timeZone: string; open: boolean; filtering: boolean; onOpenChange: (open: boolean) => void;
+function AreaList({ area, overrides, timeZone, targets, open, filtering, onOpenChange, ...handlers }: {
+  area: BoardArea; overrides: Record<string, Override>; timeZone: string; targets: QuickTarget[]; open: boolean; filtering: boolean; onOpenChange: (open: boolean) => void;
 } & CardHandlers) {
   const unplaced = (tasks: BoardTask[]) => tasks.map((task) => (overrides[task.id] ? { ...task, ...overrides[task.id] } : task));
   const count = area.projects.reduce((sum, project) => sum + project.tasks.length, 0) + area.loose.length;
   return (
-    <details className="group rounded-2xl border bg-card" onToggle={(event) => { if (!filtering && event.currentTarget.open !== open) onOpenChange(event.currentTarget.open); }} open={open}>
+    <details className="group rounded-xl border bg-background/40" onToggle={(event) => { if (!filtering && event.currentTarget.open !== open) onOpenChange(event.currentTarget.open); }} open={open}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden">
         <span className="flex items-center gap-2.5">
           <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${areaLook(area.slug).dot}`} />
@@ -640,13 +461,16 @@ function AreaList({ area, overrides, timeZone, open, filtering, onOpenChange, ..
         </span>
       </summary>
       <div className="space-y-3 px-3 pb-3">
+        {area.projects.length === 0 && area.loose.length === 0 && !filtering && <NewTaskButton label={`+ Add to ${area.name}`} onDone={handlers.onMessage} presetId={area.id} targets={targets} timeZone={timeZone} variant="chip" />}
         {area.projects.map((project) => (
           <div key={project.id}>
-            <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{project.name}</p>
+            <div className="flex items-center justify-between gap-2 px-1">
+              <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{project.name}</p>
+              {!filtering && <NewTaskButton label="+ Add" onDone={handlers.onMessage} presetId={project.id} targets={targets} timeZone={timeZone} variant="chip" />}
+            </div>
             <ul className="mt-1 space-y-1.5">
               {unplaced(project.tasks).map((task) => <TaskCard key={task.id} task={task} timeZone={timeZone} {...handlers} />)}
             </ul>
-            {!filtering && <div className="mt-1.5"><QuickAdd compact onDone={handlers.onMessage} projectId={project.id} /></div>}
           </div>
         ))}
         {area.loose.length > 0 && (
@@ -761,7 +585,7 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
           );
         })}
       </div>
-      <div className={compact ? "h-[34vh] overflow-y-auto" : "max-h-[calc(100vh-14rem)] overflow-y-auto"} ref={scroller}>
+      <div className={compact ? "h-[34vh] overflow-y-auto" : "h-[calc(100vh-15rem)] min-h-[420px] overflow-y-auto"} ref={scroller}>
         <div className="relative grid" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))`, height }}>
           <div className="relative">
             {Array.from({ length: (range.end - range.start) / 60 }, (_, index) => (

@@ -17,11 +17,11 @@ export function ProjectsTabs() {
     { href: "/projects/progress", label: "Progress" }
   ];
   return (
-    <nav aria-label="Projects sections" className="inline-flex rounded-xl border bg-card p-1">
+    <nav aria-label="Projects sections" className="inline-flex rounded-full border bg-muted/60 p-1">
       {tabs.map((tab) => {
         const active = pathname === tab.href;
         return (
-          <Link aria-current={active ? "page" : undefined} className={cn("rounded-lg px-4 py-2 text-sm font-medium", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground", focusRing)} href={tab.href} key={tab.href}>
+          <Link aria-current={active ? "page" : undefined} className={cn("rounded-full px-4 py-1.5 text-sm font-medium transition-colors", active ? "bg-card font-semibold text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground", focusRing)} href={tab.href} key={tab.href}>
             {tab.label}
           </Link>
         );
