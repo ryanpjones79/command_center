@@ -76,7 +76,8 @@ export async function quickAdd(
     ...projects.map((project) => ({ id: project.id, name: project.name, kind: "PROJECT" as const, domainId: project.domainId })),
     ...domains.map((domain) => ({ id: domain.id, name: domain.name, slug: domain.slug, kind: "AREA" as const, domainId: domain.id }))
   ];
-  const preset = presetProjectId ? targets.find((target) => target.kind === "PROJECT" && target.id === presetProjectId) ?? null : null;
+  // The chosen project or area (project picker, #-suggestion, or a project's own add line). A #tag typed in the text still wins.
+  const preset = presetProjectId ? targets.find((target) => target.id === presetProjectId) ?? null : null;
   const parsed = parseQuickAdd(line, targets, now, settings.timeZone, preset);
   if (!parsed.title) return { ok: false, error: "Add a few words saying what the task is." };
   const domainId = parsed.domainId ?? domains.find((domain) => domain.slug === "admin")?.id ?? domains[0]?.id;

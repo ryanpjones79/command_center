@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { localClock, localDateKey } from "@/lib/v2/zoned-time";
 import { googleCalendarLoader, loadDay, recommendNow, workHref, type DayTask } from "@/server/v2/day";
+import { loadQuickTargets } from "@/server/v2/board";
 
 export const metadata: Metadata = { title: "Now" };
 export const dynamic = "force-dynamic";
@@ -67,7 +68,7 @@ function Context({ task, timeZone }: { task: DayTask; timeZone: string }) {
 
 export default async function NowPage() {
   const user = await requireUser();
-  const model = await loadDay(user.id, prisma, googleCalendarLoader());
+  const [model, targets] = await Promise.all([loadDay(user.id, prisma, googleCalendarLoader()), loadQuickTargets(user.id, prisma)]);
   const { settings, now } = model;
   const tz = settings.timeZone;
   const current = model.current;
@@ -165,7 +166,7 @@ export default async function NowPage() {
       </div>
 
       <section aria-label="Add a task" className="rounded-2xl border bg-card/70 p-3 sm:p-4">
-        <QuickAddBox />
+        <QuickAddBox targets={targets} timeZone={tz} />
         <p className="mt-1 text-xs text-muted-foreground">
           Loose idea or photo? <Link className="underline underline-offset-2" href="/inbox/capture">Capture it</Link> instead. <Link className="ml-2 font-medium underline underline-offset-2" href="/plan">Open Plan →</Link>
         </p>
