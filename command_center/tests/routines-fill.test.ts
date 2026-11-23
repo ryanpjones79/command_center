@@ -94,3 +94,13 @@ describe("routines that fill free time", () => {
     expect([walk.domainSlug, walk.durationMin]).toEqual(["health", 30]);
   });
 });
+
+describe("Field Book offers", () => {
+  it("are not filed under a project per casino; the casino name goes in the title", async () => {
+    const { flattenCasinoProject } = await import("@/server/v2/ingest");
+    expect(flattenCasinoProject({ system: "CASINO_AP", title: "Use $50 free play", projectKey: "thunder-valley", projectName: "Casino AP: Thunder Valley" }))
+      .toMatchObject({ title: "Thunder Valley: Use $50 free play", projectKey: undefined, projectName: undefined });
+    expect(flattenCasinoProject({ system: "CASINO_AP", title: "Sky River: tier match", projectKey: "sky-river", projectName: "Sky River" }).title).toBe("Sky River: tier match");
+    expect(flattenCasinoProject({ system: "EBAY", title: "Mark down", projectKey: "x", projectName: "Y" }).projectKey).toBe("x");
+  });
+});
