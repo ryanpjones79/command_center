@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { fillDayAction, moveBlockAction, planDoneAction, quickAddAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
+import { addHabitAction, fillDayAction, habitDoneAction, moveBlockAction, planDoneAction, quickAddAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
 import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
+import type { Habit } from "@/server/v2/habits";
 import { parseQuickAdd, type QuickTarget } from "@/lib/v2/quick-add";
 import { QUICK_FILTERS, SOURCE_LABEL, suggestTargets, TAG_AT_END, taskMatches, type QuickFilter } from "@/lib/v2/plan-filters";
 
@@ -128,7 +129,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
       for (const project of area.projects) for (const task of project.tasks) map.set(task.id, task);
       for (const task of area.loose) map.set(task.id, task);
     }
-    for (const task of [...board.blocks, ...board.waiting]) map.set(task.id, task);
+    for (const task of [...board.blocks, ...board.waiting, ...board.routineTasks]) map.set(task.id, task);
     return map;
   }, [board]);
 
@@ -203,6 +204,13 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
         {!board.calendarKnown && <p className="text-amber-700 dark:text-amber-400">Google Calendar couldn&apos;t be read, so meetings may be missing.</p>}
         {board.calendarSync.enabled && !board.calendarSync.ok && <p className="text-amber-700 dark:text-amber-400">Google Calendar sync: {board.calendarSync.message}</p>}
       </div>
+
+      <HabitStrip
+        habits={board.habits}
+        onMessage={(result) => { setMessage(result); router.refresh(); }}
+        onPlace={(taskId) => { const task = allTasks.get(taskId); if (task) togglePick(task); }}
+        placedIds={new Set(blocks.map((task) => task.id))}
+      />
 
       {/* Phone: today's calendar stays pinned above the lists. Tablet and up: lists left, calendar right. */}
       <div className="flex flex-col gap-4 md:grid md:grid-cols-[minmax(300px,380px)_1fr]">
@@ -301,6 +309,114 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
 
       {scheduling && <ScheduleSheet blocks={blocks} board={board} onClose={() => setScheduling(null)} onDone={() => { done(scheduling.id); setScheduling(null); }} onPick={(start, minutes) => { schedule(scheduling, start, minutes); setScheduling(null); }} onUnschedule={() => { unschedule(scheduling.id); setScheduling(null); }} task={withOverride(scheduling)} />}
     </div>
+  );
+}
+
+const WEEKDAY_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// Today's routines as one-tap check-offs with a streak. Tap "place" to put one on the calendar (tap a task,
+// then a time, same as the lists). "+ Habit" adds a new routine.
+function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
+  habits: Habit[]; placedIds: Set<string>; onMessage: (result: PlanMessage) => void; onPlace: (taskId: string) => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [doneNow, setDoneNow] = useState<Record<string, boolean>>({});
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [days, setDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [minutes, setMinutes] = useState(30);
+  const [area, setArea] = useState("HEALTH");
+  useEffect(() => setDoneNow({}), [habits]);
+
+  const toggle = (habit: Habit) => {
+    if (!habit.todayTaskId) return;
+    const next = !(doneNow[habit.routineId] ?? habit.done);
+    setDoneNow((current) => ({ ...current, [habit.routineId]: next }));
+    startTransition(async () => onMessage(await habitDoneAction(habit.todayTaskId as string, next)));
+  };
+  const add = () => startTransition(async () => {
+    const result = await addHabitAction({ title, weekdays: days, minutes, area });
+    if (result.ok) { setTitle(""); setAdding(false); }
+    onMessage(result);
+  });
+  const doneCount = habits.filter((habit) => doneNow[habit.routineId] ?? habit.done).length;
+
+  return (
+    <section aria-label="Daily habits" className="rounded-2xl border bg-card p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold">Daily habits <span className="font-normal text-muted-foreground">{habits.length ? `${doneCount} of ${habits.length} today` : "none today"}</span></p>
+        <button className="rounded-lg border px-2 py-1 text-xs hover:bg-muted" onClick={() => setAdding((open) => !open)} type="button">{adding ? "Close" : "+ Habit"}</button>
+      </div>
+      {habits.length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-2">
+          {habits.map((habit) => {
+            const done = doneNow[habit.routineId] ?? habit.done;
+            const streak = habit.streak + (done && !habit.done ? 1 : !done && habit.done ? -1 : 0);
+            const placed = habit.todayTaskId ? placedIds.has(habit.todayTaskId) : false;
+            return (
+              <li className={`flex items-center overflow-hidden rounded-full border border-l-4 text-sm ${areaStyle(habit.areaSlug)}`} key={habit.routineId}>
+                <button
+                  aria-pressed={done}
+                  className={`flex items-center gap-2 py-1.5 pl-2.5 pr-2 ${done ? "font-semibold" : ""}`}
+                  disabled={pending || !habit.todayTaskId}
+                  onClick={() => toggle(habit)}
+                  title={done ? "Done today. Tap to undo." : "Tap when done"}
+                  type="button"
+                >
+                  <span aria-hidden className={`flex h-5 w-5 items-center justify-center rounded-full border-2 text-xs ${done ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/50"}`}>{done ? "✓" : ""}</span>
+                  <span className={done ? "line-through decoration-2 opacity-80" : ""}>{habit.title}</span>
+                  <span className="text-xs text-muted-foreground">{fmtLength(habit.minutes)}</span>
+                  {streak > 0 && <span className="text-xs" title={`${streak} scheduled day${streak === 1 ? "" : "s"} in a row`}>🔥{streak}</span>}
+                </button>
+                {!done && habit.todayTaskId && (
+                  <button aria-label={placed ? `${habit.title} is on the calendar; tap to move` : `Place ${habit.title} on the calendar`} className="border-l px-2 py-1.5 text-xs text-muted-foreground hover:bg-background/60" onClick={() => onPlace(habit.todayTaskId as string)} type="button">
+                    {placed ? "moved?" : "place"}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {adding && (
+        <form className="mt-3 space-y-2 rounded-xl border bg-background p-3" onSubmit={(event) => { event.preventDefault(); add(); }}>
+          <div className="flex gap-2">
+            <label className="sr-only" htmlFor="habit-title">Habit</label>
+            <input autoFocus className="min-w-0 flex-1 rounded-lg border bg-background px-2 py-1.5 text-sm" id="habit-title" onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Stretch, Read 20 pages, Meal prep check" value={title} />
+            <label className="sr-only" htmlFor="habit-minutes">Minutes</label>
+            <select className="rounded-lg border bg-background px-2 text-sm" id="habit-minutes" onChange={(event) => setMinutes(Number(event.target.value))} value={minutes}>
+              {[5, 10, 15, 20, 30, 45, 60, 90].map((value) => <option key={value} value={value}>{fmtLength(value)}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-xs text-muted-foreground">Days</span>
+            {WEEKDAY_LETTERS.map((letter, index) => (
+              <button
+                aria-label={WEEKDAY_NAMES[index]}
+                aria-pressed={days.includes(index)}
+                className={`h-8 w-8 rounded-full border text-xs font-semibold ${days.includes(index) ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                key={index}
+                onClick={() => setDays((current) => current.includes(index) ? current.filter((day) => day !== index) : [...current, index].sort())}
+                type="button"
+              >
+                {letter}
+              </button>
+            ))}
+            <label className="sr-only" htmlFor="habit-area">Area</label>
+            <select className="ml-auto rounded-lg border bg-background px-2 py-1 text-xs" id="habit-area" onChange={(event) => setArea(event.target.value)} value={area}>
+              <option value="HEALTH">Health</option>
+              <option value="KIDS">Family / kids</option>
+              <option value="PERSONAL">Personal</option>
+            </select>
+          </div>
+          <div className="flex justify-end gap-2">
+            <a className="mr-auto self-center text-xs text-muted-foreground underline underline-offset-2" href="/time-blocks/routines">Edit or pause habits</a>
+            <button className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-60" disabled={pending || !title.trim() || days.length === 0} type="submit">Add habit</button>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }
 

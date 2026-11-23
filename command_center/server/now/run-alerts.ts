@@ -72,6 +72,6 @@ export async function runNowAlerts(
     update: { status: failed ? "FAILING" : "OK", lastAttemptAt: now, ...(failed ? { lastError: "Some alerts failed" } : { lastSuccessAt: now, lastError: null }) },
     create: { userId, sourceSystem: RUN_MARKER, status: failed ? "FAILING" : "OK", lastAttemptAt: now, lastSuccessAt: failed ? null : now }
   });
-  return { ok: failed === 0, sent, failed, sync };
+  return { ok: failed === 0, sent, failed, sync, calendarSync };
 }
 

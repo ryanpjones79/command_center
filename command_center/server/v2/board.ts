@@ -5,6 +5,7 @@ import { dayTaskSelect, toDayTask, workHref, type DayTask } from "@/server/v2/da
 import { materializeRoutines } from "@/server/v2/routines";
 import { loadDaySettings, type CalendarLoader } from "@/server/v2/schedule-service";
 import { SYNC_SOURCE, writeEnabled } from "@/server/v2/calendar-sync";
+import { loadHabits, type Habit } from "@/server/v2/habits";
 
 // Read model for the Plan screen: every open task grouped by area and project (feed items included, labelled
 // by source), plus the calendar for the days shown (Google meetings and RyanOS blocks).
@@ -50,6 +51,8 @@ export type Board = {
   calendarKnown: boolean;
   calendarSync: { enabled: boolean; ok: boolean; message: string | null };
   targets: QuickTarget[];
+  habits: Habit[]; // today's daily habits (routines) with streaks
+  routineTasks: BoardTask[]; // today's open routine copies, so a habit can be placed on the calendar
 };
 
 const AREA_ORDER = ["ebay", "rykas", "betting-models", "casino-ap", "work", "health", "golf", "family", "opportunities", "admin"];
@@ -142,8 +145,10 @@ export async function loadBoard(
   ]);
 
   const tasks = rows.map((row) => toBoardTask({ ...toDayTask(row), priority: row.priority, waitingOn: row.waitingOn }, now));
-  // A routine's day copy belongs on the calendar, not in the lists.
-  const listed = tasks.filter((task, index) => rows[index].sourceSystem !== "ROUTINE" || !task.start);
+  // Routine day copies live in the Daily habits strip (and on the calendar once placed), not in the lists.
+  const isRoutine = (index: number) => rows[index].sourceSystem === "ROUTINE";
+  const listed = tasks.filter((_, index) => !isRoutine(index));
+  const routineTasks = tasks.filter((_, index) => isRoutine(index));
   const isWaiting = (task: BoardTask) => task.status === "WAITING" || Boolean(task.waitingOn);
   const blocks = tasks.filter((task) => task.start && task.end && Date.parse(task.start) < busyTo.getTime() && Date.parse(task.end) > busyFrom.getTime());
 
@@ -188,6 +193,8 @@ export async function loadBoard(
     meetings,
     calendarKnown,
     calendarSync: { enabled: writeEnabled(), ok: !sync || sync.status !== "FAILING", message: sync?.status === "FAILING" ? sync.lastError : null },
-    targets
+    targets,
+    habits: await loadHabits(userId, db, now),
+    routineTasks
   };
 }
