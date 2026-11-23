@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { fillDayAction, moveBlockAction, planDoneAction, quickAddAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
 import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
+import { parseQuickAdd, type QuickTarget } from "@/lib/v2/quick-add";
+import { QUICK_FILTERS, SOURCE_LABEL, suggestTargets, TAG_AT_END, taskMatches, type QuickFilter } from "@/lib/v2/plan-filters";
 
 // Plan: every open task on the left (grouped by area and project, feed items labelled by source), the calendar
 // on the right. Drag a task onto the calendar to schedule it, drag a block to move it, pull its bottom edge to
@@ -27,10 +29,6 @@ const AREA_STYLE: Record<string, string> = {
   opportunities: "border-l-teal-600 bg-teal-600/10"
 };
 const areaStyle = (slug: string) => AREA_STYLE[slug] ?? "border-l-slate-500 bg-slate-500/10";
-
-const SOURCE_LABEL: Record<string, string> = {
-  EBAY: "eBay", RYKAS: "Supplier OS", STORE_ROUTE: "Store route", AP_TRADER: "AP Trader", CASINO_AP: "Field Book", CCHCS: "CCHCS", EMAIL: "Email"
-};
 
 type DragPayload = { taskId: string; minutes: number; mode: "task" | "block"; grabMin: number };
 type Override = { start: string | null; end: string | null };
@@ -71,6 +69,15 @@ function readPayload(event: React.DragEvent): DragPayload | null {
   }
 }
 
+const CLOSED_KEY = "ryanos.plan.closedAreas";
+
+function readClosed(): Set<string> {
+  try { return new Set(JSON.parse(window.localStorage.getItem(CLOSED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
+}
+function writeClosed(closed: Set<string>) {
+  try { window.localStorage.setItem(CLOSED_KEY, JSON.stringify([...closed])); } catch { /* storage unavailable: still works, just not remembered */ }
+}
+
 export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "week" }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -80,6 +87,27 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   // Tap a task, then tap a time: the task waiting to be placed.
   const [picked, setPicked] = useState<BoardTask | null>(null);
   const phone = useIsPhone();
+  const [query, setQuery] = useState("");
+  const [areaFilter, setAreaFilter] = useState<string | null>(null);
+  const [quick, setQuick] = useState<Set<QuickFilter>>(new Set());
+  const [closed, setClosed] = useState<Set<string>>(new Set());
+  useEffect(() => setClosed(readClosed()), []);
+  const toggleQuick = (key: QuickFilter) => setQuick((current) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key);
+    else {
+      next.add(key);
+      if (key === "apps") next.delete("mine");
+      if (key === "mine") next.delete("apps");
+    }
+    return next;
+  });
+  const setAreaOpen = (slug: string, open: boolean) => setClosed((current) => {
+    const next = new Set(current);
+    if (open) next.delete(slug); else next.add(slug);
+    writeClosed(next);
+    return next;
+  });
   const tz = board.timeZone;
 
   useEffect(() => setOverrides({}), [board]);
@@ -110,6 +138,18 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
     .filter((task): task is BoardTask => Boolean(task))
     .map(withOverride)
     .filter((task) => task.start && task.end);
+
+  const filtering = Boolean(query.trim() || areaFilter || quick.size);
+  const keep = (task: BoardTask) => taskMatches(withOverride(task), query, quick);
+  const totalOpen = board.areas.reduce((sum, area) => sum + area.loose.length + area.projects.reduce((n, project) => n + project.tasks.length, 0), 0) + board.waiting.length;
+  const shownAreas = board.areas
+    .filter((area) => !areaFilter || area.slug === areaFilter)
+    .map((area) => filtering
+      ? { ...area, projects: area.projects.map((project) => ({ ...project, tasks: project.tasks.filter(keep) })).filter((project) => project.tasks.length > 0), loose: area.loose.filter(keep) }
+      : area)
+    .filter((area) => !filtering || area.projects.length > 0 || area.loose.length > 0);
+  const shownWaiting = board.waiting.filter((task) => (!areaFilter || task.areaSlug === areaFilter) && keep(task));
+  const shownCount = shownAreas.reduce((sum, area) => sum + area.loose.length + area.projects.reduce((n, project) => n + project.tasks.length, 0), 0) + shownWaiting.length;
 
   const schedule = (task: BoardTask, start: Date, minutes: number) => {
     const end = new Date(start.getTime() + minutes * MIN);
@@ -156,7 +196,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
         </div>
       </header>
 
-      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} />
+      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} targets={board.targets} timeZone={tz} />
 
       <div aria-live="polite" className="min-h-6 text-sm">
         {message && <p className={message.ok ? "text-muted-foreground" : "font-medium text-destructive"}>{message.message}</p>}
@@ -197,14 +237,58 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
             if (payload?.mode === "block") { event.preventDefault(); unschedule(payload.taskId); }
           }}
         >
-          {board.areas.map((area) => (
-            <AreaList area={area} key={area.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} overrides={overrides} pickedId={picked?.id ?? null} timeZone={tz} />
+          <div className="space-y-2 rounded-2xl border bg-card p-3">
+            <label className="sr-only" htmlFor="plan-search">Search tasks</label>
+            <input
+              className="w-full rounded-xl border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              id="plan-search"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search tasks, projects, apps…"
+              type="search"
+              value={query}
+            />
+            <div aria-label="Filter by area" className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs" role="group">
+              {[{ slug: null as string | null, name: "All" }, ...board.areas.map((area) => ({ slug: area.slug as string | null, name: area.name }))].map((option) => (
+                <button aria-pressed={areaFilter === option.slug} className={`shrink-0 rounded-full border px-2.5 py-1 ${areaFilter === option.slug ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} key={option.slug ?? "all"} onClick={() => setAreaFilter(option.slug)} type="button">
+                  {option.name}
+                </button>
+              ))}
+            </div>
+            <div aria-label="Quick filters" className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs" role="group">
+              {QUICK_FILTERS.map((option) => (
+                <button aria-pressed={quick.has(option.key)} className={`shrink-0 rounded-full border px-2.5 py-1 ${quick.has(option.key) ? "border-primary bg-primary/15 font-semibold" : "hover:bg-muted"}`} key={option.key} onClick={() => toggleQuick(option.key)} type="button">
+                  {option.label}
+                </button>
+              ))}
+              {filtering && (
+                <button className="ml-auto shrink-0 px-1 text-muted-foreground underline underline-offset-2" onClick={() => { setQuery(""); setAreaFilter(null); setQuick(new Set()); }} type="button">
+                  Clear ({shownCount} of {totalOpen})
+                </button>
+              )}
+            </div>
+          </div>
+          {shownAreas.map((area) => (
+            <AreaList
+              area={area}
+              filtering={filtering}
+              key={area.id}
+              onDone={done}
+              onMessage={(result) => { setMessage(result); router.refresh(); }}
+              onOpenChange={(open) => setAreaOpen(area.slug, open)}
+              onPick={togglePick}
+              onSchedule={setScheduling}
+              open={filtering || !closed.has(area.slug)}
+              overrides={overrides}
+              pickedId={picked?.id ?? null}
+              timeZone={tz}
+            />
           ))}
-          {board.waiting.length > 0 && (
-            <details className="rounded-2xl border bg-card p-3" open>
-              <summary className="cursor-pointer text-sm font-semibold">Waiting on others ({board.waiting.length})</summary>
+          {filtering && shownCount === 0 && <p className="rounded-2xl border p-4 text-sm text-muted-foreground">Nothing matches. <button className="underline underline-offset-2" onClick={() => { setQuery(""); setAreaFilter(null); setQuick(new Set()); }} type="button">Clear filters</button></p>}
+          {shownWaiting.length > 0 && (
+            <details className="rounded-2xl border bg-card p-3" onToggle={(event) => { if (!filtering) setAreaOpen("__waiting", event.currentTarget.open); }} open={filtering || !closed.has("__waiting")}>
+              <summary className="cursor-pointer text-sm font-semibold">Waiting on others ({shownWaiting.length})</summary>
               <ul className="mt-2 space-y-1.5">
-                {board.waiting.map((task) => (
+                {shownWaiting.map((task) => (
                   <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={withOverride(task)} timeZone={tz} />
                 ))}
               </ul>
@@ -221,57 +305,161 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
 }
 
 // Stand-alone quick add (used on Now): shows its own result line.
-export function QuickAddBox() {
+export function QuickAddBox({ targets, timeZone }: { targets: QuickTarget[]; timeZone: string }) {
   const router = useRouter();
   const [message, setMessage] = useState<PlanMessage | null>(null);
   return (
     <div className="space-y-2">
-      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} />
+      <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} targets={targets} timeZone={timeZone} />
       <p aria-live="polite" className={`min-h-5 text-sm ${message && !message.ok ? "font-medium text-destructive" : "text-muted-foreground"}`}>{message?.message}</p>
     </div>
   );
 }
 
-function QuickAdd({ onDone, projectId = null, compact = false }: { onDone: (result: PlanMessage) => void; projectId?: string | null; compact?: boolean }) {
+function areaNameFor(target: QuickTarget, targets: QuickTarget[]) {
+  return targets.find((other) => other.kind === "AREA" && other.id === target.domainId)?.name ?? null;
+}
+
+// Where the task will land and what was understood, shown before it is saved.
+function previewLine(text: string, targets: QuickTarget[], chosen: QuickTarget | null, timeZone: string) {
+  if (!text.trim()) return null;
+  const parsed = parseQuickAdd(text, targets, new Date(), timeZone, chosen);
+  const target = targets.find((item) => item.kind === "PROJECT" && item.id === parsed.projectId)
+    ?? targets.find((item) => item.kind === "AREA" && item.id === parsed.domainId) ?? null;
+  const where = target
+    ? target.kind === "PROJECT"
+      ? `${target.name}${areaNameFor(target, targets) && areaNameFor(target, targets) !== target.name ? ` (${areaNameFor(target, targets)})` : ""}`
+      : `${target.name} · no project`
+    : "Admin · no project (add #project to file it)";
+  const day = (value: Date) => value.toLocaleDateString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric" });
+  const bits = [
+    parsed.start ? `on calendar ${day(parsed.start)} ${parsed.start.toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" })}` : null,
+    parsed.dueDate ? `due ${day(parsed.dueDate)}` : null,
+    parsed.minutes ? fmtLength(parsed.minutes) : null,
+    parsed.waitingOn ? `waiting on ${parsed.waitingOn}` : null,
+    parsed.priority !== "MEDIUM" ? (parsed.priority === "CRITICAL" ? "critical" : "high priority") : null
+  ].filter(Boolean);
+  return { where, bits, unknown: parsed.unmatchedTag, title: parsed.title };
+}
+
+function QuickAdd({ onDone, projectId = null, compact = false, targets = [], timeZone = "America/Los_Angeles" }: {
+  onDone: (result: PlanMessage) => void; projectId?: string | null; compact?: boolean; targets?: QuickTarget[]; timeZone?: string;
+}) {
   const [text, setText] = useState("");
+  const [chosen, setChosen] = useState<QuickTarget | null>(null);
   const [pending, startTransition] = useTransition();
+  const tag = compact ? null : text.match(TAG_AT_END);
+  const suggestions = tag ? suggestTargets(tag[2], targets) : [];
+  const preview = compact ? null : previewLine(text, targets, chosen, timeZone);
+
+  const choose = (target: QuickTarget) => {
+    setChosen(target);
+    setText((current) => current.replace(TAG_AT_END, "$1").replace(/\s+$/, "") + (current.replace(TAG_AT_END, "").trim() ? " " : ""));
+  };
   const save = () => {
     if (!text.trim() || pending) return;
     startTransition(async () => {
-      const result = await quickAddAction(text, projectId);
-      if (result.ok) setText("");
+      const result = await quickAddAction(text, compact ? projectId : chosen?.id ?? null);
+      if (result.ok) { setText(""); setChosen(null); }
       onDone(result);
     });
   };
   const id = compact ? `add-${projectId}` : "quick-add";
+  const byArea = targets.filter((target) => target.kind === "AREA").map((area) => ({ area, projects: targets.filter((target) => target.kind === "PROJECT" && target.domainId === area.id) }));
+
   return (
-    <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); save(); }}>
-      <label className="sr-only" htmlFor={id}>{compact ? "Add a task to this project" : "Add a task"}</label>
-      <input
-        autoComplete="off"
-        className={`min-w-0 flex-1 rounded-xl border bg-background px-3 ${compact ? "py-1.5 text-sm" : "py-2.5"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary`}
-        id={id}
-        onChange={(event) => setText(event.target.value)}
-        placeholder={compact ? "Add task…" : "Add a task — e.g. Call Redstone about MOQ #wholesale fri 30m"}
-        value={text}
-      />
-      <button className={`rounded-xl border px-3 ${compact ? "text-sm" : ""} font-medium hover:bg-muted disabled:opacity-60`} disabled={pending || !text.trim()} type="submit">Add</button>
-      {!compact && (
-        <details className="relative">
-          <summary className="flex h-full cursor-pointer list-none items-center rounded-xl border px-3 text-sm text-muted-foreground hover:bg-muted">Tips</summary>
-          <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border bg-card p-3 text-sm shadow-lg">
-            <ul className="space-y-1">
-              <li><b>#name</b> project or area (#xmas won&apos;t match; #christmas will)</li>
-              <li><b>fri</b>, <b>tomorrow</b>, <b>11/30</b> due that day</li>
-              <li><b>at 3pm</b> also puts it on the calendar</li>
-              <li><b>30m</b>, <b>1h</b> how long it takes</li>
-              <li><b>@Heidi</b> waiting on Heidi</li>
-              <li><b>!</b> high priority, <b>!!</b> critical</li>
-            </ul>
-          </div>
-        </details>
+    <div className="relative">
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (suggestions.length) choose(suggestions[0]); // Enter while picking a #project takes the first match
+          else save();
+        }}
+      >
+        <label className="sr-only" htmlFor={id}>{compact ? "Add a task to this project" : "Add a task"}</label>
+        <input
+          aria-autocomplete={compact ? undefined : "list"}
+          aria-controls={suggestions.length ? `${id}-suggestions` : undefined}
+          autoComplete="off"
+          className={`min-w-0 flex-1 rounded-xl border bg-background px-3 ${compact ? "py-1.5 text-sm" : "py-2.5"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary`}
+          id={id}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Escape" && tag) setText((current) => current.replace(TAG_AT_END, "$1")); }}
+          placeholder={compact ? "Add task…" : "Add a task — type # to pick a project"}
+          value={text}
+        />
+        {!compact && targets.length > 0 && (
+          <>
+            {/* A native picker (works well on phones) behind a small folder button. */}
+            <div className="relative w-11 shrink-0">
+              <span aria-hidden className={`pointer-events-none flex h-full items-center justify-center rounded-xl border text-base ${chosen ? "border-primary bg-primary/10" : "bg-background"}`}>📁</span>
+              <label className="sr-only" htmlFor={`${id}-project`}>Choose a project</label>
+              <select
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                id={`${id}-project`}
+                onChange={(event) => setChosen(targets.find((target) => target.id === event.target.value) ?? null)}
+                title="Choose a project"
+                value={chosen?.id ?? ""}
+              >
+                <option value="">No project</option>
+                {byArea.map(({ area, projects }) => (
+                  <optgroup key={area.id} label={area.name}>
+                    <option value={area.id}>{area.name} (no project)</option>
+                    {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+        <button className={`rounded-xl border px-3 ${compact ? "text-sm" : ""} font-medium hover:bg-muted disabled:opacity-60`} disabled={pending || !text.trim()} type="submit">Add</button>
+        {!compact && (
+          <details className="relative hidden sm:block">
+            <summary className="flex h-full cursor-pointer list-none items-center rounded-xl border px-3 text-sm text-muted-foreground hover:bg-muted">Tips</summary>
+            <div className="absolute right-0 z-40 mt-2 w-72 rounded-xl border bg-card p-3 text-sm shadow-lg">
+              <ul className="space-y-1">
+                <li><b>#</b> then a few letters: pick a project from the list</li>
+                <li><b>fri</b>, <b>tomorrow</b>, <b>11/30</b> due that day</li>
+                <li><b>at 3pm</b> puts it on the calendar</li>
+                <li><b>30m</b>, <b>1h</b> how long it takes</li>
+                <li><b>@Heidi</b> waiting on Heidi</li>
+                <li><b>!</b> high priority, <b>!!</b> critical</li>
+              </ul>
+            </div>
+          </details>
+        )}
+      </form>
+
+      {suggestions.length > 0 && (
+        <ul className="absolute inset-x-0 top-full z-40 mt-1 max-h-72 overflow-y-auto rounded-xl border bg-card p-1 shadow-lg" id={`${id}-suggestions`} role="listbox">
+          {suggestions.map((target, index) => (
+            <li aria-selected={index === 0} key={target.id} role="option">
+              <button className="flex w-full items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted" onClick={() => choose(target)} onMouseDown={(event) => event.preventDefault()} type="button">
+                <span className="font-medium">{target.name}</span>
+                <span className="text-xs text-muted-foreground">{target.kind === "AREA" ? "area" : areaNameFor(target, targets)}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
-    </form>
+
+      {!compact && (chosen || preview) && (
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+          <span aria-hidden>→</span>
+          {chosen ? (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-primary/50 bg-primary/10 px-2 py-0.5 font-medium text-foreground">
+              {chosen.kind === "AREA" ? `${chosen.name} · no project` : chosen.name}
+              <button aria-label="Clear project" className="px-0.5" onClick={() => setChosen(null)} type="button">×</button>
+            </span>
+          ) : (
+            <span className={preview?.where.startsWith("Admin") ? "" : "font-medium text-foreground"}>{preview?.where}</span>
+          )}
+          {preview?.bits.map((bit) => <span key={bit}>· {bit}</span>)}
+          {preview?.unknown && !chosen && <span className="text-amber-700 dark:text-amber-400">· no project matches #{preview.unknown}</span>}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -280,11 +468,13 @@ type CardHandlers = {
   onPick: (task: BoardTask) => void; pickedId: string | null;
 };
 
-function AreaList({ area, overrides, timeZone, ...handlers }: { area: BoardArea; overrides: Record<string, Override>; timeZone: string } & CardHandlers) {
+function AreaList({ area, overrides, timeZone, open, filtering, onOpenChange, ...handlers }: {
+  area: BoardArea; overrides: Record<string, Override>; timeZone: string; open: boolean; filtering: boolean; onOpenChange: (open: boolean) => void;
+} & CardHandlers) {
   const unplaced = (tasks: BoardTask[]) => tasks.map((task) => (overrides[task.id] ? { ...task, ...overrides[task.id] } : task));
   const count = area.projects.reduce((sum, project) => sum + project.tasks.length, 0) + area.loose.length;
   return (
-    <details className="rounded-2xl border bg-card" open={count > 0}>
+    <details className="rounded-2xl border bg-card" onToggle={(event) => { if (!filtering && event.currentTarget.open !== open) onOpenChange(event.currentTarget.open); }} open={open}>
       <summary className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 text-sm font-semibold">
         <span>{area.name}</span>
         <span className="text-xs font-normal text-muted-foreground">{count} open</span>
@@ -296,7 +486,7 @@ function AreaList({ area, overrides, timeZone, ...handlers }: { area: BoardArea;
             <ul className="mt-1 space-y-1.5">
               {unplaced(project.tasks).map((task) => <TaskCard key={task.id} task={task} timeZone={timeZone} {...handlers} />)}
             </ul>
-            <div className="mt-1.5"><QuickAdd compact onDone={handlers.onMessage} projectId={project.id} /></div>
+            {!filtering && <div className="mt-1.5"><QuickAdd compact onDone={handlers.onMessage} projectId={project.id} /></div>}
           </div>
         ))}
         {area.loose.length > 0 && (

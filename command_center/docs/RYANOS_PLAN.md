@@ -12,9 +12,17 @@ Ryan's design: projects with their task lists (his own tasks and items from the 
 - **Fill my day:** places today's most important open work in free time (the existing day planner), then Ryan adjusts by dragging.
 - **Quick add** (top of Plan, on Now, and an "Add task" line under every project): one line, Enter. Shorthand: `#project` or `#area`, `fri` / `tomorrow` / `11/30` (due date), `at 3pm` (puts it on the calendar; then the day is not a due date), `30m` / `1h`, `@name` (waiting on), `!` / `!!` (priority). Unknown words stay in the title; an unknown #tag is reported. Patient information is refused (NO PHI). Tasks added under a project go straight into it; no Inbox sorting. Inbox stays for loose ideas and photos.
 
+## Finding things and filing new tasks (added 2026-11-22)
+
+- **"→ Goes to" line** under the main add box shows, as you type, where the task will land and what was understood (calendar time, due date, length, waiting on, priority). With no project chosen it says "Admin · no project".
+- **Type `#`** and a short list of matching projects (then areas) appears; tap one, or press Enter for the first. The chosen project shows as a chip with × to clear.
+- **Folder button** beside the box opens the phone's own picker: every project grouped by area, or an area with no project.
+- **Search and filters** above the lists: search (task, project, area, app; every word must match), area buttons, and Due soon / From apps / Mine / Not scheduled. "Clear (N of M)" resets. Per-project add lines are hidden while filtering.
+- **Collapsed areas stay collapsed** on that device (browser storage; if it is unavailable everything simply opens).
+
 ## Files
 
-`app/plan/` (page, server actions), `components/plan/plan-board.tsx`, `server/v2/board.ts` (read model), `server/v2/plan-board.ts` (schedule/move/unschedule, quick add, waiting-on), `lib/v2/quick-add.ts` (parser), `server/v2/calendar-sync.ts` (Google two-way sync, see RYANOS_V2_INTEGRATIONS.md). Tests: `tests/quick-add.test.ts`, `tests/plan-board.test.ts`, `tests/calendar-sync.test.ts`.
+`app/plan/` (page, server actions), `components/plan/plan-board.tsx`, `server/v2/board.ts` (read model), `server/v2/plan-board.ts` (schedule/move/unschedule, quick add, waiting-on), `lib/v2/quick-add.ts` (parser), `lib/v2/plan-filters.ts` (search, filters, #-suggestions), `server/v2/calendar-sync.ts` (Google two-way sync, see RYANOS_V2_INTEGRATIONS.md). Tests: `tests/quick-add.test.ts`, `tests/plan-filters.test.ts`, `tests/plan-board.test.ts`, `tests/calendar-sync.test.ts`.
 
 ## Limits
 

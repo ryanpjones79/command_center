@@ -47,6 +47,9 @@ describe("plan board", () => {
 
     const inProject = await quickAdd(userId, "Send price list", project.id, db, now);
     expect(inProject.ok && inProject.message).toContain("Amazon: Wholesale sourcing");
+    const area = await quickAdd(userId, "Restock bubble mailers", rykas.id, db, now); // picked an area, no project
+    const mailers = await db.executionTask.findUniqueOrThrow({ where: { id: area.ok ? area.taskId : "" } });
+    expect([mailers.domainId, mailers.projectId]).toEqual([rykas.id, null]);
     expect(await quickAdd(userId, "Follow up MRN 1234567", null, db, now)).toMatchObject({ ok: false });
     expect(await quickAdd(userId, "   ", null, db, now)).toMatchObject({ ok: false });
   });

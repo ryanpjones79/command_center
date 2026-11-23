@@ -80,6 +80,18 @@ function toBoardTask(task: DayTask & { priority: string; waitingOn: string | nul
   };
 }
 
+// Projects and areas a quick-add line can be filed under (for the "Goes to" preview and the project picker).
+export async function loadQuickTargets(userId: string, db: PrismaClient): Promise<QuickTarget[]> {
+  const [domains, projects] = await Promise.all([
+    db.executionDomain.findMany({ where: { userId }, select: { id: true, slug: true, name: true }, orderBy: { name: "asc" } }),
+    db.executionProject.findMany({ where: { userId, activeStatus: { in: ["ACTIVE_NOW", "ACTIVE_LATER"] }, closedAt: null }, select: { id: true, name: true, domainId: true }, orderBy: { name: "asc" } })
+  ]);
+  return [
+    ...projects.map((project) => ({ id: project.id, name: project.name, kind: "PROJECT" as const, domainId: project.domainId })),
+    ...domains.map((domain) => ({ id: domain.id, name: domain.name, slug: domain.slug, kind: "AREA" as const, domainId: domain.id }))
+  ];
+}
+
 // Most urgent first: deadline soon, then priority, then deadline, then oldest.
 export function sortTasks(tasks: BoardTask[]) {
   const deadline = (task: BoardTask) => Math.min(...[task.dueDate, task.expiresAt].map((value) => (value ? Date.parse(value) : Infinity)));
