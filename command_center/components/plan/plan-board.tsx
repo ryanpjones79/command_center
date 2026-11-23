@@ -49,6 +49,19 @@ const snap = (minutes: number) => Math.round(minutes / SNAP) * SNAP;
 const snapDown = (minutes: number) => Math.floor(minutes / SNAP) * SNAP;
 const fmtLength = (minutes: number) => (minutes >= 60 ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${minutes}m`);
 
+// Phones (narrower than 768px) get the stacked layout with today's calendar pinned on top.
+function useIsPhone() {
+  const [phone, setPhone] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setPhone(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return phone;
+}
+
 function readPayload(event: React.DragEvent): DragPayload | null {
   try {
     const raw = event.dataTransfer.getData(DRAG_TYPE);
@@ -63,8 +76,10 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<PlanMessage | null>(null);
   const [overrides, setOverrides] = useState<Record<string, Override>>({});
-  const [tab, setTab] = useState<"lists" | "calendar">("lists");
   const [scheduling, setScheduling] = useState<BoardTask | null>(null);
+  // Tap a task, then tap a time: the task waiting to be placed.
+  const [picked, setPicked] = useState<BoardTask | null>(null);
+  const phone = useIsPhone();
   const tz = board.timeZone;
 
   useEffect(() => setOverrides({}), [board]);
@@ -102,6 +117,10 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   };
   const unschedule = (taskId: string) => run(() => moveBlockAction(taskId, null, null), { [taskId]: { start: null, end: null } });
   const done = (taskId: string) => run(() => planDoneAction(taskId));
+  const togglePick = (task: BoardTask) => {
+    // The calendar is pinned above the list on phones, so it stays in view while picking.
+    setPicked((current) => (current?.id === task.id ? null : task));
+  };
 
   const first = board.days[0];
   const step = view === "week" ? 7 : view === "3" ? 3 : 1;
@@ -119,7 +138,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <nav aria-label="Days shown" className="flex overflow-hidden rounded-xl border">
+          <nav aria-label="Days shown" className="hidden overflow-hidden rounded-xl border md:flex">
             {(["day", "3", "week"] as const).map((option) => (
               <Link aria-current={option === view ? "page" : undefined} className={`px-3 py-2 ${option === view ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} href={viewHref(option, dateKey(first, tz))} key={option}>
                 {option === "day" ? "Day" : option === "3" ? "3 days" : "Week"}
@@ -145,18 +164,33 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
         {board.calendarSync.enabled && !board.calendarSync.ok && <p className="text-amber-700 dark:text-amber-400">Google Calendar sync: {board.calendarSync.message}</p>}
       </div>
 
-      <div className="flex gap-2 lg:hidden" role="tablist">
-        {(["lists", "calendar"] as const).map((option) => (
-          <button aria-selected={tab === option} className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${tab === option ? "bg-primary text-primary-foreground" : ""}`} key={option} onClick={() => setTab(option)} role="tab" type="button">
-            {option === "lists" ? "Projects & tasks" : "Calendar"}
-          </button>
-        ))}
-      </div>
+      {/* Phone: today's calendar stays pinned above the lists. Tablet and up: lists left, calendar right. */}
+      <div className="flex flex-col gap-4 md:grid md:grid-cols-[minmax(300px,380px)_1fr]">
+        <section aria-label="Calendar" className="sticky top-[3.6rem] z-30 order-first -mx-4 min-w-0 border-b bg-background px-4 pb-2 pt-1 sm:-mx-6 sm:px-6 md:static md:order-last md:mx-0 md:border-0 md:bg-transparent md:p-0">
+          {picked && (
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-primary/50 bg-primary/10 px-3 py-2 text-sm" role="status">
+              <span className="min-w-0 truncate">Tap a time for <b>{picked.title}</b> ({fmtLength(picked.minutes)})</span>
+              <button className="shrink-0 rounded-lg border bg-background px-2 py-1 text-xs" onClick={() => setPicked(null)} type="button">Cancel</button>
+            </div>
+          )}
+          <CalendarGrid
+            allTasks={allTasks}
+            blocks={blocks}
+            board={board}
+            compact={phone}
+            days={phone ? board.days.slice(0, 1) : board.days}
+            onDone={done}
+            onOpenBlock={setScheduling}
+            onPlace={(start) => { if (picked) { schedule(picked, start, picked.minutes); setPicked(null); } }}
+            onSchedule={schedule}
+            onUnschedule={unschedule}
+            picked={picked}
+          />
+        </section>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(320px,400px)_1fr]">
         <section
           aria-label="Projects and tasks"
-          className={`${tab === "lists" ? "" : "hidden"} min-w-0 space-y-3 lg:block lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto lg:pr-1`}
+          className="min-w-0 space-y-3 md:max-h-[calc(100vh-12rem)] md:overflow-y-auto md:pr-1"
           onDragOver={(event) => { if (event.dataTransfer.types.includes(DRAG_TYPE)) event.preventDefault(); }}
           onDrop={(event) => {
             const payload = readPayload(event);
@@ -164,14 +198,14 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           }}
         >
           {board.areas.map((area) => (
-            <AreaList area={area} key={area.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onSchedule={setScheduling} overrides={overrides} timeZone={tz} />
+            <AreaList area={area} key={area.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} overrides={overrides} pickedId={picked?.id ?? null} timeZone={tz} />
           ))}
           {board.waiting.length > 0 && (
             <details className="rounded-2xl border bg-card p-3" open>
               <summary className="cursor-pointer text-sm font-semibold">Waiting on others ({board.waiting.length})</summary>
               <ul className="mt-2 space-y-1.5">
                 {board.waiting.map((task) => (
-                  <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onSchedule={setScheduling} task={withOverride(task)} timeZone={tz} />
+                  <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={withOverride(task)} timeZone={tz} />
                 ))}
               </ul>
             </details>
@@ -179,12 +213,9 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           {board.areas.length === 0 && board.waiting.length === 0 && <p className="rounded-2xl border p-4 text-sm text-muted-foreground">No open tasks. Add one above.</p>}
         </section>
 
-        <section aria-label="Calendar" className={`${tab === "calendar" ? "" : "hidden"} min-w-0 lg:block`}>
-          <CalendarGrid allTasks={allTasks} blocks={blocks} board={board} onDone={done} onSchedule={schedule} onUnschedule={unschedule} />
-        </section>
       </div>
 
-      {scheduling && <ScheduleSheet blocks={blocks} board={board} onClose={() => setScheduling(null)} onPick={(start, minutes) => { schedule(scheduling, start, minutes); setScheduling(null); }} onUnschedule={() => { unschedule(scheduling.id); setScheduling(null); }} task={withOverride(scheduling)} />}
+      {scheduling && <ScheduleSheet blocks={blocks} board={board} onClose={() => setScheduling(null)} onDone={() => { done(scheduling.id); setScheduling(null); }} onPick={(start, minutes) => { schedule(scheduling, start, minutes); setScheduling(null); }} onUnschedule={() => { unschedule(scheduling.id); setScheduling(null); }} task={withOverride(scheduling)} />}
     </div>
   );
 }
@@ -244,7 +275,10 @@ function QuickAdd({ onDone, projectId = null, compact = false }: { onDone: (resu
   );
 }
 
-type CardHandlers = { onDone: (id: string) => void; onSchedule: (task: BoardTask) => void; onMessage: (result: PlanMessage) => void };
+type CardHandlers = {
+  onDone: (id: string) => void; onSchedule: (task: BoardTask) => void; onMessage: (result: PlanMessage) => void;
+  onPick: (task: BoardTask) => void; pickedId: string | null;
+};
 
 function AreaList({ area, overrides, timeZone, ...handlers }: { area: BoardArea; overrides: Record<string, Override>; timeZone: string } & CardHandlers) {
   const unplaced = (tasks: BoardTask[]) => tasks.map((task) => (overrides[task.id] ? { ...task, ...overrides[task.id] } : task));
@@ -278,7 +312,7 @@ function AreaList({ area, overrides, timeZone, ...handlers }: { area: BoardArea;
   );
 }
 
-function TaskCard({ task, timeZone, onDone, onSchedule, onMessage }: { task: BoardTask; timeZone: string } & CardHandlers) {
+function TaskCard({ task, timeZone, onDone, onSchedule, onMessage, onPick, pickedId }: { task: BoardTask; timeZone: string } & CardHandlers) {
   const [waiting, setWaiting] = useState(false);
   const [who, setWho] = useState(task.waitingOn ?? "");
   const [pending, startTransition] = useTransition();
@@ -286,7 +320,7 @@ function TaskCard({ task, timeZone, onDone, onSchedule, onMessage }: { task: Boa
   const saveWaiting = (name: string | null) => startTransition(async () => { onMessage(await waitingOnAction(task.id, name)); setWaiting(false); });
   return (
     <li
-      className={`group rounded-xl border border-l-4 px-3 py-2 ${areaStyle(task.areaSlug)} ${task.start ? "opacity-60" : ""}`}
+      className={`group rounded-xl border border-l-4 px-3 py-2 ${areaStyle(task.areaSlug)} ${task.start && pickedId !== task.id ? "opacity-60" : ""} ${pickedId === task.id ? "ring-2 ring-primary" : ""}`}
       draggable
       onDragStart={(event) => {
         event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ taskId: task.id, minutes: task.minutes, mode: task.start ? "block" : "task", grabMin: 0 } satisfies DragPayload));
@@ -296,7 +330,7 @@ function TaskCard({ task, timeZone, onDone, onSchedule, onMessage }: { task: Boa
       <div className="flex items-start gap-2">
         <button aria-label={`Mark done: ${task.title}`} className="mt-0.5 h-5 w-5 shrink-0 rounded-md border-2 border-muted-foreground/50 hover:border-primary" onClick={() => onDone(task.id)} type="button" />
         <div className="min-w-0 flex-1">
-          <p className="break-words text-sm font-medium leading-snug">{task.title}</p>
+          <button aria-pressed={pickedId === task.id} className="block w-full break-words text-left text-sm font-medium leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => onPick(task)} title="Tap, then tap a time on the calendar" type="button">{task.title}</button>
           <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
             {task.source && <span className="rounded bg-background/70 px-1 font-medium">{SOURCE_LABEL[task.source] ?? task.source}</span>}
             {deadline && <span className={task.urgent ? "font-semibold text-destructive" : ""}>{deadline}</span>}
@@ -335,8 +369,9 @@ function gridRange(board: Board, blocks: BoardTask[]) {
   return { start: Math.max(0, Math.floor(start / 60) * 60), end: Math.min(24 * 60, Math.ceil(end / 60) * 60) };
 }
 
-function CalendarGrid({ board, blocks, allTasks, onSchedule, onUnschedule, onDone }: {
-  board: Board; blocks: BoardTask[]; allTasks: Map<string, BoardTask>;
+function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, onPlace, onOpenBlock, onSchedule, onUnschedule, onDone }: {
+  board: Board; days: string[]; blocks: BoardTask[]; allTasks: Map<string, BoardTask>; compact?: boolean;
+  picked: BoardTask | null; onPlace: (start: Date) => void; onOpenBlock: (task: BoardTask) => void;
   onSchedule: (task: BoardTask, start: Date, minutes: number) => void; onUnschedule: (taskId: string) => void; onDone: (id: string) => void;
 }) {
   const tz = board.timeZone;
@@ -350,28 +385,28 @@ function CalendarGrid({ board, blocks, allTasks, onSchedule, onUnschedule, onDon
 
   useEffect(() => {
     // Open the day around the current time (or the workday start).
-    const target = board.days.some((day) => dateKey(day, tz) === todayKey) ? nowMin - 90 : board.workdayStartMin - 30;
+    const target = days.some((day) => dateKey(day, tz) === todayKey) ? nowMin - 90 : board.workdayStartMin - 30;
     scroller.current?.scrollTo({ top: Math.max(0, (target - range.start) * PX_PER_MIN) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board.days.join()]);
+  }, [days.join(), compact]);
 
-  const columnOf = (iso: string) => board.days.findIndex((day, index) => {
-    const next = board.days[index + 1] ?? new Date(Date.parse(day) + 86_400_000).toISOString();
+  const columnOf = (iso: string) => days.findIndex((day, index) => {
+    const next = days[index + 1] ?? new Date(Date.parse(day) + 86_400_000).toISOString();
     return Date.parse(iso) >= Date.parse(day) && Date.parse(iso) < Date.parse(next);
   });
   const minuteAt = (event: React.DragEvent | React.PointerEvent, column: HTMLElement) => range.start + (event.clientY - column.getBoundingClientRect().top) / PX_PER_MIN;
-  const toInstant = (dayIndex: number, minute: number) => new Date(Date.parse(board.days[dayIndex]) + minute * MIN);
+  const toInstant = (dayIndex: number, minute: number) => new Date(Date.parse(days[dayIndex]) + minute * MIN);
 
   return (
     <div className="rounded-2xl border bg-card">
-      <div className="grid border-b" style={{ gridTemplateColumns: `3.5rem repeat(${board.days.length}, minmax(0, 1fr))` }}>
+      <div className="grid border-b" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
         <div />
-        {board.days.map((day) => (
+        {days.map((day) => (
           <div className={`px-2 py-2 text-center text-sm font-semibold ${dateKey(day, tz) === todayKey ? "text-primary" : ""}`} key={day}>{dayLabel(day, tz)}</div>
         ))}
       </div>
-      <div className="max-h-[calc(100vh-14rem)] overflow-y-auto" ref={scroller}>
-        <div className="relative grid" style={{ gridTemplateColumns: `3.5rem repeat(${board.days.length}, minmax(0, 1fr))`, height }}>
+      <div className={compact ? "h-[34vh] overflow-y-auto" : "max-h-[calc(100vh-14rem)] overflow-y-auto"} ref={scroller}>
+        <div className="relative grid" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))`, height }}>
           <div className="relative">
             {Array.from({ length: (range.end - range.start) / 60 }, (_, index) => (
               <span className="absolute right-2 -translate-y-1/2 text-[11px] tabular-nums text-muted-foreground" key={index} style={{ top: index * 60 * PX_PER_MIN }}>
@@ -379,7 +414,7 @@ function CalendarGrid({ board, blocks, allTasks, onSchedule, onUnschedule, onDon
               </span>
             ))}
           </div>
-          {board.days.map((day, dayIndex) => {
+          {days.map((day, dayIndex) => {
             const isToday = dateKey(day, tz) === todayKey;
             const dayMeetings = board.meetings.filter((meeting) => columnOf(meeting.start) === dayIndex);
             const dayBlocks = blocks.filter((task) => columnOf(task.start as string) === dayIndex);
@@ -431,6 +466,7 @@ function CalendarGrid({ board, blocks, allTasks, onSchedule, onUnschedule, onDon
                       className={`absolute left-1 right-1 cursor-grab overflow-hidden rounded-md border border-l-4 px-1.5 py-0.5 text-[11px] leading-tight shadow-sm active:cursor-grabbing ${areaStyle(task.areaSlug)}`}
                       draggable={!resize}
                       key={task.id}
+                      onClick={() => { if (!picked) onOpenBlock(task); }}
                       onDragStart={(event) => {
                         const grabMin = (event.clientY - event.currentTarget.getBoundingClientRect().top) / PX_PER_MIN;
                         event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ taskId: task.id, minutes: length, mode: "block", grabMin } satisfies DragPayload));
@@ -442,14 +478,15 @@ function CalendarGrid({ board, blocks, allTasks, onSchedule, onUnschedule, onDon
                       <div className="flex items-start justify-between gap-1">
                         <p className="min-w-0 break-words font-semibold">{task.title}</p>
                         <span className="flex shrink-0 gap-0.5">
-                          <button aria-label={`Done: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={() => onDone(task.id)} type="button">✓</button>
-                          <button aria-label={`Back to list: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={() => onUnschedule(task.id)} type="button">×</button>
+                          <button aria-label={`Done: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={(event) => { event.stopPropagation(); onDone(task.id); }} type="button">✓</button>
+                          <button aria-label={`Back to list: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={(event) => { event.stopPropagation(); onUnschedule(task.id); }} type="button">×</button>
                         </span>
                       </div>
                       <p className="text-muted-foreground">{clock(task.start as string, tz)} · {fmtLength(Math.round(shownEnd - startMin))}{task.source ? ` · ${SOURCE_LABEL[task.source] ?? task.source}` : ""}</p>
                       <div
                         aria-label={`Change length of ${task.title}`}
                         className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize hover:bg-foreground/20"
+                        onClick={(event) => event.stopPropagation()}
                         onPointerDown={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
@@ -471,6 +508,27 @@ function CalendarGrid({ board, blocks, allTasks, onSchedule, onUnschedule, onDon
                     </div>
                   );
                 })}
+                {picked && (
+                  <div className="absolute inset-0 z-20">
+                    {Array.from({ length: (range.end - range.start) / SNAP }, (_, slot) => {
+                      const minute = range.start + slot * SNAP;
+                      const start = toInstant(dayIndex, minute);
+                      const end = new Date(start.getTime() + picked.minutes * MIN);
+                      const busy = [...dayMeetings.map((m) => [Date.parse(m.start), Date.parse(m.end)]), ...dayBlocks.filter((b) => b.id !== picked.id).map((b) => [Date.parse(b.start as string), Date.parse(b.end as string)])];
+                      const free = busy.every(([from, to]) => to <= start.getTime() || from >= end.getTime()) && end.getTime() > Date.parse(board.now);
+                      return (
+                        <button
+                          aria-label={`Place ${picked.title} at ${clock(start.toISOString(), tz)}${free ? "" : " (overlaps)"}`}
+                          className={`absolute inset-x-0 border-t border-transparent hover:border-primary hover:bg-primary/30 focus-visible:bg-primary/30 focus-visible:outline-none ${free ? "bg-emerald-500/15" : ""}`}
+                          key={slot}
+                          onClick={() => onPlace(start)}
+                          style={{ top: slot * SNAP * PX_PER_MIN, height: SNAP * PX_PER_MIN }}
+                          type="button"
+                        />
+                      );
+                    })}
+                  </div>
+                )}
                 {hover?.day === dayIndex && (
                   <div aria-hidden className="pointer-events-none absolute inset-x-1 border-t-2 border-primary" style={{ top: (hover.minute - range.start) * PX_PER_MIN }}>
                     <span className="rounded bg-primary px-1 text-[10px] text-primary-foreground">{new Date(Date.UTC(2000, 0, 1, 0, hover.minute)).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" })}</span>
@@ -507,8 +565,8 @@ export function freeStarts(board: Board, blocks: BoardTask[], dayStartIso: strin
   return out;
 }
 
-function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose }: {
-  task: BoardTask; board: Board; blocks: BoardTask[]; onPick: (start: Date, minutes: number) => void; onUnschedule: () => void; onClose: () => void;
+function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose, onDone }: {
+  task: BoardTask; board: Board; blocks: BoardTask[]; onPick: (start: Date, minutes: number) => void; onUnschedule: () => void; onClose: () => void; onDone: () => void;
 }) {
   const tz = board.timeZone;
   const [minutes, setMinutes] = useState(task.minutes);
@@ -557,7 +615,17 @@ function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose }: {
           <input className="min-w-0 flex-1 rounded-lg border bg-background px-2 py-1.5 text-sm" id="custom-time" onChange={(event) => setCustom(event.target.value)} type="datetime-local" value={custom} />
           <button className="rounded-lg border px-3 text-sm" disabled={!custom} type="submit">Set</button>
         </form>
-        {task.start && <button className="mt-3 w-full rounded-lg border px-3 py-2 text-sm hover:bg-muted" onClick={onUnschedule} type="button">Take it off the calendar</button>}
+        {task.start && (
+          <p className="mt-2 text-xs text-muted-foreground">Now {dayLabel(task.start, tz)} {clock(task.start, tz)}–{clock(task.end as string, tz)}. Pick a new time above, or change the length and tap a time.</p>
+        )}
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted" onClick={onDone} type="button">Done</button>
+          {task.start ? (
+            <button className="rounded-lg border px-3 py-2 text-sm hover:bg-muted" onClick={onUnschedule} type="button">Take off calendar</button>
+          ) : (
+            <a className="rounded-lg border px-3 py-2 text-center text-sm hover:bg-muted" href={task.href} {...(task.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>Open</a>
+          )}
+        </div>
       </div>
     </div>
   );
