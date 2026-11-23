@@ -29,7 +29,7 @@ export function taskMinutes(task: { remainingMinutes: number | null; estimatedDu
   return task.remainingMinutes && task.remainingMinutes > 0 ? task.remainingMinutes : MINUTES_BY_BUCKET[task.estimatedDuration ?? ""] ?? 30;
 }
 
-async function lockUser(tx: Tx, userId: string) {
+export async function lockUser(tx: Tx, userId: string) {
   if ((process.env.DATABASE_URL ?? "").startsWith("postgres")) {
     await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(hashtext($1))", `ryanos-schedule:${userId}`);
   }

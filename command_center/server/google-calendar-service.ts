@@ -252,13 +252,20 @@ type GoogleEventItem = {
   status?: string | null;
   start?: { date?: string | null; dateTime?: string | null } | null;
   end?: { date?: string | null; dateTime?: string | null } | null;
+  extendedProperties?: { private?: Record<string, string> | null } | null;
 };
+
+// Time blocks RyanOS itself wrote to Google Calendar carry this private property. They are RyanOS tasks,
+// not meetings, so the calendar readers skip them (calendar-sync.ts reconciles them separately).
+export const RYANOS_TASK_PROPERTY = "ryanosTaskId";
+export const isRyanOsBlock = (event: GoogleEventItem) => Boolean(event.extendedProperties?.private?.[RYANOS_TASK_PROPERTY]);
 
 // Owner preference (2026-11-20): all-day events are hidden from Calendar, Now
 // and Today. Only the daily email brief keeps them (includeAllDay: true).
 // They never blocked time in scheduling either way.
 export function toCalendarEvents(items: GoogleEventItem[], options: { includeAllDay?: boolean } = {}): CalendarEvent[] {
   return items
+    .filter((event) => !isRyanOsBlock(event))
     .map((event) => {
       const start = parseGoogleDate(event.start);
       const end = parseGoogleDate(event.end);

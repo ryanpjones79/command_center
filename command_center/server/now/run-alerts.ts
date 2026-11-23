@@ -4,6 +4,7 @@ import { resolveOwnerUserId } from "@/server/v2/inbound-auth";
 import { loadDaySettings } from "@/server/v2/schedule-service";
 import { materializeRoutines } from "@/server/v2/routines";
 import { syncAllSources } from "@/server/v2/sources/sync";
+import { syncCalendar } from "@/server/v2/calendar-sync";
 
 // Runs source syncs and block alerts once (see app/api/cron/now-alerts/route.ts).
 
@@ -18,7 +19,9 @@ export async function runNowAlerts(
   if (!userId) return { ok: false, error: "Owner not configured" };
   const sync = options.sync === false || options.dryRun ? null : await syncAllSources(userId, db, now);
   if (!options.dryRun) await materializeRoutines(userId, db, now).catch(() => undefined);
-  if (process.env.FEATURE_NOW_ALERTS !== "true") return { ok: true, disabled: true, sync };
+  // Keep Google Calendar and RyanOS time blocks in step (off unless FEATURE_GOOGLE_CALENDAR_WRITE=true).
+  const calendarSync = options.sync === false || options.dryRun ? null : await syncCalendar(userId, db, { now }).catch(() => null);
+  if (process.env.FEATURE_NOW_ALERTS !== "true") return { ok: true, disabled: true, sync, calendarSync };
 
   const settings = await loadDaySettings(userId, db);
   const userSettings = await db.userSettings.findUnique({ where: { userId }, select: { quietStartMin: true, quietEndMin: true } });

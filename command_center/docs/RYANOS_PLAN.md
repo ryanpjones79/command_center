@@ -1,0 +1,22 @@
+# Plan screen (built 2026-11-22)
+
+Ryan's design: projects with their task lists (his own tasks and items from the connected apps) next to a calendar, and he time-blocks by dragging. Plan replaces Today in the main menu; the old Today list stays under More.
+
+## What it does
+
+- **Left:** every open task grouped by area, then project. Feed items carry a small source label (eBay, Supplier OS, Field Book, AP Trader, Store route). Urgent items (critical, or due/expiring within two days) come first. Tasks waiting on someone are in "Waiting on others".
+- **Right:** Day, 3-day or Week calendar with Google meetings (grey) and RyanOS blocks (colored by area). Outside-workday hours are shaded; a red line marks now.
+- **Drag:** a task onto the calendar schedules it at the slot under the pointer. Drag a block to move it, pull its bottom edge to change its length, drag it onto the list (or press ×) to unschedule. Overlaps are allowed and reported in the message line; nothing else is moved.
+- **Phone:** Schedule (or Move) on any task opens a sheet with free times today and tomorrow that fit its length, a length picker, and a pick-a-time box.
+- **Fill my day:** places today's most important open work in free time (the existing day planner), then Ryan adjusts by dragging.
+- **Quick add** (top of Plan, on Now, and an "Add task" line under every project): one line, Enter. Shorthand: `#project` or `#area`, `fri` / `tomorrow` / `11/30` (due date), `at 3pm` (puts it on the calendar; then the day is not a due date), `30m` / `1h`, `@name` (waiting on), `!` / `!!` (priority). Unknown words stay in the title; an unknown #tag is reported. Patient information is refused (NO PHI). Tasks added under a project go straight into it; no Inbox sorting. Inbox stays for loose ideas and photos.
+
+## Files
+
+`app/plan/` (page, server actions), `components/plan/plan-board.tsx`, `server/v2/board.ts` (read model), `server/v2/plan-board.ts` (schedule/move/unschedule, quick add, waiting-on), `lib/v2/quick-add.ts` (parser), `server/v2/calendar-sync.ts` (Google two-way sync, see RYANOS_V2_INTEGRATIONS.md). Tests: `tests/quick-add.test.ts`, `tests/plan-board.test.ts`, `tests/calendar-sync.test.ts`.
+
+## Limits
+
+- Dragging uses the browser's drag-and-drop, which phones don't support; phones use the Schedule sheet.
+- Block positions use local midnight plus minutes, so on the two daylight-saving changeover days a block can draw an hour off (its saved time is correct).
+- Google sync is off until the calendar edit permission is granted and `FEATURE_GOOGLE_CALENDAR_WRITE=true` is set.

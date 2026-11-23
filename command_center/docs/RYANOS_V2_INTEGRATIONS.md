@@ -1,6 +1,6 @@
 # RyanOS v2 integrations and handoffs
 
-RyanOS **receives** actions and results and links back to the source. It never writes to another system: no buying, betting, messages, listing changes, trading settings or calendar edits.
+RyanOS **receives** actions and results and links back to the source. It never writes to another system: no buying, betting, messages, listing changes or trading settings. The one exception, approved by Ryan on 2026-11-22, is **Google Calendar time blocks**: RyanOS writes its own scheduled tasks to his calendar and follows moves he makes there (below). It never edits or deletes any other event.
 
 ## Status
 
@@ -9,7 +9,8 @@ RyanOS **receives** actions and results and links back to the source. It never w
 | Rykas (Amazon / Supplier OS) | Agent HQ's persisted read → `syncRykas` → actions keyed `RYKAS:<card id>` | **Live** when `FEATURE_RYKAS_TRUTH_READ` and the Windows runner are on. Items missing from a fresh reading are marked GONE, never done. |
 | AP Trader | Existing `/status.json` feed (token-protected) → `syncApTrader` → incidents | **Live** (uses `AP_TRADER_STATUS_URLS` and `AP_TRADER_READ_TOKEN`). An incident resolves only when a fully successful reading shows the condition cleared. |
 | Starred Gmail | `syncStarredEmail` (metadata only: subject and sender; bodies are never read) | **Not connected.** Needs `FEATURE_GMAIL_CAPTURE=true` and a Google grant that includes `https://www.googleapis.com/auth/gmail.readonly`. The current bootstrap grants only `gmail.send`: add the scope in `scripts/google-auth-bootstrap.mjs`, re-run consent, and update `GOOGLE_REFRESH_TOKEN`. Senders on `RYANOS_EMAIL_BLOCKED_DOMAINS` (default `cdcr.ca.gov,cchcs.ca.gov`) are skipped. |
-| eBay workstation | `POST /api/v2/ingest` | **Waiting on the eBay app** (handoff below) |
+| eBay workstation | `POST /api/v2/ingest` | **Live** since 2026-11-22: the Supplier OS backend sends every morning after 6 a.m. Pacific, in four eBay projects. |
+| Google Calendar time blocks (two-way) | `server/v2/calendar-sync.ts`, run when Plan opens, after each Plan change and with the 5-minute cron | **Built, off.** Needs `FEATURE_GOOGLE_CALENDAR_WRITE=true` and a Google grant with `https://www.googleapis.com/auth/calendar.events` (now in `scripts/google-auth-bootstrap.mjs`; re-run consent and update `GOOGLE_REFRESH_TOKEN`). Each scheduled task is one private event with a fixed id (`r0` + hex task id) and private property `ryanosTaskId`. Moving or deleting it in Google moves or unschedules the task; the later edit wins. Done tasks keep their event; dropped or unscheduled tasks lose it. Other events are never touched. Failures show on Plan and as source `GOOGLE_CALENDAR`. |
 | Store route | `POST /api/v2/ingest` | **Waiting on the store-route app** (handoff below) |
 | Casino AP (AP Field Book, https://ap-fieldbook-production.up.railway.app/) | Field Book server sender to `POST /api/v2/ingest` | **Built, off** (`Desktop\AP Casino`, local git, see its `docs/ryanos-feed.md`): offers (deadline = window end, Used/Passed = done), must-hit progressive plays and re-checks, inventory checks, and weekly sessions / hours / net-per-hour goals. Needs a deploy plus `FEATURE_RYANOS_EMIT` and a CASINO_AP token. |
 | CCHCS | Personal, PHI-free tasks in the Work domain only | No automated feed by design. Any future feed must be filtered **before** it reaches RyanOS, in the approved environment. |
