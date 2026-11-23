@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ScheduleButton } from "@/components/now/v2-controls";
-import { AttentionInput, NextStepForm, OutcomeEditor, ProjectsTabs, ProjectStateMenu } from "@/components/projects/project-controls";
+import { AttentionInput, OutcomeEditor, ProjectsTabs, ProjectStateMenu } from "@/components/projects/project-controls";
+import { NewTaskButton } from "@/components/plan/task-composer";
+import { loadQuickTargets } from "@/server/v2/board";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { areaLook } from "@/lib/v2/area-look";
@@ -34,7 +36,7 @@ function hours(minutes: number) {
 export default async function ProjectsPage() {
   const user = await requireUser();
   const now = new Date();
-  const [projects, weekly, settings] = await Promise.all([loadProjectCoverage(user.id, prisma, now), loadWeekly(user.id, prisma, now), loadDaySettings(user.id, prisma)]);
+  const [projects, weekly, settings, targets] = await Promise.all([loadProjectCoverage(user.id, prisma, now), loadWeekly(user.id, prisma, now), loadDaySettings(user.id, prisma), loadQuickTargets(user.id, prisma)]);
   const tz = settings.timeZone;
   const planned = new Map(weekly.allocations.map((row) => [row.projectId, row]));
   const selected = projects.filter((project) => planned.has(project.id) && (planned.get(project.id)?.plannedMinutes ?? 0) > 0);
@@ -143,14 +145,16 @@ export default async function ProjectsPage() {
                   </p>
 
                   <div className="mt-auto space-y-3 pt-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <NewTaskButton highlight={coverage.state === "NEEDS_NEXT_ACTION"} label={coverage.state === "NEEDS_NEXT_ACTION" ? "+ Add the next step" : "+ Add task"} presetId={project.id} targets={targets} timeZone={tz} variant="chip" />
+                    </div>
                     {coverage.state === "NEEDS_TIME" && coverage.nextAction && <ScheduleButton label="Give it time" taskId={coverage.nextAction.id} />}
                     <details className="group rounded-xl border bg-background/40 px-3 py-2">
-                      <summary className={`cursor-pointer list-none text-sm font-medium [&::-webkit-details-marker]:hidden ${coverage.state === "NEEDS_NEXT_ACTION" ? "text-amber-600 dark:text-amber-300" : "text-muted-foreground"} group-open:text-foreground`}>
-                        {coverage.state === "NEEDS_NEXT_ACTION" ? "+ Add a next step" : "Edit outcome, next step, hours"}
+                      <summary className="cursor-pointer list-none text-sm font-medium text-muted-foreground [&::-webkit-details-marker]:hidden group-open:text-foreground">
+                        Edit outcome, hours, status
                       </summary>
                       <div className="mt-3 space-y-3">
                         <OutcomeEditor outcome={project.desiredOutcome} projectId={project.id} />
-                        {(coverage.state === "NEEDS_NEXT_ACTION" || coverage.state === "COVERED" || coverage.state === "NEEDS_TIME") && <NextStepForm projectId={project.id} />}
                         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
                           <AttentionInput hours={hours(plannedMin)} projectId={project.id} />
                           <ProjectStateMenu projectId={project.id} />

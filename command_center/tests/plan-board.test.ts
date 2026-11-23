@@ -54,6 +54,25 @@ describe("plan board", () => {
     expect(await quickAdd(userId, "   ", null, db, now)).toMatchObject({ ok: false });
   });
 
+  it("New task panel choices win over typed shorthand", async () => {
+    const ebay = await db.executionDomain.findFirstOrThrow({ where: { userId, slug: "rykas" } });
+    const project = await db.executionProject.create({ data: { userId, domainId: ebay.id, name: "eBay: List & restock" } });
+    const now = new Date("2026-11-23T02:00:00Z"); // Sun Nov 22, 6 PM Pacific
+
+    const due = await quickAdd(userId, "Photograph lot 9 fri", project.id, db, now, { day: "2026-11-25", minutes: 45, priority: "HIGH" });
+    const lot = await db.executionTask.findUniqueOrThrow({ where: { id: due.ok ? due.taskId : "" } });
+    expect([lot.projectId, lot.remainingMinutes, lot.priority, lot.scheduledStart]).toEqual([project.id, 45, "HIGH", null]);
+    expect(lot.dueDate?.toISOString()).toBe("2026-11-26T07:59:00.000Z"); // end of Wed Nov 25 Pacific
+
+    const timed = await quickAdd(userId, "Ship orders", project.id, db, now, { day: "2026-11-24", time: "09:30", minutes: 60 });
+    const ship = await db.executionTask.findUniqueOrThrow({ where: { id: timed.ok ? timed.taskId : "" } });
+    expect([ship.scheduledStart?.toISOString(), ship.scheduledEnd?.toISOString(), ship.dueDate]).toEqual(["2026-11-24T17:30:00.000Z", "2026-11-24T18:30:00.000Z", null]);
+
+    const waiting = await quickAdd(userId, "Supplier price sheet", project.id, db, now, { waitingOn: "Redstone" });
+    expect(await db.executionTask.findUniqueOrThrow({ where: { id: waiting.ok ? waiting.taskId : "" } })).toMatchObject({ waitingOn: "Redstone", status: "WAITING" });
+    expect(await quickAdd(userId, "Call back", project.id, db, now, { waitingOn: "MRN 1234567" })).toMatchObject({ ok: false });
+  });
+
   it("waiting-on moves a task to Waiting and back", async () => {
     const domain = await db.executionDomain.findFirstOrThrow({ where: { userId, slug: "work" } });
     const task = await db.executionTask.create({ data: { userId, domainId: domain.id, title: "Get sign-off on dashboard" } });

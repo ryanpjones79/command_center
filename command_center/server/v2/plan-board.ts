@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { detectPhi } from "@/lib/execution-validation";
-import { localClock } from "@/lib/v2/zoned-time";
+import { localClock, zonedParts, zonedToUtc } from "@/lib/v2/zoned-time";
 import { parseQuickAdd, type QuickTarget } from "@/lib/v2/quick-add";
 import { PROTECTED_SLUGS } from "@/server/v2/day";
 import { loadDaySettings, lockUser, type CalendarLoader } from "@/server/v2/schedule-service";
@@ -57,12 +57,27 @@ export async function setBlock(
 
 export type QuickAddResult = { ok: true; taskId: string; message: string } | { ok: false; error: string };
 
+// Choices made in the New task panel. Each one, when given, wins over shorthand typed in the title.
+export type TaskChoices = {
+  day?: string | null; // YYYY-MM-DD, local
+  time?: string | null; // HH:MM, local; puts the task on the calendar (today if no day)
+  minutes?: number | null;
+  priority?: "MEDIUM" | "HIGH" | "CRITICAL" | null;
+  waitingOn?: string | null;
+};
+
+function localDayParts(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) } : null;
+}
+
 export async function quickAdd(
   userId: string,
   text: string,
   presetProjectId: string | null,
   db: PrismaClient,
-  now = new Date()
+  now = new Date(),
+  choices: TaskChoices = {}
 ): Promise<QuickAddResult> {
   const line = text.trim().slice(0, 300);
   if (!line) return { ok: false, error: "Type the task first." };
@@ -80,6 +95,24 @@ export async function quickAdd(
   const preset = presetProjectId ? targets.find((target) => target.id === presetProjectId) ?? null : null;
   const parsed = parseQuickAdd(line, targets, now, settings.timeZone, preset);
   if (!parsed.title) return { ok: false, error: "Add a few words saying what the task is." };
+  const tz = settings.timeZone;
+  const pickedDay = choices.day ? localDayParts(choices.day) : null;
+  const pickedTime = choices.time && /^\d{2}:\d{2}$/.test(choices.time) ? choices.time.split(":").map(Number) : null;
+  if (pickedTime) {
+    const base = pickedDay ?? (() => { const today = zonedParts(now, tz); return { year: today.year, month: today.month, day: today.day }; })();
+    parsed.start = zonedToUtc(base.year, base.month, base.day, pickedTime[0], pickedTime[1], tz);
+    parsed.dueDate = null;
+  } else if (pickedDay) {
+    parsed.dueDate = new Date(zonedToUtc(pickedDay.year, pickedDay.month, pickedDay.day, 0, 0, tz).getTime() + 86_400_000 - 60_000);
+    parsed.start = null;
+  }
+  if (choices.minutes && choices.minutes > 0) parsed.minutes = Math.min(8 * 60, Math.round(choices.minutes));
+  if (choices.priority) parsed.priority = choices.priority;
+  const who = choices.waitingOn?.trim().slice(0, 80);
+  if (who) {
+    if (detectPhi(who).length > 0) return { ok: false, error: "Not saved: that looks like patient information (NO PHI)." };
+    parsed.waitingOn = who;
+  }
   const domainId = parsed.domainId ?? domains.find((domain) => domain.slug === "admin")?.id ?? domains[0]?.id;
   if (!domainId) return { ok: false, error: "No areas exist yet." };
   const minutes = parsed.minutes ?? 30;

@@ -7,7 +7,7 @@ import { v2DoneAction } from "@/app/now/v2-actions";
 import { syncCalendar } from "@/server/v2/calendar-sync";
 import { googleCalendarLoader } from "@/server/v2/day";
 import { acceptPlan, proposeDay } from "@/server/v2/plan";
-import { quickAdd, setBlock, setWaitingOn } from "@/server/v2/plan-board";
+import { quickAdd, setBlock, setWaitingOn, type TaskChoices } from "@/server/v2/plan-board";
 import { createHabit, setHabitDone } from "@/server/v2/habits";
 
 export type PlanMessage = { ok: boolean; message: string };
@@ -35,9 +35,16 @@ export async function moveBlockAction(taskId: string, start: string | null, end:
   return { ok: true, message: "Scheduled." + overlap + note };
 }
 
-export async function quickAddAction(text: string, projectId: string | null): Promise<PlanMessage> {
+export async function quickAddAction(text: string, projectId: string | null, choices: TaskChoices = {}): Promise<PlanMessage> {
   const user = await requireUser();
-  const result = await quickAdd(user.id, String(text ?? ""), projectId ? String(projectId) : null, prisma);
+  const clean: TaskChoices = {
+    day: typeof choices?.day === "string" ? choices.day : null,
+    time: typeof choices?.time === "string" ? choices.time : null,
+    minutes: Number.isFinite(Number(choices?.minutes)) ? Number(choices?.minutes) : null,
+    priority: choices?.priority === "HIGH" || choices?.priority === "CRITICAL" || choices?.priority === "MEDIUM" ? choices.priority : null,
+    waitingOn: typeof choices?.waitingOn === "string" ? choices.waitingOn : null
+  };
+  const result = await quickAdd(user.id, String(text ?? ""), projectId ? String(projectId) : null, prisma, new Date(), clean);
   if (!result.ok) return { ok: false, message: result.error };
   const note = await sync(user.id);
   refresh();
