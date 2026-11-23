@@ -8,6 +8,7 @@ import { syncCalendar } from "@/server/v2/calendar-sync";
 import { googleCalendarLoader } from "@/server/v2/day";
 import { acceptPlan, proposeDay } from "@/server/v2/plan";
 import { quickAdd, setBlock, setWaitingOn } from "@/server/v2/plan-board";
+import { createHabit, setHabitDone } from "@/server/v2/habits";
 
 export type PlanMessage = { ok: boolean; message: string };
 
@@ -73,4 +74,25 @@ export async function fillDayAction(): Promise<PlanMessage> {
   refresh();
   const extra = proposal.unplaced.length ? ` ${proposal.unplaced.length} more didn't fit.` : "";
   return { ok: true, message: `Placed ${result.booked.length} block${result.booked.length === 1 ? "" : "s"}. Drag to adjust.${extra}${note}` };
+}
+
+export async function habitDoneAction(taskId: string, done: boolean): Promise<PlanMessage> {
+  const user = await requireUser();
+  const result = await setHabitDone(user.id, String(taskId), Boolean(done), prisma);
+  if (!result.ok) return { ok: false, message: result.error };
+  refresh();
+  return { ok: true, message: done ? "Nice. Logged for today." : "Unchecked." };
+}
+
+export async function addHabitAction(input: { title: string; weekdays: number[]; minutes: number; area: string }): Promise<PlanMessage> {
+  const user = await requireUser();
+  const result = await createHabit(user.id, {
+    title: String(input?.title ?? ""),
+    weekdays: Array.isArray(input?.weekdays) ? input.weekdays.map(Number) : [],
+    minutes: Number(input?.minutes) || 30,
+    area: String(input?.area ?? "HEALTH")
+  }, prisma);
+  if (!result.ok) return { ok: false, message: result.error };
+  refresh();
+  return { ok: true, message: `Added "${String(input.title).trim()}". It shows here on the days you picked.` };
 }

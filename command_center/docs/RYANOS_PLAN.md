@@ -20,6 +20,10 @@ Ryan's design: projects with their task lists (his own tasks and items from the 
 - **Search and filters** above the lists: search (task, project, area, app; every word must match), area buttons, and Due soon / From apps / Mine / Not scheduled. "Clear (N of M)" resets. Per-project add lines are hidden while filtering.
 - **Collapsed areas stay collapsed** on that device (browser storage; if it is unavailable everything simply opens).
 
+## Daily habits (added 2026-11-22)
+
+A strip at the top of Plan shows today's routines (walk, workout, ...) as one-tap check-offs with a streak (🔥 = scheduled days done in a row; days a habit isn't scheduled are skipped, and an unfinished today doesn't break it). Tap again to undo. "place" picks the habit so you tap a time on the calendar. "+ Habit" adds one (name, length, days, area: Health, Family/kids or Personal); edit or pause them on Standard week (`/time-blocks/routines`). Routine copies no longer appear in the project lists. Code: `server/v2/habits.ts`, `tests/habits.test.ts`.
+
 ## Files
 
 `app/plan/` (page, server actions), `components/plan/plan-board.tsx`, `server/v2/board.ts` (read model), `server/v2/plan-board.ts` (schedule/move/unschedule, quick add, waiting-on), `lib/v2/quick-add.ts` (parser), `lib/v2/plan-filters.ts` (search, filters, #-suggestions), `server/v2/calendar-sync.ts` (Google two-way sync, see RYANOS_V2_INTEGRATIONS.md). Tests: `tests/quick-add.test.ts`, `tests/plan-filters.test.ts`, `tests/plan-board.test.ts`, `tests/calendar-sync.test.ts`.
