@@ -113,6 +113,50 @@ function ToolsList({ tools, tone }: { tools: ToolLink[]; tone: "sidebar" | "surf
   );
 }
 
+// Tools (external apps) and the secondary pages, as a sheet. Used by the phone header and the Plan icon strip.
+function ToolsAndMore({ tools, trigger }: { tools: ToolLink[]; trigger: React.ReactNode }) {
+  return (
+    <Dialog.Root>
+      <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
+        <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto rounded-t-3xl border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] text-foreground shadow-xl lg:inset-x-auto lg:bottom-4 lg:left-[5rem] lg:top-4 lg:max-h-none lg:w-80 lg:rounded-2xl lg:pb-5">
+          <div className="flex items-center justify-between">
+            <Dialog.Title className="text-base font-semibold">Tools and more</Dialog.Title>
+            <Dialog.Close aria-label="Close" className={cn("rounded-lg p-2 text-muted-foreground", focusRing)}>
+              <X aria-hidden="true" className="h-4 w-4" />
+            </Dialog.Close>
+          </div>
+          <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Tools</p>
+          <div className="mt-1"><ToolsList tone="surface" tools={tools} /></div>
+          <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">More</p>
+          <ul className="mt-1 space-y-0.5">
+            {secondaryRyanOsNavItems.map((item) => (
+              <li key={item.href}>
+                <Dialog.Close asChild>
+                  <Link className={cn("block rounded-lg px-3 py-2.5 text-sm hover:bg-muted", focusRing)} href={item.href}>{item.label}</Link>
+                </Dialog.Close>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 px-1">
+            <WisdomQuickCapture />
+          </div>
+          <div className="mt-4 flex items-center gap-2 border-t pt-3">
+            <Link aria-label="Settings" className={cn("inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm", focusRing)} href="/settings">
+              <Settings aria-hidden="true" className="h-4 w-4" /> Settings
+            </Link>
+            <ThemeToggle className="border" />
+            <form action={logoutAction} className="ml-auto">
+              <button className={cn("inline-flex h-10 items-center gap-1.5 rounded-xl border px-3 text-sm", focusRing)} type="submit">Sign Out</button>
+            </form>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
   const pathname = usePathname();
   const activeKey = getActiveRyanOsNavKey(pathname);
@@ -161,6 +205,14 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
               );
             })}
           </nav>
+          <ToolsAndMore
+            tools={tools}
+            trigger={
+              <button aria-label="Tools and more" className={cn(railButton, "mt-3 h-11 w-11 border border-white/10")} title="Tools and more" type="button">
+                <LayoutGrid aria-hidden="true" className="h-5 w-5" />
+              </button>
+            }
+          />
           <div className="mt-auto flex flex-col items-center gap-1 border-t border-white/10 pt-3">
             <Link aria-label="Settings" className={railButton} href="/settings" title="Settings">
               <Settings aria-hidden="true" className="h-4 w-4" />
@@ -278,48 +330,14 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
         <Link aria-label="Search" className={cn("inline-flex h-10 w-10 items-center justify-center rounded-xl border", focusRing)} href="/search">
           <Search aria-hidden="true" className="h-4 w-4" />
         </Link>
-        <Dialog.Root>
-          <Dialog.Trigger asChild>
+        <ToolsAndMore
+          tools={tools}
+          trigger={
             <button aria-label="Tools and more" className={cn("inline-flex h-10 w-10 items-center justify-center rounded-xl border", focusRing)} type="button">
               <LayoutGrid aria-hidden="true" className="h-4 w-4" />
             </button>
-          </Dialog.Trigger>
-          <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
-            <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto rounded-t-3xl border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-xl">
-              <div className="flex items-center justify-between">
-                <Dialog.Title className="text-base font-semibold">Tools and more</Dialog.Title>
-                <Dialog.Close aria-label="Close" className={cn("rounded-lg p-2 text-muted-foreground", focusRing)}>
-                  <X aria-hidden="true" className="h-4 w-4" />
-                </Dialog.Close>
-              </div>
-              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Tools</p>
-              <div className="mt-1"><ToolsList tone="surface" tools={tools} /></div>
-              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">More</p>
-              <ul className="mt-1 space-y-0.5">
-                {secondaryRyanOsNavItems.map((item) => (
-                  <li key={item.href}>
-                    <Dialog.Close asChild>
-                      <Link className={cn("block rounded-lg px-3 py-2.5 text-sm hover:bg-muted", focusRing)} href={item.href}>{item.label}</Link>
-                    </Dialog.Close>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-3 px-1">
-                <WisdomQuickCapture />
-              </div>
-              <div className="mt-4 flex items-center gap-2 border-t pt-3">
-                <Link aria-label="Settings" className={cn("inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm", focusRing)} href="/settings">
-                  <Settings aria-hidden="true" className="h-4 w-4" /> Settings
-                </Link>
-                <ThemeToggle className="border" />
-                <form action={logoutAction} className="ml-auto">
-                  <button className={cn("inline-flex h-10 items-center gap-1.5 rounded-xl border px-3 text-sm", focusRing)} type="submit">Sign Out</button>
-                </form>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+          }
+        />
       </header>
 
       <main className={cn("min-w-0 flex-1 px-4 pb-28 pt-4 sm:px-6 lg:pb-12", rail ? "lg:px-6 lg:pt-5" : "lg:px-10 lg:pt-8")}>
