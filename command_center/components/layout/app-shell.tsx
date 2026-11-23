@@ -163,7 +163,7 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   // Plan is calendar first: the sidebar shrinks to an icon strip and the page uses the full width.
-  const rail = Boolean(pathname?.startsWith("/plan"));
+  const rail = pathname === "/plan";
   const railButton = cn("relative inline-flex h-10 w-10 items-center justify-center rounded-xl text-sidebar-foreground/75 hover:bg-white/[0.06] hover:text-sidebar-foreground", focusRing);
 
   return (

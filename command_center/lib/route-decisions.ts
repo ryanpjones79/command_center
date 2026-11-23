@@ -39,6 +39,8 @@ export const primaryRyanOsNavItems: RyanOsNavItem[] = [
 
 // Existing features stay reachable from the secondary "More" menu.
 export const secondaryRyanOsNavItems: { href: string; label: string }[] = [
+  { href: "/plan/routines", label: "Routines" },
+  { href: "/plan/wrap-up", label: "Evening wrap-up" },
   { href: "/time-blocks", label: "Today (list view)" },
   { href: "/tasks", label: "All tasks" },
   { href: "/work", label: "Work areas" },

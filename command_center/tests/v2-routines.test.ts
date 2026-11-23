@@ -59,14 +59,16 @@ describe("placing routines", () => {
     expect(walks.map((walk) => walk.scheduledStart?.toISOString())).toEqual([pdt("2026-10-30T07:00:00").toISOString(), pst("2026-11-02T07:00:00").toISOString()]);
   });
 
-  it("an any-time routine goes first in the morning plan", async () => {
+  it("an any-time routine is planned into a free gap after to-dos", async () => {
     await db.protectedRoutine.create({ data: { userId, title: "Workout", domainSlug: "health", weekdays: "3", startMin: null, durationMin: 45 } });
     const wednesday = pst("2026-11-25T08:00:00");
     await materializeRoutines(userId, db, wednesday);
     const workout = await db.executionTask.findFirstOrThrow({ where: { userId, title: "Workout" } });
     expect(workout).toMatchObject({ scheduledStart: null, whenBucket: "TODAY", remainingMinutes: 45 });
     const plan = await proposeDay(userId, db, async () => [], wednesday);
-    expect(plan.items.find((item) => item.task.id === workout.id)?.reason).toBe("Protected time goes first");
+    const placed = plan.items.find((item) => item.task.id === workout.id);
+    expect(placed?.routine).toBe(true);
+    expect(placed?.reason).toMatch(/^Routine · 0 of 1 this week/);
   });
 
   it("paused routines are not placed", async () => {

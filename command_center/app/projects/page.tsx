@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ScheduleButton } from "@/components/now/v2-controls";
 import { AttentionInput, OutcomeEditor, ProjectsTabs, ProjectStateMenu } from "@/components/projects/project-controls";
-import { NextStepInline, ProjectRow } from "@/components/projects/project-row";
+import { MakeRoutineButton, NextStepInline, ProjectRow } from "@/components/projects/project-row";
 import { NewTaskButton } from "@/components/plan/task-composer";
 import { loadQuickTargets } from "@/server/v2/board";
 import { prisma } from "@/lib/prisma";
@@ -31,7 +31,7 @@ const SECTION_OF: Record<CoverageState, SectionKey> = {
   CLOSED: "resting"
 };
 const SECTIONS: { key: SectionKey; title: string; hint: string; tone: string }[] = [
-  { key: "next", title: "No task yet", hint: "Add the one task you would do next. Then book time for it.", tone: "bg-amber-400" },
+  { key: "next", title: "No task yet", hint: "Add the one task you would do next. Regular work like listing? Use the settings icon to make it a routine.", tone: "bg-amber-400" },
   { key: "book", title: "Needs time", hint: "Has a task but nothing on the calendar. Book time finds the best open slot.", tone: "bg-sky-400" },
   { key: "follow", title: "Follow up", hint: "Waiting too long, or closed with work still open.", tone: "bg-rose-400" },
   { key: "moving", title: "On track", hint: "Its next task has time booked, or it is waiting on someone.", tone: "bg-emerald-400" },
@@ -88,6 +88,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
         <ProjectStateMenu projectId={project.id} />
+        <MakeRoutineButton projectId={project.id} />
         <p className="text-xs text-muted-foreground">
           {project.sourceSystem ? `From ${project.sourceSystem.replace("_", " ").toLowerCase()}` : "Made in RyanOS"}
           {project.sourceUrl && <> · <a className="underline underline-offset-2" href={project.sourceUrl} rel="noopener noreferrer" target="_blank">open source</a></>}
@@ -106,6 +107,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ProjectsTabs />
+          <Link className="inline-flex h-10 items-center rounded-full border bg-card px-4 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground" href="/plan/routines" title="Regular work that fills free time">Routines</Link>
           <Link className="inline-flex h-10 items-center rounded-full border bg-card px-4 text-sm font-semibold hover:bg-muted" href="/projects/manage">+ New project</Link>
         </div>
       </header>

@@ -1062,6 +1062,8 @@ model ProtectedRoutine {
   weekdays    String // comma-separated 0-6 (0 = Sunday)
   startMin    Int? // minutes after local midnight; null = any time that day
   durationMin Int
+  timesPerWeek Int? // null = every listed day; otherwise stop once done this many times this week
+  timeOfDay   String? // MORNING | AFTERNOON | EVENING; null = any time (only without startMin)
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

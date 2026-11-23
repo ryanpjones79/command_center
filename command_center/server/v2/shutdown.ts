@@ -21,7 +21,10 @@ export function buildShutdown(model: DayModel): ShutdownModel {
   const unfinished = [
     ...model.blocks.filter((task) => task.status !== "WAITING" && (task.scheduledStart as Date) <= now),
     ...model.queue.filter((task) => task.whenBucket === "TODAY")
-  ].filter((task, index, all) => all.findIndex((other) => other.id === task.id) === index);
+  ]
+    // Routines that fill free time are optional; a missed one just counts against its weekly target.
+    .filter((task) => task.sourceSystem !== "ROUTINE")
+    .filter((task, index, all) => all.findIndex((other) => other.id === task.id) === index);
   const cantWait = model.queue
     .concat(model.dueForReview)
     .filter((task) => !task.scheduledStart && [task.dueDate, task.expiresAt].some((limit) => limit && limit > now && limit < tomorrowEnd))
