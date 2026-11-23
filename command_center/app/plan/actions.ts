@@ -9,11 +9,14 @@ import { googleCalendarLoader } from "@/server/v2/day";
 import { acceptPlan, proposeDay } from "@/server/v2/plan";
 import { quickAdd, setBlock, setWaitingOn, type TaskChoices } from "@/server/v2/plan-board";
 import { createHabit, setHabitDone } from "@/server/v2/habits";
+import { materializeRoutines } from "@/server/v2/routines";
+import { loadDaySettings } from "@/server/v2/schedule-service";
+import { addZonedDays, localClock, startOfZonedDay } from "@/lib/v2/zoned-time";
 
 export type PlanMessage = { ok: boolean; message: string };
 
 function refresh() {
-  for (const path of ["/plan", "/now", "/time-blocks", "/projects", "/inbox", "/tasks"]) revalidatePath(path);
+  for (const path of ["/plan", "/plan/wrap-up", "/now", "/time-blocks", "/projects", "/inbox", "/tasks"]) revalidatePath(path);
 }
 
 // Push the change to Google Calendar right away; a Google problem never undoes the change in RyanOS.
@@ -68,19 +71,48 @@ export async function waitingOnAction(taskId: string, name: string | null): Prom
   return { ok: true, message: (name?.trim() ? `Waiting on ${name.trim()}.` : "Back on your list.") + note };
 }
 
-// "Fill my day": place today's most important open work into free time, then adjust by dragging.
+// "Plan my day": to-dos first, then routines into the gaps that are left. Adjust by dragging.
 export async function fillDayAction(): Promise<PlanMessage> {
   const user = await requireUser();
-  const calendar = googleCalendarLoader();
-  const proposal = await proposeDay(user.id, prisma, calendar);
+  await materializeRoutines(user.id, prisma).catch(() => undefined);
+  const proposal = await proposeDay(user.id, prisma, googleCalendarLoader());
   if (proposal.items.length === 0) {
     return { ok: true, message: proposal.unplaced.length ? `Nothing fits in today's free time (${proposal.unplaced.length} waiting). Drag one in or make room.` : "Nothing is waiting to be placed today." };
   }
   const result = await acceptPlan(user.id, prisma, proposal.items.map((item) => ({ taskId: item.task.id, start: item.slot.start.toISOString(), end: item.slot.end.toISOString() })));
   const note = await sync(user.id);
   refresh();
+  const routines = proposal.items.filter((item) => item.routine && result.booked.includes(item.task.id)).length;
+  const todos = result.booked.length - routines;
+  const parts = [todos ? `${todos} to-do${todos === 1 ? "" : "s"}` : null, routines ? `${routines} routine${routines === 1 ? "" : "s"}` : null].filter(Boolean).join(" and ");
   const extra = proposal.unplaced.length ? ` ${proposal.unplaced.length} more didn't fit.` : "";
-  return { ok: true, message: `Placed ${result.booked.length} block${result.booked.length === 1 ? "" : "s"}. Drag to adjust.${extra}${note}` };
+  return { ok: true, message: `Placed ${parts || "nothing new"}. Drag to adjust.${extra}${note}` };
+}
+
+export type PlannedLine = { title: string; time: string; routine: boolean; reason: string };
+export type TomorrowResult = { ok: boolean; message: string; placed: PlannedLine[]; unplaced: { title: string; reason: string }[] };
+
+// Evening wrap-up: plan tomorrow with the picked must-dos first, then due work, then routines.
+export async function planTomorrowAction(mustDo: string[]): Promise<TomorrowResult> {
+  const user = await requireUser();
+  const settings = await loadDaySettings(user.id, prisma);
+  const tomorrow = addZonedDays(startOfZonedDay(new Date(), settings.timeZone), 1, settings.timeZone);
+  const picks = (Array.isArray(mustDo) ? mustDo : []).map(String).slice(0, 5);
+  const owned = await prisma.executionTask.findMany({ where: { userId: user.id, id: { in: picks } }, select: { id: true } });
+  await materializeRoutines(user.id, prisma, new Date(), { day: tomorrow });
+  const proposal = await proposeDay(user.id, prisma, googleCalendarLoader(), new Date(), { day: tomorrow, mustDo: owned.map((row) => row.id) });
+  const result = await acceptPlan(user.id, prisma, proposal.items.map((item) => ({ taskId: item.task.id, start: item.slot.start.toISOString(), end: item.slot.end.toISOString() })));
+  const note = await sync(user.id);
+  refresh();
+  const placed = proposal.items
+    .filter((item) => result.booked.includes(item.task.id))
+    .map((item) => ({ title: item.task.title, time: `${localClock(item.slot.start, settings.timeZone)}–${localClock(item.slot.end, settings.timeZone)}`, routine: Boolean(item.routine), reason: item.reason }));
+  return {
+    ok: true,
+    message: placed.length ? `Tomorrow is planned: ${placed.length} block${placed.length === 1 ? "" : "s"}.${note}` : `Nothing new to place tomorrow.${note}`,
+    placed,
+    unplaced: proposal.unplaced.map((item) => ({ title: item.task.title, reason: item.reason }))
+  };
 }
 
 export async function habitDoneAction(taskId: string, done: boolean): Promise<PlanMessage> {

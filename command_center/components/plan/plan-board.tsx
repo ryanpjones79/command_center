@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { addHabitAction, fillDayAction, habitDoneAction, moveBlockAction, planDoneAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
+import { fillDayAction, habitDoneAction, moveBlockAction, planDoneAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
 import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
 import type { Habit } from "@/server/v2/habits";
 import type { QuickTarget } from "@/lib/v2/quick-add";
@@ -191,8 +191,9 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
             <Link aria-label="Later" className="flex h-7 w-7 items-center justify-center rounded-full text-base hover:bg-card" href={viewHref(view, shift(step))}>›</Link>
           </div>
           <button className="rounded-full bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending} onClick={() => run(() => fillDayAction())} type="button">
-            ✦ Fill my day
+            ✦ Plan my day
           </button>
+          <Link className="rounded-full border px-3.5 py-2 font-medium text-muted-foreground hover:bg-muted hover:text-foreground" href="/plan/wrap-up" title="Evening wrap-up: close today and plan tomorrow">Wrap up</Link>
         </div>
       </header>
 
@@ -318,21 +319,13 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   );
 }
 
-const WEEKDAY_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
-const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-// Today's routines as one-tap check-offs with a streak. Tap "place" to put one on the calendar (tap a task,
-// then a time, same as the lists). "+ Habit" adds a new routine.
+// Today's routines as one-tap check-offs with this week's progress. Tap "place" to put one on the calendar
+// (tap a task, then a time, same as the lists). Plan my day places the rest into free gaps.
 function HabitStrip({ habits, placedIds, onMessage, onPlace, freeMin, dueCount }: {
   habits: Habit[]; placedIds: Set<string>; onMessage: (result: PlanMessage) => void; onPlace: (taskId: string) => void; freeMin: number; dueCount: number;
 }) {
   const [pending, startTransition] = useTransition();
   const [doneNow, setDoneNow] = useState<Record<string, boolean>>({});
-  const [adding, setAdding] = useState(false);
-  const [title, setTitle] = useState("");
-  const [days, setDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
-  const [minutes, setMinutes] = useState(30);
-  const [area, setArea] = useState("HEALTH");
   useEffect(() => setDoneNow({}), [habits]);
 
   const toggle = (habit: Habit) => {
@@ -341,35 +334,33 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace, freeMin, dueCount }
     setDoneNow((current) => ({ ...current, [habit.routineId]: next }));
     startTransition(async () => onMessage(await habitDoneAction(habit.todayTaskId as string, next)));
   };
-  const add = () => startTransition(async () => {
-    const result = await addHabitAction({ title, weekdays: days, minutes, area });
-    if (result.ok) { setTitle(""); setAdding(false); }
-    onMessage(result);
-  });
   const doneCount = habits.filter((habit) => doneNow[habit.routineId] ?? habit.done).length;
 
   return (
-    <section aria-label="Daily habits">
+    <section aria-label="Routines today">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="sr-only">Daily habits: {doneCount} of {habits.length} done today.</span>
+        <span className="sr-only">Routines: {doneCount} of {habits.length} done today.</span>
+        <Link className="mr-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground" href="/plan/routines" title="Edit routines">Routines</Link>
         {habits.map((habit) => {
           const done = doneNow[habit.routineId] ?? habit.done;
-          const streak = habit.streak + (done && !habit.done ? 1 : !done && habit.done ? -1 : 0);
+          const weekDone = habit.week.done + (done && !habit.done ? 1 : !done && habit.done ? -1 : 0);
+          const weekMet = !habit.todayTaskId && habit.week.target > 0 && habit.week.done >= habit.week.target;
           const placed = habit.todayTaskId ? placedIds.has(habit.todayTaskId) : false;
+          if (!habit.todayTaskId && !weekMet) return null;
           return (
-            <span className={`flex items-center overflow-hidden rounded-full border text-sm transition-all ${done ? "border-transparent bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_6px_18px_-8px_rgba(16,185,129,0.8)]" : "bg-card hover:border-foreground/25"}`} key={habit.routineId}>
+            <span className={`flex items-center overflow-hidden rounded-full border text-sm transition-all ${done || weekMet ? "border-transparent bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_6px_18px_-8px_rgba(16,185,129,0.8)]" : "bg-card hover:border-foreground/25"}`} key={habit.routineId}>
               <button
                 aria-pressed={done}
                 className="flex items-center gap-1.5 py-1 pl-2 pr-2.5"
                 disabled={pending || !habit.todayTaskId}
                 onClick={() => toggle(habit)}
-                title={done ? "Done today. Tap to undo." : "Tap when done"}
+                title={weekMet ? "Weekly target met" : done ? "Done today. Tap to undo." : "Tap when done"}
                 type="button"
               >
-                <span aria-hidden className={`flex h-[18px] w-[18px] items-center justify-center rounded-full text-[10px] ${done ? "bg-white/25 text-white" : "border-2 border-muted-foreground/40"}`}>{done ? "✓" : ""}</span>
+                <span aria-hidden className={`flex h-[18px] w-[18px] items-center justify-center rounded-full text-[10px] ${done || weekMet ? "bg-white/25 text-white" : "border-2 border-muted-foreground/40"}`}>{done || weekMet ? "✓" : ""}</span>
                 <span>{habit.title}</span>
-                <span className={`text-xs ${done ? "text-white/80" : "text-muted-foreground"}`}>{fmtLength(habit.minutes)}</span>
-                {streak > 0 && <span className="text-xs" title={`${streak} scheduled day${streak === 1 ? "" : "s"} in a row`}>🔥{streak}</span>}
+                <span className={`text-xs ${done || weekMet ? "text-white/80" : "text-muted-foreground"}`}>{weekMet ? "week done" : fmtLength(habit.minutes)}</span>
+                {habit.week.target > 1 && !weekMet && <span className={`text-xs tabular-nums ${done ? "text-white/80" : "text-muted-foreground"}`} title="Done this week">{Math.max(0, weekDone)}/{habit.week.target}</span>}
               </button>
               {!done && habit.todayTaskId && (
                 <button aria-label={placed ? `${habit.title} is on the calendar; tap to move` : `Place ${habit.title} on the calendar`} className="border-l px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => onPlace(habit.todayTaskId as string)} type="button">
@@ -379,50 +370,13 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace, freeMin, dueCount }
             </span>
           );
         })}
-        <button aria-expanded={adding} className="rounded-full border border-dashed px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setAdding((open) => !open)} type="button">{adding ? "Close" : "+ Habit"}</button>
+        <Link className="rounded-full border border-dashed px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground" href="/plan/routines">{habits.length ? "Edit" : "+ Add routines"}</Link>
         <p className="ml-auto text-xs text-muted-foreground">
           <span className="font-semibold text-foreground">{fmtLength(freeMin)}</span> free today
           <span aria-hidden> · </span>
           <span className={dueCount ? "font-semibold text-destructive" : ""}>{dueCount} due</span>
         </p>
       </div>
-      {adding && (
-        <form className="mt-3 space-y-2 rounded-xl border bg-background p-3" onSubmit={(event) => { event.preventDefault(); add(); }}>
-          <div className="flex gap-2">
-            <label className="sr-only" htmlFor="habit-title">Habit</label>
-            <input autoFocus className="min-w-0 flex-1 rounded-lg border bg-background px-2 py-1.5 text-sm" id="habit-title" onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Stretch, Read 20 pages, Meal prep check" value={title} />
-            <label className="sr-only" htmlFor="habit-minutes">Minutes</label>
-            <select className="rounded-lg border bg-background px-2 text-sm" id="habit-minutes" onChange={(event) => setMinutes(Number(event.target.value))} value={minutes}>
-              {[5, 10, 15, 20, 30, 45, 60, 90].map((value) => <option key={value} value={value}>{fmtLength(value)}</option>)}
-            </select>
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-xs text-muted-foreground">Days</span>
-            {WEEKDAY_LETTERS.map((letter, index) => (
-              <button
-                aria-label={WEEKDAY_NAMES[index]}
-                aria-pressed={days.includes(index)}
-                className={`h-8 w-8 rounded-full border text-xs font-semibold transition-colors ${days.includes(index) ? "border-transparent bg-foreground text-background" : "text-muted-foreground hover:bg-muted"}`}
-                key={index}
-                onClick={() => setDays((current) => current.includes(index) ? current.filter((day) => day !== index) : [...current, index].sort())}
-                type="button"
-              >
-                {letter}
-              </button>
-            ))}
-            <label className="sr-only" htmlFor="habit-area">Area</label>
-            <select className="ml-auto rounded-lg border bg-background px-2 py-1 text-xs" id="habit-area" onChange={(event) => setArea(event.target.value)} value={area}>
-              <option value="HEALTH">Health</option>
-              <option value="KIDS">Family / kids</option>
-              <option value="PERSONAL">Personal</option>
-            </select>
-          </div>
-          <div className="flex justify-end gap-2">
-            <a className="mr-auto self-center text-xs text-muted-foreground underline underline-offset-2" href="/time-blocks/routines">Edit or pause habits</a>
-            <button className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-60" disabled={pending || !title.trim() || days.length === 0} type="submit">Add habit</button>
-          </div>
-        </form>
-      )}
     </section>
   );
 }

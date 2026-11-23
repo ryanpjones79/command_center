@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ChevronDown, CornerDownLeft, SlidersHorizontal } from "lucide-react";
+import { makeRoutineFromProjectAction } from "@/app/plan/routine-actions";
 import { addNextStepAction } from "@/app/projects/v2-actions";
 import { cn } from "@/lib/utils";
 
@@ -101,5 +102,26 @@ export function NextStepInline({ projectId }: { projectId: string }) {
       </div>
       {error && <p aria-live="polite" className="mt-1 text-xs font-medium text-destructive">{error}</p>}
     </form>
+  );
+}
+
+// For a project that is really regular work (eBay listing, sourcing): turn it into a routine.
+export function MakeRoutineButton({ projectId }: { projectId: string }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        className={cn("h-9 rounded-lg border px-3 text-xs font-medium hover:bg-muted disabled:opacity-50", focusRing)}
+        disabled={pending}
+        onClick={() => startTransition(async () => { const result = await makeRoutineFromProjectAction(projectId); setMessage(result.message); router.refresh(); })}
+        title="Regular work, no one-off tasks: fit it into free time instead"
+        type="button"
+      >
+        {pending ? "Making it a routine…" : "↻ Make it a routine"}
+      </button>
+      {message && <span aria-live="polite" className="text-xs text-muted-foreground">{message}</span>}
+    </div>
   );
 }
