@@ -108,9 +108,26 @@ export function BlockControls({ taskId, protectedTime = false, ended = false }: 
 
 // "Do it now" / "Schedule": books the best feasible slot; shows the real
 // trade-off when it doesn't fit and asks before displacing anything.
-export function ScheduleButton({ taskId, label = "Schedule", startNow = false }: { taskId: string; label?: string; startNow?: boolean }) {
+export function ScheduleButton({ taskId, label = "Schedule", startNow = false, compact = false }: { taskId: string; label?: string; startNow?: boolean; compact?: boolean }) {
   const { pending, message, run } = useRun();
   const displaceIds = (message?.detail as { displaceIds?: string[] } | null)?.displaceIds;
+  if (compact) {
+    return (
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap gap-1.5 sm:justify-end">
+          <button className={cn("h-9 rounded-lg bg-primary px-3.5 text-sm font-semibold text-primary-foreground disabled:opacity-60", focusRing)} disabled={pending} onClick={() => run(() => v2ScheduleAction(taskId, undefined, startNow))} type="button">
+            {pending ? "Finding a slot…" : label}
+          </button>
+          {displaceIds && displaceIds.length > 0 && (
+            <button className={cn(secondary, "h-9 rounded-lg px-3")} disabled={pending} onClick={() => run(() => v2ScheduleAction(taskId, displaceIds, startNow))} type="button">
+              Move them and book
+            </button>
+          )}
+        </div>
+        {message && <p aria-live="polite" className={cn("max-w-xs text-xs sm:text-right", message.ok ? "text-muted-foreground" : "text-amber-700 dark:text-amber-300")}>{message.message}</p>}
+      </div>
+    );
+  }
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
