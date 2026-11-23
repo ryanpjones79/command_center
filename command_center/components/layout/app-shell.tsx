@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ChevronDown, Feather, LayoutGrid, LogOut, Moon, Plus, Search, Settings, Sun, X } from "lucide-react";
+import { CalendarRange, ChevronDown, Feather, FolderKanban, Inbox, LayoutGrid, LogOut, Moon, Plus, Search, Settings, Sun, X, Zap, type LucideIcon } from "lucide-react";
 import { logoutAction } from "@/app/actions";
 import { CaptureBox } from "@/components/inbox/capture-box";
 import { WisdomQuickCapture } from "@/components/library/wisdom-quick-capture";
@@ -17,6 +17,16 @@ import {
 import type { ToolLink } from "@/lib/v2/tools";
 
 type ShellProps = { children: React.ReactNode; inboxCount?: number; tools?: ToolLink[] };
+
+const NAV_ICONS: Record<string, LucideIcon> = { now: Zap, today: CalendarRange, projects: FolderKanban, inbox: Inbox };
+
+function LogoMark({ size = "md" }: { size?: "sm" | "md" }) {
+  return (
+    <span className={cn("relative flex items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 via-cyan-400 to-violet-500 text-white shadow-[0_6px_20px_-6px_rgba(52,211,153,0.7)]", size === "md" ? "h-9 w-9" : "h-8 w-8")}>
+      <Feather aria-hidden="true" className={size === "md" ? "h-[18px] w-[18px]" : "h-4 w-4"} />
+    </span>
+  );
+}
 
 const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
@@ -112,12 +122,10 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
   return (
     <div className="min-h-screen lg:flex">
       {/* Desktop sidebar */}
-      <aside className="hidden lg:flex sticky top-0 h-screen w-64 shrink-0 flex-col bg-sidebar px-3 py-5 text-sidebar-foreground">
+      <aside className="hidden lg:flex sticky top-0 h-screen w-64 shrink-0 flex-col border-r border-white/5 bg-sidebar bg-[radial-gradient(420px_260px_at_0%_0%,rgba(52,211,153,0.10),transparent_70%),radial-gradient(360px_300px_at_100%_100%,rgba(139,92,246,0.10),transparent_70%)] px-3 py-5 text-sidebar-foreground">
         <Link className={cn("mb-6 flex items-center gap-2 rounded-lg px-3", focusRing)} href="/now">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/90 text-primary-foreground">
-            <Feather aria-hidden="true" className="h-4 w-4" />
-          </span>
-          <span className="text-lg font-semibold tracking-tight">RyanOS</span>
+          <LogoMark />
+          <span className="text-lg font-semibold tracking-tight">Ryan<span className="text-gradient">OS</span></span>
         </Link>
 
         <div className="mb-5 grid grid-cols-[1fr_auto] gap-2 px-1">
@@ -136,18 +144,23 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
         <nav aria-label="Primary" className="space-y-1">
           {primaryRyanOsNavItems.map((item) => {
             const active = activeKey === item.key;
+            const Icon = NAV_ICONS[item.key] ?? Zap;
             return (
               <Link
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "flex h-11 items-center justify-between rounded-xl px-3 text-[15px] font-medium transition-colors",
-                  active ? "bg-sidebar-active text-white" : "text-sidebar-foreground/85 hover:bg-white/5",
+                  "relative flex h-11 items-center justify-between rounded-xl px-3 text-[15px] font-medium transition-colors",
+                  active ? "bg-white/[0.07] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]" : "text-sidebar-foreground/75 hover:bg-white/[0.04] hover:text-sidebar-foreground",
                   focusRing
                 )}
                 href={item.href}
                 key={item.href}
               >
-                <span>{item.label}</span>
+                {active && <span aria-hidden className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-gradient-to-b from-emerald-400 to-cyan-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]" />}
+                <span className="flex items-center gap-3">
+                  <Icon aria-hidden="true" className={cn("h-[18px] w-[18px]", active ? "text-emerald-300" : "text-sidebar-muted")} />
+                  {item.label}
+                </span>
                 {item.key === "inbox" && inboxCount > 0 && (
                   <span aria-label={`${inboxCount} need a decision`} className="rounded-full bg-primary/90 px-2 py-0.5 text-[11px] font-semibold text-primary-foreground">
                     {inboxCount}
@@ -196,12 +209,10 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-40 flex items-center gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-40 flex items-center gap-2 border-b bg-background/75 px-4 py-2.5 backdrop-blur-xl backdrop-saturate-150 lg:hidden">
         <Link className={cn("mr-auto flex items-center gap-2 rounded-lg", focusRing)} href="/now">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Feather aria-hidden="true" className="h-3.5 w-3.5" />
-          </span>
-          <span className="text-base font-semibold">RyanOS</span>
+          <LogoMark size="sm" />
+          <span className="text-base font-semibold tracking-tight">Ryan<span className="text-gradient">OS</span></span>
         </Link>
         <CaptureDialog
           trigger={
@@ -262,16 +273,18 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
       </main>
 
       {/* Mobile bottom nav */}
-      <nav aria-label="Mobile primary" className="fixed inset-x-3 bottom-3 z-40 grid grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-sidebar p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] text-sidebar-foreground shadow-[0_18px_50px_rgba(0,0,0,0.35)] lg:hidden">
+      <nav aria-label="Mobile primary" className="fixed inset-x-3 bottom-3 z-40 grid grid-cols-4 gap-1 rounded-[1.4rem] border border-white/10 bg-sidebar/85 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] text-sidebar-foreground shadow-[0_18px_50px_rgba(0,0,0,0.45)] backdrop-blur-xl backdrop-saturate-150 lg:hidden">
         {primaryRyanOsNavItems.map((item) => {
           const active = activeKey === item.key;
+          const Icon = NAV_ICONS[item.key] ?? Zap;
           return (
             <Link
               aria-current={active ? "page" : undefined}
-              className={cn("relative flex min-h-12 flex-col items-center justify-center rounded-xl px-1 text-[13px] font-medium", active ? "bg-sidebar-active text-white" : "text-sidebar-foreground/80", focusRing)}
+              className={cn("relative flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-2xl px-1 text-[11px] font-medium", active ? "bg-white/[0.08] text-white" : "text-sidebar-foreground/65", focusRing)}
               href={item.href}
               key={item.href}
             >
+              <Icon aria-hidden="true" className={cn("h-5 w-5", active ? "text-emerald-300" : "")} />
               {item.label}
               {item.key === "inbox" && inboxCount > 0 && (
                 <span aria-label={`${inboxCount} need a decision`} className="absolute right-2 top-1.5 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">{inboxCount}</span>

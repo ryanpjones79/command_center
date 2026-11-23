@@ -18,18 +18,24 @@ const SNAP = 15;
 const DRAG_TYPE = "application/x-ryanos-task";
 const MIN = 60_000;
 
-const AREA_STYLE: Record<string, string> = {
-  ebay: "border-l-amber-500 bg-amber-500/10",
-  rykas: "border-l-orange-600 bg-orange-600/10",
-  "betting-models": "border-l-violet-500 bg-violet-500/10",
-  "casino-ap": "border-l-fuchsia-500 bg-fuchsia-500/10",
-  work: "border-l-sky-600 bg-sky-600/10",
-  health: "border-l-emerald-600 bg-emerald-600/10",
-  golf: "border-l-lime-600 bg-lime-600/10",
-  family: "border-l-rose-500 bg-rose-500/10",
-  opportunities: "border-l-teal-600 bg-teal-600/10"
+// One colour per area. card = list cards (accent edge + faint wash), block = calendar blocks (solid gradient),
+// dot = area markers. Full class names are written out so Tailwind keeps them.
+type AreaLook = { card: string; block: string; dot: string };
+const look = (card: string, block: string, dot: string): AreaLook => ({ card, block, dot });
+const AREA_LOOK: Record<string, AreaLook> = {
+  ebay: look("border-l-amber-400 bg-gradient-to-r from-amber-400/[0.13] to-transparent", "from-amber-400 to-orange-500 shadow-orange-500/30", "bg-amber-400"),
+  rykas: look("border-l-orange-500 bg-gradient-to-r from-orange-500/[0.13] to-transparent", "from-orange-500 to-rose-500 shadow-rose-500/30", "bg-orange-500"),
+  "betting-models": look("border-l-violet-500 bg-gradient-to-r from-violet-500/[0.14] to-transparent", "from-violet-500 to-indigo-500 shadow-indigo-500/30", "bg-violet-500"),
+  "casino-ap": look("border-l-fuchsia-500 bg-gradient-to-r from-fuchsia-500/[0.13] to-transparent", "from-fuchsia-500 to-pink-500 shadow-pink-500/30", "bg-fuchsia-500"),
+  work: look("border-l-sky-500 bg-gradient-to-r from-sky-500/[0.13] to-transparent", "from-sky-500 to-blue-600 shadow-blue-600/30", "bg-sky-500"),
+  health: look("border-l-emerald-500 bg-gradient-to-r from-emerald-500/[0.13] to-transparent", "from-emerald-500 to-teal-500 shadow-teal-500/30", "bg-emerald-500"),
+  golf: look("border-l-lime-500 bg-gradient-to-r from-lime-500/[0.13] to-transparent", "from-lime-500 to-emerald-600 shadow-emerald-600/30", "bg-lime-500"),
+  family: look("border-l-rose-500 bg-gradient-to-r from-rose-500/[0.13] to-transparent", "from-rose-500 to-pink-600 shadow-pink-600/30", "bg-rose-500"),
+  kids: look("border-l-pink-500 bg-gradient-to-r from-pink-500/[0.13] to-transparent", "from-pink-500 to-rose-500 shadow-rose-500/30", "bg-pink-500"),
+  opportunities: look("border-l-teal-500 bg-gradient-to-r from-teal-500/[0.13] to-transparent", "from-teal-500 to-cyan-600 shadow-cyan-600/30", "bg-teal-500")
 };
-const areaStyle = (slug: string) => AREA_STYLE[slug] ?? "border-l-slate-500 bg-slate-500/10";
+const DEFAULT_LOOK = look("border-l-slate-400 bg-gradient-to-r from-slate-400/[0.12] to-transparent", "from-slate-500 to-slate-600 shadow-slate-600/30", "bg-slate-400");
+const areaLook = (slug: string) => AREA_LOOK[slug] ?? DEFAULT_LOOK;
 
 type DragPayload = { taskId: string; minutes: number; mode: "task" | "block"; grabMin: number };
 type Override = { start: string | null; end: string | null };
@@ -47,6 +53,11 @@ const snap = (minutes: number) => Math.round(minutes / SNAP) * SNAP;
 // Dropping inside a quarter-hour slot starts the block at that slot's top.
 const snapDown = (minutes: number) => Math.floor(minutes / SNAP) * SNAP;
 const fmtLength = (minutes: number) => (minutes >= 60 ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${minutes}m`);
+
+const greeting = (iso: string, timeZone: string) => {
+  const hour = Math.floor(minutesInZone(iso, timeZone) / 60);
+  return hour < 5 ? "Late night" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+};
 
 // Phones (narrower than 768px) get the stacked layout with today's calendar pinned on top.
 function useIsPhone() {
@@ -172,34 +183,34 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
     <div className="space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Plan</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+          <p className="eyebrow">Plan · {greeting(board.now, tz)}</p>
+          <h1 className="font-display mt-1 text-3xl font-medium tracking-tight sm:text-4xl">
             {dayLabel(first, tz)}
-            {board.days.length > 1 ? ` – ${dayLabel(board.days[board.days.length - 1], tz)}` : ""}
+            {board.days.length > 1 ? <span className="text-muted-foreground"> – {dayLabel(board.days[board.days.length - 1], tz)}</span> : ""}
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <nav aria-label="Days shown" className="hidden overflow-hidden rounded-xl border md:flex">
+          <nav aria-label="Days shown" className="hidden rounded-full border bg-muted/60 p-1 md:flex">
             {(["day", "3", "week"] as const).map((option) => (
-              <Link aria-current={option === view ? "page" : undefined} className={`px-3 py-2 ${option === view ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} href={viewHref(option, dateKey(first, tz))} key={option}>
+              <Link aria-current={option === view ? "page" : undefined} className={`rounded-full px-3.5 py-1.5 transition-colors ${option === view ? "bg-card font-semibold text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`} href={viewHref(option, dateKey(first, tz))} key={option}>
                 {option === "day" ? "Day" : option === "3" ? "3 days" : "Week"}
               </Link>
             ))}
           </nav>
-          <div className="flex overflow-hidden rounded-xl border">
-            <Link aria-label="Earlier" className="px-3 py-2 hover:bg-muted" href={viewHref(view, shift(-step))}>‹</Link>
-            <Link className="border-x px-3 py-2 hover:bg-muted" href={viewHref(view)}>Today</Link>
-            <Link aria-label="Later" className="px-3 py-2 hover:bg-muted" href={viewHref(view, shift(step))}>›</Link>
+          <div className="flex items-center rounded-full border bg-muted/60 p-1">
+            <Link aria-label="Earlier" className="flex h-7 w-7 items-center justify-center rounded-full text-base hover:bg-card" href={viewHref(view, shift(-step))}>‹</Link>
+            <Link className="rounded-full px-3 py-1 font-medium hover:bg-card" href={viewHref(view)}>Today</Link>
+            <Link aria-label="Later" className="flex h-7 w-7 items-center justify-center rounded-full text-base hover:bg-card" href={viewHref(view, shift(step))}>›</Link>
           </div>
-          <button className="rounded-xl bg-primary px-3 py-2 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending} onClick={() => run(() => fillDayAction())} type="button">
-            Fill my day
+          <button className="rounded-full bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending} onClick={() => run(() => fillDayAction())} type="button">
+            ✦ Fill my day
           </button>
         </div>
       </header>
 
       <QuickAdd onDone={(result) => { setMessage(result); router.refresh(); }} targets={board.targets} timeZone={tz} />
 
-      <div aria-live="polite" className="min-h-6 text-sm">
+      <div aria-live="polite" className="text-sm empty:-mt-4">
         {message && <p className={message.ok ? "text-muted-foreground" : "font-medium text-destructive"}>{message.message}</p>}
         {!board.calendarKnown && <p className="text-amber-700 dark:text-amber-400">Google Calendar couldn&apos;t be read, so meetings may be missing.</p>}
         {board.calendarSync.enabled && !board.calendarSync.ok && <p className="text-amber-700 dark:text-amber-400">Google Calendar sync: {board.calendarSync.message}</p>}
@@ -216,7 +227,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
       <div className="flex flex-col gap-4 md:grid md:grid-cols-[minmax(300px,380px)_1fr]">
         <section aria-label="Calendar" className="sticky top-[3.6rem] z-30 order-first -mx-4 min-w-0 border-b bg-background px-4 pb-2 pt-1 sm:-mx-6 sm:px-6 md:static md:order-last md:mx-0 md:border-0 md:bg-transparent md:p-0">
           {picked && (
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-primary/50 bg-primary/10 px-3 py-2 text-sm" role="status">
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-2xl border border-primary/40 bg-gradient-to-r from-primary/15 to-accent/10 px-3 py-2 text-sm shadow-[0_0_24px_-8px_hsl(var(--primary)/0.6)]" role="status">
               <span className="min-w-0 truncate">Tap a time for <b>{picked.title}</b> ({fmtLength(picked.minutes)})</span>
               <button className="shrink-0 rounded-lg border bg-background px-2 py-1 text-xs" onClick={() => setPicked(null)} type="button">Cancel</button>
             </div>
@@ -248,23 +259,24 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           <div className="space-y-2 rounded-2xl border bg-card p-3">
             <label className="sr-only" htmlFor="plan-search">Search tasks</label>
             <input
-              className="w-full rounded-xl border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              className="w-full rounded-xl border bg-background/60 px-3 py-2 text-sm placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               id="plan-search"
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search tasks, projects, apps…"
               type="search"
               value={query}
             />
-            <div aria-label="Filter by area" className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs" role="group">
+            <div aria-label="Filter by area" className="-mx-1 flex gap-1.5 no-scrollbar overflow-x-auto px-1 pb-0.5 text-xs" role="group">
               {[{ slug: null as string | null, name: "All" }, ...board.areas.map((area) => ({ slug: area.slug as string | null, name: area.name }))].map((option) => (
-                <button aria-pressed={areaFilter === option.slug} className={`shrink-0 rounded-full border px-2.5 py-1 ${areaFilter === option.slug ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} key={option.slug ?? "all"} onClick={() => setAreaFilter(option.slug)} type="button">
+                <button aria-pressed={areaFilter === option.slug} className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors ${areaFilter === option.slug ? "border-foreground/80 bg-foreground font-semibold text-background" : "hover:bg-muted"}`} key={option.slug ?? "all"} onClick={() => setAreaFilter(option.slug)} type="button">
+                  {option.slug && <span aria-hidden className={`h-2 w-2 rounded-full ${areaLook(option.slug).dot}`} />}
                   {option.name}
                 </button>
               ))}
             </div>
-            <div aria-label="Quick filters" className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs" role="group">
+            <div aria-label="Quick filters" className="-mx-1 flex gap-1.5 no-scrollbar overflow-x-auto px-1 pb-0.5 text-xs" role="group">
               {QUICK_FILTERS.map((option) => (
-                <button aria-pressed={quick.has(option.key)} className={`shrink-0 rounded-full border px-2.5 py-1 ${quick.has(option.key) ? "border-primary bg-primary/15 font-semibold" : "hover:bg-muted"}`} key={option.key} onClick={() => toggleQuick(option.key)} type="button">
+                <button aria-pressed={quick.has(option.key)} className={`shrink-0 rounded-full border px-2.5 py-1 ${quick.has(option.key) ? "border-primary/70 bg-primary/15 font-semibold text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`} key={option.key} onClick={() => toggleQuick(option.key)} type="button">
                   {option.label}
                 </button>
               ))}
@@ -341,21 +353,26 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
     onMessage(result);
   });
   const doneCount = habits.filter((habit) => doneNow[habit.routineId] ?? habit.done).length;
+  const share = habits.length ? doneCount / habits.length : 0;
 
   return (
-    <section aria-label="Daily habits" className="rounded-2xl border bg-card p-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold">Daily habits <span className="font-normal text-muted-foreground">{habits.length ? `${doneCount} of ${habits.length} today` : "none today"}</span></p>
-        <button className="rounded-lg border px-2 py-1 text-xs hover:bg-muted" onClick={() => setAdding((open) => !open)} type="button">{adding ? "Close" : "+ Habit"}</button>
+    <section aria-label="Daily habits" className="rounded-2xl border bg-card p-3 sm:p-4">
+      <div className="flex items-center gap-3">
+        <ProgressRing value={share} />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold">Daily habits</p>
+          <p className="text-xs text-muted-foreground">{habits.length ? (doneCount === habits.length ? "All done today. Nice." : `${doneCount} of ${habits.length} done today`) : "None scheduled today"}</p>
+        </div>
+        <button className="rounded-full border px-3 py-1 text-xs font-medium hover:bg-muted" onClick={() => setAdding((open) => !open)} type="button">{adding ? "Close" : "+ Habit"}</button>
       </div>
       {habits.length > 0 && (
-        <ul className="mt-2 flex flex-wrap gap-2">
+        <ul className="mt-3 flex flex-wrap gap-2">
           {habits.map((habit) => {
             const done = doneNow[habit.routineId] ?? habit.done;
             const streak = habit.streak + (done && !habit.done ? 1 : !done && habit.done ? -1 : 0);
             const placed = habit.todayTaskId ? placedIds.has(habit.todayTaskId) : false;
             return (
-              <li className={`flex items-center overflow-hidden rounded-full border border-l-4 text-sm ${areaStyle(habit.areaSlug)}`} key={habit.routineId}>
+              <li className={`flex items-center overflow-hidden rounded-full border text-sm transition-all ${done ? "border-transparent bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_6px_18px_-8px_rgba(16,185,129,0.8)]" : "bg-background/50 hover:border-foreground/25"}`} key={habit.routineId}>
                 <button
                   aria-pressed={done}
                   className={`flex items-center gap-2 py-1.5 pl-2.5 pr-2 ${done ? "font-semibold" : ""}`}
@@ -364,13 +381,14 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
                   title={done ? "Done today. Tap to undo." : "Tap when done"}
                   type="button"
                 >
-                  <span aria-hidden className={`flex h-5 w-5 items-center justify-center rounded-full border-2 text-xs ${done ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/50"}`}>{done ? "✓" : ""}</span>
-                  <span className={done ? "line-through decoration-2 opacity-80" : ""}>{habit.title}</span>
-                  <span className="text-xs text-muted-foreground">{fmtLength(habit.minutes)}</span>
+                  <span aria-hidden className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${done ? "bg-white/25 text-white" : "border-2 border-muted-foreground/40"}`}>{done ? "✓" : ""}</span>
+                  {!done && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${areaLook(habit.areaSlug).dot}`} />}
+                  <span>{habit.title}</span>
+                  <span className={`text-xs ${done ? "text-white/80" : "text-muted-foreground"}`}>{fmtLength(habit.minutes)}</span>
                   {streak > 0 && <span className="text-xs" title={`${streak} scheduled day${streak === 1 ? "" : "s"} in a row`}>🔥{streak}</span>}
                 </button>
                 {!done && habit.todayTaskId && (
-                  <button aria-label={placed ? `${habit.title} is on the calendar; tap to move` : `Place ${habit.title} on the calendar`} className="border-l px-2 py-1.5 text-xs text-muted-foreground hover:bg-background/60" onClick={() => onPlace(habit.todayTaskId as string)} type="button">
+                  <button aria-label={placed ? `${habit.title} is on the calendar; tap to move` : `Place ${habit.title} on the calendar`} className="border-l px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => onPlace(habit.todayTaskId as string)} type="button">
                     {placed ? "moved?" : "place"}
                   </button>
                 )}
@@ -395,7 +413,7 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
               <button
                 aria-label={WEEKDAY_NAMES[index]}
                 aria-pressed={days.includes(index)}
-                className={`h-8 w-8 rounded-full border text-xs font-semibold ${days.includes(index) ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                className={`h-8 w-8 rounded-full border text-xs font-semibold transition-colors ${days.includes(index) ? "border-transparent bg-foreground text-background" : "text-muted-foreground hover:bg-muted"}`}
                 key={index}
                 onClick={() => setDays((current) => current.includes(index) ? current.filter((day) => day !== index) : [...current, index].sort())}
                 type="button"
@@ -417,6 +435,26 @@ function HabitStrip({ habits, placedIds, onMessage, onPlace }: {
         </form>
       )}
     </section>
+  );
+}
+
+function ProgressRing({ value }: { value: number }) {
+  const radius = 17;
+  const length = 2 * Math.PI * radius;
+  return (
+    <div aria-hidden className="relative h-11 w-11 shrink-0">
+      <svg className="-rotate-90" height="44" viewBox="0 0 44 44" width="44">
+        <defs>
+          <linearGradient id="habit-ring" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor="hsl(var(--primary))" />
+            <stop offset="100%" stopColor="hsl(var(--accent))" />
+          </linearGradient>
+        </defs>
+        <circle cx="22" cy="22" fill="none" r={radius} stroke="hsl(var(--muted))" strokeWidth="5" />
+        <circle cx="22" cy="22" fill="none" r={radius} stroke="url(#habit-ring)" strokeDasharray={length} strokeDashoffset={length * (1 - value)} strokeLinecap="round" strokeWidth="5" style={{ transition: "stroke-dashoffset 400ms ease" }} />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold tabular-nums">{Math.round(value * 100)}%</span>
+    </div>
   );
 }
 
@@ -498,7 +536,7 @@ function QuickAdd({ onDone, projectId = null, compact = false, targets = [], tim
           aria-autocomplete={compact ? undefined : "list"}
           aria-controls={suggestions.length ? `${id}-suggestions` : undefined}
           autoComplete="off"
-          className={`min-w-0 flex-1 rounded-xl border bg-background px-3 ${compact ? "py-1.5 text-sm" : "py-2.5"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary`}
+          className={`min-w-0 flex-1 rounded-xl border px-3 placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${compact ? "border-dashed bg-transparent py-1.5 text-sm" : "bg-card py-3 text-[15px] shadow-sm"}`}
           id={id}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape" && tag) setText((current) => current.replace(TAG_AT_END, "$1")); }}
@@ -509,7 +547,7 @@ function QuickAdd({ onDone, projectId = null, compact = false, targets = [], tim
           <>
             {/* A native picker (works well on phones) behind a small folder button. */}
             <div className="relative w-11 shrink-0">
-              <span aria-hidden className={`pointer-events-none flex h-full items-center justify-center rounded-xl border text-base ${chosen ? "border-primary bg-primary/10" : "bg-background"}`}>📁</span>
+              <span aria-hidden className={`pointer-events-none flex h-full items-center justify-center rounded-xl border text-base ${chosen ? "border-primary bg-primary/10" : "bg-card"}`}>📁</span>
               <label className="sr-only" htmlFor={`${id}-project`}>Choose a project</label>
               <select
                 className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
@@ -529,10 +567,10 @@ function QuickAdd({ onDone, projectId = null, compact = false, targets = [], tim
             </div>
           </>
         )}
-        <button className={`rounded-xl border px-3 ${compact ? "text-sm" : ""} font-medium hover:bg-muted disabled:opacity-60`} disabled={pending || !text.trim()} type="submit">Add</button>
+        <button className={compact ? "rounded-xl border px-3 text-sm font-medium hover:bg-muted disabled:opacity-50" : "rounded-xl bg-primary px-4 font-semibold text-primary-foreground disabled:opacity-50"} disabled={pending || !text.trim()} type="submit">Add</button>
         {!compact && (
           <details className="relative hidden sm:block">
-            <summary className="flex h-full cursor-pointer list-none items-center rounded-xl border px-3 text-sm text-muted-foreground hover:bg-muted">Tips</summary>
+            <summary className="flex h-full cursor-pointer list-none items-center rounded-xl border bg-card px-3 text-sm text-muted-foreground hover:bg-muted">Tips</summary>
             <div className="absolute right-0 z-40 mt-2 w-72 rounded-xl border bg-card p-3 text-sm shadow-lg">
               <ul className="space-y-1">
                 <li><b>#</b> then a few letters: pick a project from the list</li>
@@ -590,15 +628,21 @@ function AreaList({ area, overrides, timeZone, open, filtering, onOpenChange, ..
   const unplaced = (tasks: BoardTask[]) => tasks.map((task) => (overrides[task.id] ? { ...task, ...overrides[task.id] } : task));
   const count = area.projects.reduce((sum, project) => sum + project.tasks.length, 0) + area.loose.length;
   return (
-    <details className="rounded-2xl border bg-card" onToggle={(event) => { if (!filtering && event.currentTarget.open !== open) onOpenChange(event.currentTarget.open); }} open={open}>
-      <summary className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 text-sm font-semibold">
-        <span>{area.name}</span>
-        <span className="text-xs font-normal text-muted-foreground">{count} open</span>
+    <details className="group rounded-2xl border bg-card" onToggle={(event) => { if (!filtering && event.currentTarget.open !== open) onOpenChange(event.currentTarget.open); }} open={open}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-2.5">
+          <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${areaLook(area.slug).dot}`} />
+          {area.name}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">{count} open</span>
+          <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
+        </span>
       </summary>
       <div className="space-y-3 px-3 pb-3">
         {area.projects.map((project) => (
           <div key={project.id}>
-            <p className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{project.name}</p>
+            <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{project.name}</p>
             <ul className="mt-1 space-y-1.5">
               {unplaced(project.tasks).map((task) => <TaskCard key={task.id} task={task} timeZone={timeZone} {...handlers} />)}
             </ul>
@@ -607,7 +651,7 @@ function AreaList({ area, overrides, timeZone, open, filtering, onOpenChange, ..
         ))}
         {area.loose.length > 0 && (
           <div>
-            <p className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">No project</p>
+            <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">No project</p>
             <ul className="mt-1 space-y-1.5">
               {unplaced(area.loose).map((task) => <TaskCard key={task.id} task={task} timeZone={timeZone} {...handlers} />)}
             </ul>
@@ -626,7 +670,7 @@ function TaskCard({ task, timeZone, onDone, onSchedule, onMessage, onPick, picke
   const saveWaiting = (name: string | null) => startTransition(async () => { onMessage(await waitingOnAction(task.id, name)); setWaiting(false); });
   return (
     <li
-      className={`group rounded-xl border border-l-4 px-3 py-2 ${areaStyle(task.areaSlug)} ${task.start && pickedId !== task.id ? "opacity-60" : ""} ${pickedId === task.id ? "ring-2 ring-primary" : ""}`}
+      className={`cursor-grab rounded-xl border border-l-[3px] px-3 py-2.5 transition-all hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${areaLook(task.areaSlug).card} ${task.start && pickedId !== task.id ? "opacity-55" : ""} ${pickedId === task.id ? "shadow-[0_0_24px_-6px_hsl(var(--primary)/0.7)] ring-2 ring-primary" : ""}`}
       draggable
       onDragStart={(event) => {
         event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ taskId: task.id, minutes: task.minutes, mode: task.start ? "block" : "task", grabMin: 0 } satisfies DragPayload));
@@ -634,23 +678,23 @@ function TaskCard({ task, timeZone, onDone, onSchedule, onMessage, onPick, picke
       }}
     >
       <div className="flex items-start gap-2">
-        <button aria-label={`Mark done: ${task.title}`} className="mt-0.5 h-5 w-5 shrink-0 rounded-md border-2 border-muted-foreground/50 hover:border-primary" onClick={() => onDone(task.id)} type="button" />
+        <button aria-label={`Mark done: ${task.title}`} className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/40 text-[10px] text-transparent transition-colors hover:border-primary hover:bg-primary/15 hover:text-primary" onClick={() => onDone(task.id)} type="button">✓</button>
         <div className="min-w-0 flex-1">
           <button aria-pressed={pickedId === task.id} className="block w-full break-words text-left text-sm font-medium leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => onPick(task)} title="Tap, then tap a time on the calendar" type="button">{task.title}</button>
           <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-            {task.source && <span className="rounded bg-background/70 px-1 font-medium">{SOURCE_LABEL[task.source] ?? task.source}</span>}
-            {deadline && <span className={task.urgent ? "font-semibold text-destructive" : ""}>{deadline}</span>}
+            {task.source && <span className="rounded-md border bg-background/60 px-1.5 text-[11px] font-medium">{SOURCE_LABEL[task.source] ?? task.source}</span>}
+            {deadline && <span className={task.urgent ? "rounded-md bg-destructive/15 px-1.5 font-semibold text-destructive" : ""}>{deadline}</span>}
             <span>{fmtLength(task.minutes)}</span>
             {task.start && <span>{dayLabel(task.start, timeZone)} {clock(task.start, timeZone)}</span>}
             {task.waitingOn && <span>waiting on {task.waitingOn}</span>}
-            {(task.priority === "HIGH" || task.priority === "CRITICAL") && <span className="font-semibold">{task.priority === "CRITICAL" ? "!!" : "!"}</span>}
+            {(task.priority === "HIGH" || task.priority === "CRITICAL") && <span className="font-bold text-amber-500">{task.priority === "CRITICAL" ? "!!" : "!"}</span>}
           </p>
         </div>
       </div>
-      <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
-        <button className="rounded-lg border bg-background px-2 py-1 hover:bg-muted" onClick={() => onSchedule(task)} type="button">{task.start ? "Move" : "Schedule"}</button>
-        <button className="rounded-lg border bg-background px-2 py-1 hover:bg-muted" onClick={() => setWaiting((open) => !open)} type="button">{task.waitingOn ? "Waiting…" : "Waiting on…"}</button>
-        <a className="rounded-lg border bg-background px-2 py-1 hover:bg-muted" href={task.href} {...(task.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>Open</a>
+      <div className="mt-2 flex flex-wrap gap-1.5 pl-7 text-xs">
+        <button className="rounded-full border bg-background/60 px-2.5 py-1 font-medium hover:border-primary/60 hover:text-primary" onClick={() => onSchedule(task)} type="button">{task.start ? "Move" : "Schedule"}</button>
+        <button className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setWaiting((open) => !open)} type="button">{task.waitingOn ? "Waiting…" : "Waiting on…"}</button>
+        <a className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" href={task.href} {...(task.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>Open</a>
       </div>
       {waiting && (
         <form className="mt-2 flex gap-1.5" onSubmit={(event) => { event.preventDefault(); saveWaiting(who); }}>
@@ -704,18 +748,24 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
   const toInstant = (dayIndex: number, minute: number) => new Date(Date.parse(days[dayIndex]) + minute * MIN);
 
   return (
-    <div className="rounded-2xl border bg-card">
+    <div className="overflow-hidden rounded-2xl border bg-card">
       <div className="grid border-b" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
         <div />
-        {days.map((day) => (
-          <div className={`px-2 py-2 text-center text-sm font-semibold ${dateKey(day, tz) === todayKey ? "text-primary" : ""}`} key={day}>{dayLabel(day, tz)}</div>
-        ))}
+        {days.map((day) => {
+          const today = dateKey(day, tz) === todayKey;
+          return (
+            <div className="flex items-center justify-center gap-2 px-2 py-2.5" key={day}>
+              <span className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${today ? "text-primary" : "text-muted-foreground"}`}>{new Date(day).toLocaleDateString("en-US", { timeZone: tz, weekday: "short" })}</span>
+              <span className={`flex h-7 min-w-7 items-center justify-center rounded-full px-1.5 text-sm font-bold tabular-nums ${today ? "bg-primary text-primary-foreground shadow-[0_0_16px_-2px_hsl(var(--primary)/0.7)]" : ""}`}>{new Date(day).toLocaleDateString("en-US", { timeZone: tz, day: "numeric" })}</span>
+            </div>
+          );
+        })}
       </div>
       <div className={compact ? "h-[34vh] overflow-y-auto" : "max-h-[calc(100vh-14rem)] overflow-y-auto"} ref={scroller}>
         <div className="relative grid" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))`, height }}>
           <div className="relative">
             {Array.from({ length: (range.end - range.start) / 60 }, (_, index) => (
-              <span className="absolute right-2 -translate-y-1/2 text-[11px] tabular-nums text-muted-foreground" key={index} style={{ top: index * 60 * PX_PER_MIN }}>
+              <span className="absolute right-2 -translate-y-1/2 text-[10px] font-medium uppercase tabular-nums tracking-wide text-muted-foreground/80" key={index} style={{ top: index * 60 * PX_PER_MIN }}>
                 {index === 0 ? "" : new Date(Date.UTC(2000, 0, 1, (range.start / 60 + index) % 24)).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric" })}
               </span>
             ))}
@@ -727,7 +777,7 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
             return (
               <div
                 aria-label={`Calendar for ${dayLabel(day, tz)}`}
-                className="relative border-l"
+                className={`relative border-l border-border/60 ${isToday ? "bg-primary/[0.025]" : ""}`}
                 key={day}
                 onDragLeave={() => setHover(null)}
                 onDragOver={(event) => {
@@ -747,16 +797,16 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                   const minute = payload.grabMin ? snap(pointer - payload.grabMin) : snapDown(pointer);
                   onSchedule(task, toInstant(dayIndex, Math.max(0, minute)), payload.minutes);
                 }}
-                style={{ backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${60 * PX_PER_MIN - 1}px, hsl(var(--border)) ${60 * PX_PER_MIN - 1}px, hsl(var(--border)) ${60 * PX_PER_MIN}px)` }}
+                style={{ backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${30 * PX_PER_MIN - 1}px, hsl(var(--border) / 0.35) ${30 * PX_PER_MIN - 1}px, hsl(var(--border) / 0.35) ${30 * PX_PER_MIN}px, transparent ${30 * PX_PER_MIN}px, transparent ${60 * PX_PER_MIN - 1}px, hsl(var(--border) / 0.8) ${60 * PX_PER_MIN - 1}px, hsl(var(--border) / 0.8) ${60 * PX_PER_MIN}px)` }}
               >
                 {[{ from: range.start, to: board.workdayStartMin }, { from: board.dayEndMin, to: range.end }].map((shade) => shade.to > shade.from && (
-                  <div aria-hidden className="absolute inset-x-0 bg-muted/40" key={shade.from} style={{ top: (shade.from - range.start) * PX_PER_MIN, height: (shade.to - shade.from) * PX_PER_MIN }} />
+                  <div aria-hidden className="offhours absolute inset-x-0" key={shade.from} style={{ top: (shade.from - range.start) * PX_PER_MIN, height: (shade.to - shade.from) * PX_PER_MIN }} />
                 ))}
                 {dayMeetings.map((meeting) => {
                   const top = (minutesInZone(meeting.start, tz) - range.start) * PX_PER_MIN;
                   const length = Math.max(15, (Date.parse(meeting.end) - Date.parse(meeting.start)) / MIN);
                   return (
-                    <div className="absolute inset-x-1 overflow-hidden rounded-md border border-slate-400/50 bg-slate-500/15 px-1.5 py-0.5 text-[11px] leading-tight" key={`${meeting.start}-${meeting.title}`} style={{ top, height: length * PX_PER_MIN - 2 }} title={`${meeting.title} ${clock(meeting.start, tz)}–${clock(meeting.end, tz)}`}>
+                    <div className="absolute inset-x-1 overflow-hidden rounded-lg border border-l-[3px] border-sky-400/30 border-l-sky-400 bg-sky-500/10 px-1.5 py-0.5 text-[11px] leading-tight backdrop-blur-sm" key={`${meeting.start}-${meeting.title}`} style={{ top, height: length * PX_PER_MIN - 2 }} title={`${meeting.title} ${clock(meeting.start, tz)}–${clock(meeting.end, tz)}`}>
                       <p className="truncate font-medium">{meeting.title}</p>
                       <p className="text-muted-foreground">{clock(meeting.start, tz)}</p>
                     </div>
@@ -769,7 +819,7 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                   const top = (startMin - range.start) * PX_PER_MIN;
                   return (
                     <div
-                      className={`absolute left-1 right-1 cursor-grab overflow-hidden rounded-md border border-l-4 px-1.5 py-0.5 text-[11px] leading-tight shadow-sm active:cursor-grabbing ${areaStyle(task.areaSlug)}`}
+                      className={`absolute left-1 right-1 cursor-grab overflow-hidden rounded-lg border border-white/20 bg-gradient-to-br px-1.5 py-0.5 text-[11px] leading-tight text-white shadow-lg transition-shadow hover:shadow-xl active:cursor-grabbing ${areaLook(task.areaSlug).block}`}
                       draggable={!resize}
                       key={task.id}
                       onClick={() => { if (!picked) onOpenBlock(task); }}
@@ -784,14 +834,14 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                       <div className="flex items-start justify-between gap-1">
                         <p className="min-w-0 break-words font-semibold">{task.title}</p>
                         <span className="flex shrink-0 gap-0.5">
-                          <button aria-label={`Done: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={(event) => { event.stopPropagation(); onDone(task.id); }} type="button">✓</button>
-                          <button aria-label={`Back to list: ${task.title}`} className="rounded px-1 hover:bg-background/70" onClick={(event) => { event.stopPropagation(); onUnschedule(task.id); }} type="button">×</button>
+                          <button aria-label={`Done: ${task.title}`} className="rounded px-1 hover:bg-white/25" onClick={(event) => { event.stopPropagation(); onDone(task.id); }} type="button">✓</button>
+                          <button aria-label={`Back to list: ${task.title}`} className="rounded px-1 hover:bg-white/25" onClick={(event) => { event.stopPropagation(); onUnschedule(task.id); }} type="button">×</button>
                         </span>
                       </div>
-                      <p className="text-muted-foreground">{clock(task.start as string, tz)} · {fmtLength(Math.round(shownEnd - startMin))}{task.source ? ` · ${SOURCE_LABEL[task.source] ?? task.source}` : ""}</p>
+                      <p className="text-white/80">{clock(task.start as string, tz)} · {fmtLength(Math.round(shownEnd - startMin))}{task.source ? ` · ${SOURCE_LABEL[task.source] ?? task.source}` : ""}</p>
                       <div
                         aria-label={`Change length of ${task.title}`}
-                        className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize hover:bg-foreground/20"
+                        className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize hover:bg-white/30"
                         onClick={(event) => event.stopPropagation()}
                         onPointerDown={(event) => {
                           event.preventDefault();
@@ -836,12 +886,15 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                   </div>
                 )}
                 {hover?.day === dayIndex && (
-                  <div aria-hidden className="pointer-events-none absolute inset-x-1 border-t-2 border-primary" style={{ top: (hover.minute - range.start) * PX_PER_MIN }}>
-                    <span className="rounded bg-primary px-1 text-[10px] text-primary-foreground">{new Date(Date.UTC(2000, 0, 1, 0, hover.minute)).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" })}</span>
+                  <div aria-hidden className="pointer-events-none absolute inset-x-1 h-[30px] rounded-lg border-2 border-dashed border-primary bg-primary/10" style={{ top: (hover.minute - range.start) * PX_PER_MIN }}>
+                    <span className="m-1 inline-block rounded-md bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">{new Date(Date.UTC(2000, 0, 1, 0, hover.minute)).toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" })}</span>
                   </div>
                 )}
                 {isToday && nowMin >= range.start && nowMin <= range.end && (
-                  <div aria-hidden className="pointer-events-none absolute inset-x-0 border-t-2 border-destructive" style={{ top: (nowMin - range.start) * PX_PER_MIN }} />
+                  <div aria-hidden className="pointer-events-none absolute inset-x-0 z-10" style={{ top: (nowMin - range.start) * PX_PER_MIN }}>
+                    <div className="h-[2px] bg-gradient-to-r from-destructive to-destructive/30 shadow-[0_0_8px_hsl(var(--destructive)/0.8)]" />
+                    <span className="now-dot absolute -left-1 -top-[5px] h-3 w-3 rounded-full bg-destructive ring-2 ring-card" />
+                  </div>
                 )}
               </div>
             );
@@ -887,8 +940,8 @@ function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose, onD
     onPick(new Date(naive.getTime() - wrapped * MIN), minutes);
   };
   return (
-    <div aria-modal className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose} role="dialog">
-      <div className="w-full max-w-md rounded-t-2xl border bg-card p-4 shadow-xl sm:rounded-2xl" onClick={(event) => event.stopPropagation()}>
+    <div aria-modal className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center" onClick={onClose} role="dialog">
+      <div className="w-full max-w-md rounded-t-3xl border bg-card p-5 shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{task.start ? "Move" : "Schedule"}</p>
@@ -910,7 +963,7 @@ function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose, onD
             ) : (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {option.starts.map((start) => (
-                  <button className="rounded-lg border px-3 py-2 text-sm hover:bg-muted" key={start.toISOString()} onClick={() => onPick(start, minutes)} type="button">{clock(start.toISOString(), tz)}</button>
+                  <button className="rounded-full border px-3.5 py-2 text-sm font-medium tabular-nums transition-colors hover:border-primary hover:bg-primary/10 hover:text-primary" key={start.toISOString()} onClick={() => onPick(start, minutes)} type="button">{clock(start.toISOString(), tz)}</button>
                 ))}
               </div>
             )}
@@ -925,7 +978,7 @@ function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose, onD
           <p className="mt-2 text-xs text-muted-foreground">Now {dayLabel(task.start, tz)} {clock(task.start, tz)}–{clock(task.end as string, tz)}. Pick a new time above, or change the length and tap a time.</p>
         )}
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <button className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted" onClick={onDone} type="button">Done</button>
+          <button className="rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground" onClick={onDone} type="button">✓ Done</button>
           {task.start ? (
             <button className="rounded-lg border px-3 py-2 text-sm hover:bg-muted" onClick={onUnschedule} type="button">Take off calendar</button>
           ) : (

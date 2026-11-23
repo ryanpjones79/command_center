@@ -91,14 +91,15 @@ export default async function NowPage() {
       <NowAutoRefresh />
 
       {urgentIncident && urgentIncident.id !== current?.id && (
-        <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm" role="status">
+        <div className="rounded-2xl border border-rose-500/40 bg-gradient-to-r from-rose-500/15 to-transparent px-4 py-3 text-sm" role="status">
           <span className="font-semibold">Incident: </span>
           {urgentIncident.title} · <a className="font-medium underline underline-offset-4" href={workHref(urgentIncident)}>Inspect</a>
         </div>
       )}
 
-      <section aria-label="Current action" className="rounded-[1.75rem] border bg-card p-6 shadow-[0_1px_0_rgba(0,0,0,0.02),0_12px_40px_-24px_rgba(0,0,0,0.35)] sm:p-9">
-        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+      <section aria-label="Current action" className="hero-card rounded-[1.75rem] p-6 shadow-[0_30px_80px_-40px_rgba(0,0,0,0.6)] sm:p-9">
+        <p className="eyebrow flex items-center gap-2">
+          <span aria-hidden className="now-dot inline-block h-2 w-2 rounded-full bg-destructive" />
           Now · {localClock(now, tz)}
           {current?.isProtected && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-primary">Protected</span>}
         </p>
@@ -159,13 +160,13 @@ export default async function NowPage() {
           )}
         </p>
         {exceptions.length > 0 && (
-          <Link className="rounded-full border px-3 py-1 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="/time-blocks#decisions">
+          <Link className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-sm font-medium hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="/time-blocks#decisions">
             {exceptions.join(" · ")} →
           </Link>
         )}
       </div>
 
-      <section aria-label="Add a task" className="rounded-2xl border bg-card/70 p-3 sm:p-4">
+      <section aria-label="Add a task" className="rounded-2xl border bg-card p-3 sm:p-4">
         <QuickAddBox targets={targets} timeZone={tz} />
         <p className="mt-1 text-xs text-muted-foreground">
           Loose idea or photo? <Link className="underline underline-offset-2" href="/inbox/capture">Capture it</Link> instead. <Link className="ml-2 font-medium underline underline-offset-2" href="/plan">Open Plan →</Link>
