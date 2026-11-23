@@ -28,6 +28,7 @@ async function main() {
   const defaultDomains = [
     ["Work", "work", "Leadership, analytics, dev workflows. No PHI."],
     ["Rykas", "rykas", "Amazon FBA, reorders, vendor coordination."],
+    ["eBay", "ebay", "Rykas Vault store: listing, markdowns, promotions."],
     ["Casino/AP", "casino-ap", "Legal and compliant AP tracking only."],
     ["Betting Models", "betting-models", "Research queue, model maintenance, data pulls."],
     ["Poker", "poker", "Study plans and live execution prep."],

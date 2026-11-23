@@ -158,3 +158,15 @@ describe("one persistent action", () => {
     expect(results.map((r) => r.decision)).toEqual(["REJECTED", "REJECTED"]);
   });
 });
+
+describe("eBay area", () => {
+  it("eBay items go to Rykas until an eBay area exists, then to eBay", async () => {
+    await ingestSourceEvents(userId, [event({ system: "EBAY", sourceId: "area-1", title: "Mark down item 1", projectKey: "ebay:markdowns-offers", projectName: "eBay: Markdowns & offers" })], db);
+    const [first] = await db.executionTask.findMany({ where: { userId, integrationSourceKey: "EBAY:area-1" }, select: { domain: { select: { slug: true } } } });
+    expect(first.domain.slug).toBe("rykas");
+    await db.executionDomain.create({ data: { userId, name: "eBay", slug: "ebay" } });
+    await ingestSourceEvents(userId, [event({ system: "EBAY", sourceId: "area-2", title: "Mark down item 2", projectKey: "ebay:markdowns-offers", projectName: "eBay: Markdowns & offers" })], db);
+    const [second] = await db.executionTask.findMany({ where: { userId, integrationSourceKey: "EBAY:area-2" }, select: { domain: { select: { slug: true } } } });
+    expect(second.domain.slug).toBe("ebay");
+  });
+});
