@@ -30,6 +30,7 @@ export type BoardTask = {
   status: string;
   isProtected: boolean;
   urgent: boolean;
+  committed?: boolean; // whenBucket TODAY: Ryan committed to it for today
 };
 
 export type BoardProject = { id: string; name: string; tasks: BoardTask[] };
@@ -79,7 +80,8 @@ function toBoardTask(task: DayTask & { priority: string; waitingOn: string | nul
     waitingOn: task.waitingOn,
     status: task.status,
     isProtected: task.isProtected,
-    urgent: task.priority === "CRITICAL" || Boolean(deadline && deadline.getTime() - now.getTime() < 2 * 86_400_000)
+    urgent: task.priority === "CRITICAL" || Boolean(deadline && deadline.getTime() - now.getTime() < 2 * 86_400_000),
+    committed: task.whenBucket === "TODAY"
   };
 }
 

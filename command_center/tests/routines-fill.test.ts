@@ -76,6 +76,16 @@ describe("routines that fill free time", () => {
     expect(proposal.items.some((item) => item.task.title === "eBay listing" && item.routine)).toBe(true);
   });
 
+  it("check-ins from apps are not auto-planned unless committed for today", async () => {
+    const ap = await db.executionDomain.findFirstOrThrow({ where: { userId, slug: "betting-models" } });
+    const alert = await db.executionTask.create({ data: { userId, domainId: ap.id, title: "AP Trader: 1 arb leg still held", sourceSystem: "AP_TRADER", remainingMinutes: 15, dueDate: new Date("2026-11-25T23:00:00Z") } });
+    const committed = await db.executionTask.create({ data: { userId, domainId: ap.id, title: "AP Trader: fee audit", sourceSystem: "AP_TRADER", remainingMinutes: 15, whenBucket: "TODAY" } });
+    const proposal = await proposeDay(userId, db, noCalendar, wed7am);
+    const ids = proposal.items.map((item) => item.task.id);
+    expect(ids).not.toContain(alert.id);
+    expect(ids).toContain(committed.id);
+  });
+
   it("suggested routines are only added when asked, and never twice", async () => {
     const first = await addSuggestedRoutines(userId, ["walk", "slots"], db, wed7am);
     expect(first.added).toEqual(["Walk"]);

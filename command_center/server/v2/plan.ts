@@ -23,6 +23,9 @@ function rank(task: DayTask, from: Date, dayEnd: Date, selectedProjects: Set<str
   const deadline = [task.dueDate, task.expiresAt].filter((value): value is Date => value instanceof Date).sort((a, b) => a.getTime() - b.getTime())[0];
   if (task.isProtected) return { tier: 0, key: task.createdAt.getTime(), reason: "Protected time goes first" };
   if (mustDo.has(task.id)) return { tier: 1, key: task.createdAt.getTime(), reason: "You picked it as a must-do" };
+  // Check-ins (items from Ryan's apps) are cleared, not planned, unless he committed to one for today.
+  const checkin = Boolean(task.sourceSystem && task.sourceSystem !== "ROUTINE" && task.sourceSystem !== "CAPTURE");
+  if (checkin && task.whenBucket !== "TODAY") return null;
   if (deadline && deadline.getTime() - from.getTime() < 2 * 86_400_000) return { tier: 2, key: deadline.getTime(), reason: task.expiresAt ? "Expires soon" : "Due soon" };
   if (task.whenBucket === "TODAY") return { tier: 3, key: task.createdAt.getTime(), reason: "Committed for today" };
   if (task.followUpDate && task.followUpDate < dayEnd) return { tier: 3, key: task.followUpDate.getTime(), reason: "Moved to this day" };
