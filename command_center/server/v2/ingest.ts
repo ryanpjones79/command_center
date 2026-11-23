@@ -14,7 +14,7 @@ import {
 
 export const SYSTEM_DOMAIN_SLUG: Record<string, string> = {
   RYKAS: "rykas",
-  EBAY: "rykas",
+  EBAY: "ebay",
   STORE_ROUTE: "rykas",
   AP_TRADER: "betting-models",
   CASINO_AP: "casino-ap",
@@ -22,6 +22,9 @@ export const SYSTEM_DOMAIN_SLUG: Record<string, string> = {
   EMAIL: "admin",
   CAPTURE: "admin"
 };
+
+// eBay has its own area since 2026-11-22; until that area exists, eBay items go to Rykas.
+const SYSTEM_FALLBACK_SLUG: Record<string, string> = { EBAY: "rykas" };
 
 export type IngestResult = {
   key: string;
@@ -42,8 +45,10 @@ function durationBucket(minutes: number | null | undefined) {
 
 async function resolveDomainId(tx: Tx, userId: string, system: string) {
   const slug = SYSTEM_DOMAIN_SLUG[system] ?? "admin";
+  const fallback = SYSTEM_FALLBACK_SLUG[system];
   const domain =
     (await tx.executionDomain.findFirst({ where: { userId, slug }, select: { id: true } })) ??
+    (fallback ? await tx.executionDomain.findFirst({ where: { userId, slug: fallback }, select: { id: true } }) : null) ??
     (await tx.executionDomain.findFirst({ where: { userId }, orderBy: { createdAt: "asc" }, select: { id: true } }));
   if (!domain) throw new Error("No task domains exist for this user.");
   return domain.id;
