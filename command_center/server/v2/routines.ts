@@ -83,6 +83,23 @@ export function routinesForDay(routines: RoutineView[], day: Date, timeZone: str
   return routines.filter((routine) => routine.active && parseWeekdays(routine.weekdays).includes(weekday));
 }
 
+// A routine copy that wasn't done on its day is simply missed: it counts against that week's target and
+// is closed, so it never shows up later as an unfinished block or gets suggested (and credited) on a later day.
+export async function closeMissedRoutineCopies(userId: string, db: PrismaClient, todayKey: string) {
+  const open = await db.executionTask.findMany({
+    where: { userId, sourceSystem: "ROUTINE", status: { notIn: ["DONE", "DROPPED"] } },
+    select: { id: true, integrationSourceKey: true }
+  });
+  const missed = open.filter((row) => {
+    const day = (row.integrationSourceKey ?? "").split(":")[2] ?? "";
+    return /^\d{4}-\d{2}-\d{2}$/.test(day) && day < todayKey;
+  });
+  if (missed.length === 0) return 0;
+  await db.executionTask.updateMany({ where: { id: { in: missed.map((row) => row.id) } }, data: { status: "DROPPED" } });
+  await db.executionTaskEvent.createMany({ data: missed.map((row) => ({ userId, taskId: row.id, type: "DROPPED", detail: "Routine missed that day" })) });
+  return missed.length;
+}
+
 // Make the day's copies. `day` defaults to today; the evening wrap-up passes tomorrow so it can be planned.
 // A routine with a weekly target (timesPerWeek) gets no copy once it has been done that many times this week.
 export async function materializeRoutines(userId: string, db: PrismaClient, now = new Date(), options: { day?: Date } = {}) {
@@ -105,6 +122,7 @@ export async function materializeRoutines(userId: string, db: PrismaClient, now 
       if (key >= weekKey && key < dateKey) doneThisWeek.set(routineId, (doneThisWeek.get(routineId) ?? 0) + 1);
     }
   }
+  if (isToday) await closeMissedRoutineCopies(userId, db, dateKey);
   let created = 0;
   for (const routine of today) {
     if (routine.timesPerWeek && (doneThisWeek.get(routine.id) ?? 0) >= routine.timesPerWeek) continue;

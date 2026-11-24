@@ -104,3 +104,29 @@ describe("Field Book offers", () => {
     expect(flattenCasinoProject({ system: "EBAY", title: "Mark down", projectKey: "x", projectName: "Y" }).projectKey).toBe("x");
   });
 });
+
+describe("board you can trust", () => {
+  it("closes routine copies missed on an earlier day, keeps today's", async () => {
+    const { closeMissedRoutineCopies } = await import("@/server/v2/routines");
+    const health = await db.executionDomain.findFirstOrThrow({ where: { userId, slug: "health" } });
+    const old = await db.executionTask.create({ data: { userId, domainId: health.id, title: "Old walk", sourceSystem: "ROUTINE", integrationSourceKey: "ROUTINE:zzz:2026-11-20" } });
+    const today = await db.executionTask.create({ data: { userId, domainId: health.id, title: "Today walk", sourceSystem: "ROUTINE", integrationSourceKey: "ROUTINE:zzz:2026-11-25" } });
+    await closeMissedRoutineCopies(userId, db, "2026-11-25");
+    expect((await db.executionTask.findUniqueOrThrow({ where: { id: old.id } })).status).toBe("DROPPED");
+    expect((await db.executionTask.findUniqueOrThrow({ where: { id: today.id } })).status).toBe("NOT_STARTED");
+  });
+
+  it("hides snoozed, parked and expired items; pinned to-dos get planned", async () => {
+    const { loadBoard } = await import("@/server/v2/board");
+    const work = await db.executionDomain.findFirstOrThrow({ where: { userId, slug: "work" } });
+    const snoozed = await db.executionTask.create({ data: { userId, domainId: work.id, title: "Snoozed thing", followUpDate: new Date("2026-11-26T16:00:00Z") } });
+    const parked = await db.executionTask.create({ data: { userId, domainId: work.id, title: "Parked thing", whenBucket: "PARKING_LOT" } });
+    const expired = await db.executionTask.create({ data: { userId, domainId: work.id, title: "Expired offer", expiresAt: new Date("2026-11-25T10:00:00Z") } });
+    const pinned = await db.executionTask.create({ data: { userId, domainId: work.id, title: "Plain one-off to-do", whenBucket: "TODAY", remainingMinutes: 30 } });
+    const board = await loadBoard(userId, db, noCalendar, { now: wed7am });
+    const ids = new Set(board.areas.flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)]).map((task) => task.id));
+    expect([ids.has(snoozed.id), ids.has(parked.id), ids.has(expired.id), ids.has(pinned.id)]).toEqual([false, false, false, true]);
+    const proposal = await proposeDay(userId, db, noCalendar, wed7am);
+    expect(proposal.items.some((item) => item.task.id === pinned.id)).toBe(true);
+  });
+});

@@ -6,6 +6,7 @@ import { materializeRoutines } from "@/server/v2/routines";
 import { loadDaySettings, type CalendarLoader } from "@/server/v2/schedule-service";
 import { SYNC_SOURCE, writeEnabled } from "@/server/v2/calendar-sync";
 import { loadHabits, type Habit } from "@/server/v2/habits";
+import { resolveTools, type ToolLink } from "@/lib/v2/tools";
 
 // Read model for the Plan screen: every open task grouped by area and project (feed items included, labelled
 // by source), plus the calendar for the days shown (Google meetings and RyanOS blocks).
@@ -38,6 +39,7 @@ export type BoardArea = { id: string; slug: string; name: string; projects: Boar
 export type BoardMeeting = { title: string; start: string; end: string };
 
 export type Board = {
+  tools: ToolLink[]; // where each app's check-ins are handled
   now: string;
   timeZone: string;
   workdayStartMin: number;
@@ -146,9 +148,18 @@ export async function loadBoard(
     db.sourceSync.findUnique({ where: { userId_sourceSystem: { userId, sourceSystem: SYNC_SOURCE } } })
   ]);
 
-  const tasks = rows.map((row) => toBoardTask({ ...toDayTask(row), priority: row.priority, waitingOn: row.waitingOn }, now));
+  // Hidden until they matter again: snoozed (Tomorrow / Later / Review) and parked items, and expired offers.
+  // Anything already on the calendar or waiting on someone stays visible.
+  const visible = rows.filter((row) => {
+    if (row.scheduledStart) return true;
+    if (row.expiresAt && row.expiresAt <= now) return false;
+    if (row.status === "WAITING") return true;
+    if (row.whenBucket === "PARKING_LOT") return false;
+    return !(row.followUpDate && row.followUpDate > now);
+  });
+  const tasks = visible.map((row) => toBoardTask({ ...toDayTask(row), priority: row.priority, waitingOn: row.waitingOn }, now));
   // Routine day copies live in the Daily habits strip (and on the calendar once placed), not in the lists.
-  const isRoutine = (index: number) => rows[index].sourceSystem === "ROUTINE";
+  const isRoutine = (index: number) => visible[index].sourceSystem === "ROUTINE";
   const listed = tasks.filter((_, index) => !isRoutine(index));
   const routineTasks = tasks.filter((_, index) => isRoutine(index));
   const isWaiting = (task: BoardTask) => task.status === "WAITING" || Boolean(task.waitingOn);
@@ -182,6 +193,7 @@ export async function loadBoard(
   ];
 
   return {
+    tools: resolveTools(),
     now: now.toISOString(),
     timeZone: tz,
     workdayStartMin: settings.workdayStartMin,

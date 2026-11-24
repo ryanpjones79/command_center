@@ -11,7 +11,8 @@ import { quickAdd, setBlock, setWaitingOn, type TaskChoices } from "@/server/v2/
 import { createHabit, setHabitDone } from "@/server/v2/habits";
 import { materializeRoutines } from "@/server/v2/routines";
 import { loadDaySettings } from "@/server/v2/schedule-service";
-import { addZonedDays, localClock, startOfZonedDay } from "@/lib/v2/zoned-time";
+import { addZonedDays, localClock, localDateKey, startOfZonedDay } from "@/lib/v2/zoned-time";
+import { scheduleAction } from "@/server/v2/schedule-service";
 
 export type PlanMessage = { ok: boolean; message: string };
 
@@ -87,6 +88,42 @@ export async function fillDayAction(): Promise<PlanMessage> {
   const parts = [todos ? `${todos} to-do${todos === 1 ? "" : "s"}` : null, routines ? `${routines} routine${routines === 1 ? "" : "s"}` : null].filter(Boolean).join(" and ");
   const extra = proposal.unplaced.length ? ` ${proposal.unplaced.length} more didn't fit.` : "";
   return { ok: true, message: `Placed ${parts || "nothing new"}. Drag to adjust.${extra}${note}` };
+}
+
+// Pin a to-do to today (Plan my day places pinned to-dos), or unpin it.
+export async function pinTodayAction(taskId: string, on: boolean): Promise<PlanMessage> {
+  const user = await requireUser();
+  const result = await prisma.executionTask.updateMany({
+    where: { id: String(taskId), userId: user.id, status: { notIn: ["DONE", "DROPPED"] } },
+    data: on ? { whenBucket: "TODAY", followUpDate: null } : { whenBucket: "THIS_WEEK" }
+  });
+  refresh();
+  return result.count ? { ok: true, message: on ? "Pinned to today. Plan my day will fit it in." : "Unpinned." } : { ok: false, message: "Task not found." };
+}
+
+// One "review these" block for an app's check-ins instead of a block per alert. Reuses today's review task.
+export async function scheduleCheckinReviewAction(source: string, label: string, count: number, href: string | null): Promise<PlanMessage> {
+  const user = await requireUser();
+  const settings = await loadDaySettings(user.id, prisma);
+  const sample = await prisma.executionTask.findFirst({ where: { userId: user.id, sourceSystem: String(source), status: { notIn: ["DONE", "DROPPED"] } }, select: { domainId: true } });
+  if (!sample) return { ok: false, message: "Nothing to review from that app." };
+  const key = `CHECKIN_REVIEW:${String(source).slice(0, 30)}:${localDateKey(new Date(), settings.timeZone)}`;
+  const minutes = Math.min(45, Math.max(15, 10 + 2 * Math.round(Number(count) || 0)));
+  const title = `Review ${String(label).slice(0, 40)} check-ins (${Math.round(Number(count) || 0)})`;
+  const url = href && /^https:\/\//.test(href) ? href : null;
+  const task = await prisma.executionTask.upsert({
+    where: { userId_integrationSourceKey: { userId: user.id, integrationSourceKey: key } },
+    update: { title, remainingMinutes: minutes, status: "NOT_STARTED", sourceUrl: url },
+    create: { userId: user.id, domainId: sample.domainId, title, remainingMinutes: minutes, whenBucket: "TODAY", integrationSourceKey: key, sourceUrl: url, source: "Check-ins review" },
+    select: { id: true, scheduledStart: true }
+  });
+  if (task.scheduledStart) return { ok: true, message: "Already on today's calendar." };
+  const booked = await scheduleAction(user.id, task.id, prisma, googleCalendarLoader(), {});
+  const note = await sync(user.id);
+  refresh();
+  return booked.type === "BOOKED"
+    ? { ok: true, message: `${title} booked at ${localClock(booked.slot.start, settings.timeZone)}.${note}` }
+    : { ok: true, message: `${title} added to today's to-dos; no free slot right now, drag it onto the calendar.${note}` };
 }
 
 export type PlannedLine = { title: string; time: string; routine: boolean; reason: string };
