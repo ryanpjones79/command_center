@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { fillDayAction, habitDoneAction, moveBlockAction, planDoneAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
+import { fillDayAction, habitDoneAction, moveBlockAction, pinTodayAction, planDoneAction, scheduleCheckinReviewAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
 import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
 import type { Habit } from "@/server/v2/habits";
 import type { QuickTarget } from "@/lib/v2/quick-add";
@@ -140,7 +140,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   const todayList = mineTasks
     .filter((task) => task.urgent || task.committed || (task.start && Date.parse(task.start) < todayEnd))
     .sort((a, b) => Number(b.urgent) - Number(a.urgent) || (a.start ? Date.parse(a.start) : Infinity) - (b.start ? Date.parse(b.start) : Infinity));
-  const shownWaiting = board.waiting.filter(keep);
+  const shownWaiting = board.waiting.filter((task) => !task.source && keep(task));
   const checkins = board.areas
     .flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)])
     .filter(isCheckin)
@@ -150,7 +150,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
     .sort((a, b) => b.tasks.length - a.tasks.length);
   const routinesLeft = board.habits.filter((habit) => habit.todayTaskId && !habit.done).length;
 
-  const openTasks = [...board.areas.flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)]), ...board.waiting];
+  const openTasks = [...board.areas.flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)]), ...board.waiting].filter((task) => !task.source);
   const load = dayLoad(board, blocks, openTasks);
 
   const schedule = (task: BoardTask, start: Date, minutes: number) => {
@@ -267,7 +267,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
               />
               {todayList.length > 0 && !filtering && (
                 <div>
-                  <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Today and due</p>
+                  <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Today</p>
                   <ul className="mt-1 space-y-1.5">
                     {todayList.map((task) => <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={withOverride(task)} timeZone={tz} />)}
                   </ul>
@@ -323,21 +323,19 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
 
             <BoardColumn className={tab === "checkins" ? "" : "hidden lg:flex"} count={checkins.length} hint="clear, don't plan" title="Check-ins">
               {checkinGroups.length === 0 && <p className="rounded-xl border p-3 text-sm text-muted-foreground">All clear. Nothing from your apps.</p>}
-              {checkinGroups.map((group, index) => (
-                <details className="group rounded-xl border bg-background/40" key={group.source} open={index === 0}>
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-                    <span>{group.label}</span>
-                    <span className="flex items-center gap-2">
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">{group.tasks.length}</span>
-                      <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
-                    </span>
-                  </summary>
-                  <ul className="space-y-1.5 px-2 pb-2">
-                    {group.tasks.map((task) => (
-                      <CheckinCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={task} timeZone={tz} />
-                    ))}
-                  </ul>
-                </details>
+              {checkinGroups.map((group) => (
+                <CheckinGroup
+                  count={group.tasks.length}
+                  key={group.source}
+                  label={group.label}
+                  onMessage={(result) => { setMessage(result); router.refresh(); }}
+                  source={group.source}
+                  tool={board.tools.find((tool) => tool.key === group.source) ?? null}
+                >
+                  {group.tasks.map((task) => (
+                    <CheckinCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={task} timeZone={tz} />
+                  ))}
+                </CheckinGroup>
               ))}
             </BoardColumn>
           </div>
@@ -406,6 +404,27 @@ function RoutineCard({ habit, task, timeZone, onMessage, onSchedule, onPick, pic
         </div>
       )}
     </li>
+  );
+}
+
+// One card per app: review them all in the app itself, or book one review block. Items stay listed underneath.
+function CheckinGroup({ source, label, count, tool, onMessage, children }: {
+  source: string; label: string; count: number; tool: { href: string | null; label: string } | null; onMessage: (result: PlanMessage) => void; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  return (
+    <div className="rounded-xl border bg-background/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold">{label} <span className="font-normal text-muted-foreground">· {count} to review</span></p>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+        {tool?.href && <a className="rounded-full bg-primary px-3 py-1 font-semibold text-primary-foreground" href={tool.href} rel="noopener noreferrer" target="_blank">Open {tool.label} ↗</a>}
+        <button className="rounded-full border bg-background/60 px-2.5 py-1 font-medium hover:border-primary/60 hover:text-primary disabled:opacity-50" disabled={pending} onClick={() => startTransition(async () => onMessage(await scheduleCheckinReviewAction(source, label, count, tool?.href ?? null)))} type="button">{pending ? "Booking…" : "Schedule review"}</button>
+        <button aria-expanded={open} className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setOpen((value) => !value)} type="button">{open ? "Hide items" : `Show ${count}`}</button>
+      </div>
+      {open && <ul className="mt-2 space-y-1.5">{children}</ul>}
+    </div>
   );
 }
 
@@ -520,8 +539,13 @@ function TaskCard({ task, timeZone, onDone, onSchedule, onMessage, onPick, picke
         </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5 pl-7 text-xs">
+        {!task.start && (
+          <button aria-pressed={Boolean(task.committed)} className={`rounded-full border px-2.5 py-1 font-medium ${task.committed ? "border-primary/60 bg-primary/15 text-primary" : "bg-background/60 hover:border-primary/60 hover:text-primary"}`} disabled={pending} onClick={() => startTransition(async () => onMessage(await pinTodayAction(task.id, !task.committed)))} title={task.committed ? "Pinned to today; tap to unpin" : "Do it today; Plan my day will fit it in"} type="button">{task.committed ? "📌 Today" : "Today"}</button>
+        )}
         <button className="rounded-full border bg-background/60 px-2.5 py-1 font-medium hover:border-primary/60 hover:text-primary" onClick={() => onSchedule(task)} type="button">{task.start ? "Move" : "Schedule"}</button>
+        <button className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" disabled={pending} onClick={() => startTransition(async () => onMessage(await v2PostponeAction(task.id, "TOMORROW")))} type="button">Tomorrow</button>
         <button className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setWaiting((open) => !open)} type="button">{task.waitingOn ? "Waiting…" : "Waiting on…"}</button>
+        <button className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:border-destructive/50 hover:text-destructive" disabled={pending} onClick={() => { if (window.confirm(`Drop "${task.title}"?`)) startTransition(async () => onMessage(await v2PostponeAction(task.id, "DROP"))); }} type="button">Drop</button>
         <a className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" href={task.href} {...(task.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>Open</a>
       </div>
       {waiting && (
