@@ -209,6 +209,15 @@ async function applyEvent(tx: Tx, userId: string, event: SourceEvent): Promise<I
 // Validates and stores events one at a time. A concurrent insert of the same key
 // (unique violation) is retried once as an update, so overlapping sync runs and
 // retries never create duplicates.
+// Field Book (CASINO_AP) tags each offer with its casino. Ryan doesn't want a project per casino, so offers go
+// straight to the Casino/AP area and the casino name moves into the title ("Thunder Valley: Use $50 free play").
+export function flattenCasinoProject<T extends { system: string; title: string; projectKey?: string | null; projectName?: string | null }>(event: T): T {
+  if (event.system !== "CASINO_AP" || (!event.projectKey && !event.projectName)) return event;
+  const casino = (event.projectName ?? "").replace(/^casino( ap)?:\s*/i, "").trim();
+  const title = casino && !event.title.toLowerCase().includes(casino.toLowerCase()) ? `${casino}: ${event.title}`.slice(0, 300) : event.title;
+  return { ...event, title, projectKey: undefined, projectName: undefined };
+}
+
 export async function ingestSourceEvents(userId: string, rawEvents: unknown[], db: PrismaClient): Promise<IngestResult[]> {
   const results: IngestResult[] = [];
   for (const raw of rawEvents.slice(0, 200)) {
@@ -217,7 +226,7 @@ export async function ingestSourceEvents(userId: string, rawEvents: unknown[], d
       results.push({ key: "invalid", taskId: null, decision: "REJECTED", error: "Event failed validation." });
       continue;
     }
-    const event = parsed.data;
+    const event = flattenCasinoProject(parsed.data);
     const key = integrationKey(event.system, event.sourceId);
     if (event.system === "CCHCS") {
       const flagged = [event.title, event.doneWhen ?? "", event.projectName ?? ""].some((value) => detectPhi(value).length > 0);
