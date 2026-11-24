@@ -8,6 +8,8 @@ import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
 import type { Habit } from "@/server/v2/habits";
 import type { QuickTarget } from "@/lib/v2/quick-add";
 import { NewTaskButton } from "@/components/plan/task-composer";
+import { CoachCard } from "@/components/plan/coach-card";
+import type { CoachMessage } from "@/server/v2/coach";
 import { SOURCE_LABEL, taskMatches, type QuickFilter } from "@/lib/v2/plan-filters";
 import { v2PostponeAction } from "@/app/now/v2-actions";
 import { dayLoad } from "@/lib/v2/day-load";
@@ -77,7 +79,7 @@ function writeClosed(closed: Set<string>) {
   try { window.localStorage.setItem(CLOSED_KEY, JSON.stringify([...closed])); } catch { /* storage unavailable: still works, just not remembered */ }
 }
 
-export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "week" }) {
+export function PlanBoard({ board, view, coach = null }: { board: Board; view: "day" | "3" | "week"; coach?: CoachMessage | null }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<PlanMessage | null>(null);
@@ -205,6 +207,8 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           <Link className="rounded-full border px-3.5 py-2 font-medium text-muted-foreground hover:bg-muted hover:text-foreground" href="/plan/wrap-up" title="Evening wrap-up: close today and plan tomorrow">Wrap up</Link>
         </div>
       </header>
+
+      <CoachCard coach={coach} onMessage={(result) => { setMessage(result); router.refresh(); }} />
 
       <div aria-live="polite" className="text-sm empty:-mt-4">
         {message && <p className={message.ok ? "text-muted-foreground" : "font-medium text-destructive"}>{message.message}</p>}
