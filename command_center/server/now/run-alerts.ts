@@ -1,18 +1,27 @@
 import type { PrismaClient } from "@prisma/client";
-import { alertsForWindow, MAX_LOOKBACK_MS, sendPushover } from "@/server/now/alerts";
+import { alertsForWindow, inQuietHours, MAX_LOOKBACK_MS, sendPushover } from "@/server/now/alerts";
+import { coachPushWorthy, loadCoach } from "@/server/v2/coach";
+import { googleCalendarLoader } from "@/server/v2/day";
+import { startOfZonedDay } from "@/lib/v2/zoned-time";
 import { resolveOwnerUserId } from "@/server/v2/inbound-auth";
-import { loadDaySettings } from "@/server/v2/schedule-service";
+import { loadDaySettings, type CalendarLoader } from "@/server/v2/schedule-service";
 import { materializeRoutines } from "@/server/v2/routines";
 import { syncAllSources } from "@/server/v2/sources/sync";
 import { syncCalendar } from "@/server/v2/calendar-sync";
 
-// Runs source syncs and block alerts once (see app/api/cron/now-alerts/route.ts).
+// Runs source syncs, block alerts and the Coach nudge once (see app/api/cron/now-alerts/route.ts).
+//
+// Coach nudges ("You're free until 4:00. eBay listing for 45 min?", morning plan, evening wrap-up) are
+// sent at most once per message, no more than one an hour, at most COACH_MAX_PER_DAY a day, never in
+// quiet hours, and never in the same run as a block alert.
+
+export const COACH_MAX_PER_DAY = 6;
 
 const RUN_MARKER = "ALERTS";
 
 export async function runNowAlerts(
   db: PrismaClient,
-  options: { now?: Date; dryRun?: boolean; send?: typeof sendPushover; sync?: boolean } = {}
+  options: { now?: Date; dryRun?: boolean; send?: typeof sendPushover; sync?: boolean; calendarLoader?: CalendarLoader } = {}
 ) {
   const now = options.now ?? new Date();
   const userId = await resolveOwnerUserId(db);
@@ -44,7 +53,8 @@ export async function runNowAlerts(
   );
   const already = new Set((await db.alertDelivery.findMany({ where: { key: { in: alerts.map((alert) => alert.key) } }, select: { key: true } })).map((row) => row.key));
   const pending = alerts.filter((alert) => !already.has(alert.key));
-  if (options.dryRun) return { ok: true, dryRun: true, windowStart, wouldSend: pending.map(({ key, title }) => ({ key, title })), suppressedDuplicates: alerts.length - pending.length };
+  const coachNudge = await nextCoachNudge(db, userId, now, settings.timeZone, userSettings?.quietStartMin ?? 1290, userSettings?.quietEndMin ?? 390, options.calendarLoader);
+  if (options.dryRun) return { ok: true, dryRun: true, windowStart, wouldSend: pending.map(({ key, title }) => ({ key, title })), coach: coachNudge?.title ?? null, suppressedDuplicates: alerts.length - pending.length };
 
   const base = (process.env.APP_BASE_URL || process.env.NEXTAUTH_URL || process.env.AUTH_URL || "").replace(/\/+$/, "");
   const send = options.send ?? sendPushover;
@@ -67,6 +77,23 @@ export async function runNowAlerts(
       await db.alertDelivery.delete({ where: { key: alert.key } }).catch(() => undefined);
     }
   }
+  if (coachNudge && sent === 0) {
+    let claimed = true;
+    try {
+      await db.alertDelivery.create({ data: { userId, key: coachNudge.key, kind: "coach", status: "SENDING" } });
+    } catch {
+      claimed = false;
+    }
+    if (claimed) {
+      const result = await send(coachNudge, /^https:\/\//.test(base) ? `${base}/plan` : null);
+      if (result.ok) {
+        sent++;
+        await db.alertDelivery.update({ where: { key: coachNudge.key }, data: { status: "SENT" } });
+      } else {
+        await db.alertDelivery.delete({ where: { key: coachNudge.key } }).catch(() => undefined);
+      }
+    }
+  }
   await db.sourceSync.upsert({
     where: { userId_sourceSystem: { userId, sourceSystem: RUN_MARKER } },
     update: { status: failed ? "FAILING" : "OK", lastAttemptAt: now, ...(failed ? { lastError: "Some alerts failed" } : { lastSuccessAt: now, lastError: null }) },
@@ -75,3 +102,27 @@ export async function runNowAlerts(
   return { ok: failed === 0, sent, failed, sync, calendarSync };
 }
 
+
+// The Coach message worth a phone notification right now, if any (and not throttled).
+export async function nextCoachNudge(
+  db: PrismaClient,
+  userId: string,
+  now: Date,
+  timeZone: string,
+  quietStartMin: number,
+  quietEndMin: number,
+  calendarLoader: CalendarLoader = googleCalendarLoader()
+) {
+  if (inQuietHours(now, timeZone, quietStartMin, quietEndMin)) return null;
+  const coach = await loadCoach(userId, db, calendarLoader, now).catch(() => null);
+  if (!coachPushWorthy(coach)) return null;
+  const key = `coach:${coach.key}`;
+  const [already, lastHour, today] = await Promise.all([
+    db.alertDelivery.findUnique({ where: { key }, select: { id: true } }),
+    db.alertDelivery.count({ where: { userId, kind: "coach", sentAt: { gte: new Date(now.getTime() - 60 * 60_000) } } }),
+    db.alertDelivery.count({ where: { userId, kind: "coach", sentAt: { gte: startOfZonedDay(now, timeZone) } } })
+  ]);
+  if (already || lastHour > 0 || today >= COACH_MAX_PER_DAY) return null;
+  const title = coach.kind === "GAP" ? `Free until ${coach.until}` : coach.kind === "MORNING" ? "Plan your day?" : "Wrap up today?";
+  return { key, title, message: coach.text, taskId: coach.kind === "GAP" ? coach.options[0]?.taskId ?? "" : "" };
+}
