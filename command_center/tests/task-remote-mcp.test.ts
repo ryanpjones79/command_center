@@ -832,3 +832,12 @@ describe("ChatGPT's ui_locales hint", () => {
     expect(() => parseTaskAuthorization(twice, config as never)).toThrow();
   });
 });
+
+describe("consent page headers", () => {
+  it("let the browser send the real Origin on consent and redirect only to ChatGPT", async () => {
+    const { taskOAuthHeaders } = await import("@/server/task-oauth-http");
+    expect(taskOAuthHeaders["Referrer-Policy"]).toBe("same-origin");
+    expect(taskOAuthHeaders["Content-Security-Policy"]).toContain("form-action 'self' https://chatgpt.com;");
+    expect(taskOAuthHeaders["Content-Security-Policy"]).toContain("default-src 'none'");
+  });
+});

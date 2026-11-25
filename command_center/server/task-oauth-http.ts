@@ -9,14 +9,19 @@ import {
   type TaskOAuthConfig,
 } from "@/server/task-oauth";
 
-const headers = {
+// same-origin (not no-referrer): with no-referrer, browsers send "Origin: null" on the consent form POST, which
+// the origin check must refuse. same-origin still sends no referrer to ChatGPT or anywhere else.
+// form-action allows https://chatgpt.com because Chrome applies form-action to the 303 redirect after consent,
+// and ChatGPT's callback (validated in task-oauth.ts) is the only place that redirect can go.
+export const taskOAuthHeaders = {
   "Cache-Control": "no-store",
-  "Referrer-Policy": "no-referrer",
+  "Referrer-Policy": "same-origin",
   "X-Content-Type-Options": "nosniff",
   "Content-Security-Policy":
-    "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'none'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'",
   Vary: "Cookie, Authorization, Origin",
 };
+const headers = taskOAuthHeaders;
 const consentCookie = "__Host-ryanos-task-consent";
 const revokeCookie = "__Host-ryanos-task-revoke";
 const escape = (value: unknown) =>
