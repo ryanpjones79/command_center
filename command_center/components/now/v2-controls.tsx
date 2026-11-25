@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { v2DoneAction, v2ExtendAction, v2InterruptAction, v2PostponeAction, v2ScheduleAction, type ActionMessage } from "@/app/now/v2-actions";
 import { cn } from "@/lib/utils";
+import { nextSlotAction } from "@/app/plan/actions";
 
 const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 const secondary = cn("h-11 rounded-xl border bg-background px-4 text-sm font-medium hover:bg-muted disabled:opacity-60", focusRing);
@@ -79,6 +80,11 @@ export function BlockControls({ taskId, protectedTime = false, ended = false }: 
         <button aria-expanded={panel === "interrupt"} className={secondary} disabled={pending} onClick={() => setPanel(panel === "interrupt" ? "none" : "interrupt")} type="button">
           {ended ? "Not finished" : "Interrupted / blocked"}
         </button>
+        {ended && (
+          <button className={secondary} disabled={pending} onClick={() => run(() => nextSlotAction(taskId))} type="button">
+            Next free slot
+          </button>
+        )}
         <button aria-expanded={panel === "move"} className={secondary} disabled={pending} onClick={() => setPanel(panel === "move" ? "none" : "move")} type="button">
           Move…
         </button>

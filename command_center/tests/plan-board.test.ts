@@ -96,7 +96,7 @@ describe("plan board", () => {
   });
 
   it("urgent items float to the top", () => {
-    const base = { areaSlug: "a", areaName: "A", projectId: null, projectName: null, source: null, href: "#", external: false, start: null, end: null, minutes: 30, waitingOn: null, status: "NOT_STARTED", isProtected: false, expiresAt: null } as const;
+    const base = { areaSlug: "a", areaName: "A", projectId: null, projectName: null, source: null, href: "#", external: false, start: null, end: null, minutes: 30, waitingOn: null, status: "NOT_STARTED", isProtected: false, expiresAt: null, ready: "ready", doing: null, links: [] as BoardTask["links"] } as const;
     const tasks: BoardTask[] = [
       { ...base, id: "1", title: "later", dueDate: "2026-12-20T00:00:00Z", priority: "MEDIUM", urgent: false },
       { ...base, id: "2", title: "high", dueDate: null, priority: "HIGH", urgent: false },
