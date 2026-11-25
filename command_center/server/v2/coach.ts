@@ -2,6 +2,8 @@ import type { PrismaClient } from "@prisma/client";
 import { addZonedDays, atLocalMinutes, localClock, localDateKey, startOfZonedDay, zonedParts } from "@/lib/v2/zoned-time";
 import { loadRoutineProgress, timeOfDayWindow } from "@/server/v2/routines";
 import { loadDaySettings, type CalendarLoader } from "@/server/v2/schedule-service";
+import { blockingEvents, optionalEventsBlock, respectsWorkHours, workWindows } from "@/lib/v2/availability";
+import { HANDOFF_SYSTEMS } from "@/lib/v2/source-events";
 
 // The Coach: one message for right now, worked out from Ryan's own data (no AI). It is shown as a card on
 // Plan with tap replies, and the cron can push the same message to his phone (see server/now/run-alerts.ts).
@@ -16,7 +18,7 @@ export type CoachMessage =
   | { kind: "NOW"; key: string; text: string; taskId: string; title: string; until: string }
   | { kind: "MORNING"; key: string; text: string }
   | { kind: "EVENING"; key: string; text: string }
-  | { kind: "GAP"; key: string; text: string; freeMinutes: number; until: string; untilIso: string; options: CoachOption[] }
+  | { kind: "GAP"; key: string; text: string; freeMinutes: number; until: string; untilIso: string; options: CoachOption[]; workHours?: boolean }
   | { kind: "FREE"; key: string; text: string; freeMinutes: number; until: string };
 
 const ENDED_LOOKBACK_MIN = 45;
@@ -25,7 +27,7 @@ const EVENING_MIN = 20 * 60;
 const MORNING_END_MIN = 11 * 60;
 
 const fmt = (minutes: number) => (minutes >= 60 ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${minutes} min`);
-const isCheckin = (sourceSystem: string | null) => Boolean(sourceSystem && sourceSystem !== "ROUTINE" && sourceSystem !== "CAPTURE");
+const isCheckin = (sourceSystem: string | null) => Boolean(sourceSystem && sourceSystem !== "ROUTINE" && sourceSystem !== "CAPTURE" && !HANDOFF_SYSTEMS.has(sourceSystem));
 
 export async function loadCoach(userId: string, db: PrismaClient, calendarLoader: CalendarLoader, now = new Date()): Promise<CoachMessage | null> {
   const settings = await loadDaySettings(userId, db);
@@ -45,7 +47,7 @@ export async function loadCoach(userId: string, db: PrismaClient, calendarLoader
     }),
     db.executionTask.findMany({
       where: { userId, status: { notIn: ["DONE", "DROPPED", "WAITING"] }, needsJudgment: false, isBlocked: false, scheduledStart: null },
-      select: { id: true, title: true, sourceSystem: true, integrationSourceKey: true, whenBucket: true, dueDate: true, expiresAt: true, followUpDate: true, remainingMinutes: true },
+      select: { id: true, title: true, sourceSystem: true, integrationSourceKey: true, whenBucket: true, dueDate: true, expiresAt: true, followUpDate: true, remainingMinutes: true, workContext: true, domain: { select: { slug: true } } },
       take: 1000
     }),
     db.protectedRoutine.findMany({ where: { userId, active: true }, select: { id: true, timeOfDay: true } }),
@@ -82,25 +84,29 @@ export async function loadCoach(userId: string, db: PrismaClient, calendarLoader
     return { kind: "EVENING", key: `evening:${todayKey}`, text: "Evening. Close out today and pick tomorrow's 1-3 must-dos?" };
   }
 
-  // 5. Free gap until the next fixed thing.
+  // 5. Free gap until the next fixed thing. Optional events don't count; during CCHCS work hours the gap
+  // ends when work ends and only Work (or business-hours) tasks are offered.
+  const work = workWindows(dayStart, tomorrow, settings).find((window) => window.start <= now.getTime() && window.end > now.getTime());
+  const fits = (task: { workContext: string | null; domain: { slug: string } }) => !work || !respectsWorkHours(task.domain.slug, task.workContext);
   const busy = [
-    ...meetings.map((meeting) => ({ start: meeting.start, end: meeting.end })),
+    ...blockingEvents(meetings, optionalEventsBlock()).map((meeting) => ({ start: meeting.start, end: meeting.end })),
     ...blocks.map((block) => ({ start: block.scheduledStart as Date, end: block.scheduledEnd as Date }))
   ].filter((item) => item.end > now);
   if (busy.some((item) => item.start <= now && item.end > now)) return null; // in a meeting
   const next = busy.filter((item) => item.start > now).sort((a, b) => a.start.getTime() - b.start.getTime())[0];
-  const gapEnd = next && next.start < dayEnd ? next.start : dayEnd;
+  const boundary = work ? new Date(Math.min(work.end, dayEnd.getTime())) : dayEnd;
+  const gapEnd = next && next.start < boundary ? next.start : boundary;
   const freeMinutes = Math.floor((gapEnd.getTime() - now.getTime()) / 60_000);
   if (freeMinutes < MIN_GAP) return null;
   const until = localClock(gapEnd, tz);
 
   const options: CoachOption[] = [];
   const minutesOf = (task: { remainingMinutes: number | null }) => task.remainingMinutes ?? 30;
-  for (const task of pinned) options.push({ taskId: task.id, title: task.title, minutes: Math.min(minutesOf(task), freeMinutes), why: "pinned for today", routine: false });
-  for (const task of due) options.push({ taskId: task.id, title: task.title, minutes: Math.min(minutesOf(task), freeMinutes), why: "due today", routine: false });
+  for (const task of pinned.filter(fits)) options.push({ taskId: task.id, title: task.title, minutes: Math.min(minutesOf(task), freeMinutes), why: "pinned for today", routine: false });
+  for (const task of due.filter(fits)) options.push({ taskId: task.id, title: task.title, minutes: Math.min(minutesOf(task), freeMinutes), why: "due today", routine: false });
   const windowOf = new Map(routines.map((routine) => [routine.id, routine.timeOfDay]));
   const copies = open
-    .filter((task) => task.sourceSystem === "ROUTINE" && (task.integrationSourceKey ?? "").endsWith(`:${todayKey}`))
+    .filter((task) => task.sourceSystem === "ROUTINE" && (task.integrationSourceKey ?? "").endsWith(`:${todayKey}`) && fits(task))
     .map((task) => ({ task, routineId: (task.integrationSourceKey ?? "").split(":")[1] ?? "" }))
     .filter(({ routineId }) => windowOf.has(routineId))
     .filter(({ routineId }) => {
@@ -115,10 +121,11 @@ export async function loadCoach(userId: string, db: PrismaClient, calendarLoader
   }
   const key = `gap:${todayKey}:${gapEnd.toISOString()}`;
   if (options.length === 0) {
+    if (work) return null; // work hours: nothing to say
     return { kind: "FREE", key, freeMinutes, until, text: `You're free until ${until} (${fmt(freeMinutes)}) and nothing is waiting. Enjoy it.` };
   }
   const first = options[0];
-  return { kind: "GAP", key, freeMinutes, until, untilIso: gapEnd.toISOString(), options: options.slice(0, 5), text: `You're free until ${until}. ${first.title} for ${fmt(first.minutes)}?` };
+  return { kind: "GAP", key, freeMinutes, until, untilIso: gapEnd.toISOString(), options: options.slice(0, 5), ...(work ? { workHours: true } : {}), text: work ? `Work hours until ${until}. ${first.title} for ${fmt(first.minutes)}?` : `You're free until ${until}. ${first.title} for ${fmt(first.minutes)}?` };
 }
 
 // Which messages are worth a phone notification (the rest only show in the app).

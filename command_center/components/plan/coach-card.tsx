@@ -58,7 +58,7 @@ export function CoachCard({ coach, onMessage, onPlanDay }: { coach: CoachMessage
   };
 
   const option = coach.kind === "GAP" ? coach.options[index % coach.options.length] : null;
-  const text = coach.kind === "GAP" && option ? `You're free until ${coach.until}. ${option.title} for ${fmtLength(option.minutes)}?` : coach.text;
+  const text = coach.kind === "GAP" && option ? `${coach.workHours ? "Work hours" : "You're free"} until ${coach.until}. ${option.title} for ${fmtLength(option.minutes)}?` : coach.text;
 
   return (
     <section aria-label="Coach" aria-live="polite" className="relative overflow-hidden rounded-2xl border border-primary/35 bg-gradient-to-r from-primary/15 via-primary/5 to-transparent p-4">

@@ -1,6 +1,8 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { detectPhi } from "@/lib/execution-validation";
+import { shortTitle } from "@/lib/v2/short-title";
 import {
+  HANDOFF_SYSTEMS,
   integrationKey,
   obligationFingerprint,
   reconcileSourceEvent,
@@ -20,8 +22,34 @@ export const SYSTEM_DOMAIN_SLUG: Record<string, string> = {
   CASINO_AP: "casino-ap",
   CCHCS: "work",
   EMAIL: "admin",
-  CAPTURE: "admin"
+  CAPTURE: "admin",
+  CHATGPT: "opportunities" // career & consulting handoffs
 };
+
+// Long or multi-line titles (a pasted report or alert) become a short title; the full text goes to the note.
+export function splitTitle(event: Pick<SourceEvent, "title" | "details">) {
+  const long = event.title.length > 90 || event.title.includes(String.fromCharCode(10));
+  return { title: long ? shortTitle(event.title, 90) : event.title.trim(), details: event.details ?? (long ? event.title : null) };
+}
+
+// Handoff state for agent-prepared work (lib/v2/readiness.ts convention).
+function handoffFields(event: SourceEvent) {
+  if (!event.handoff) return {};
+  return event.handoff === "PREPARING"
+    ? { status: "WAITING" as const, waitingOn: `Agent: ${(event.preparing ?? "preparing").slice(0, 100)}` }
+    : { status: "NOT_STARTED" as const, waitingOn: null };
+}
+
+// Drafts and sources become task references (replaced when the source sends new ones).
+async function syncReferences(tx: Tx, userId: string, taskId: string, event: SourceEvent) {
+  const rows = [
+    event.draftUrl ? { provider: "draft", title: (event.draftTitle ?? "Draft").slice(0, 120), url: event.draftUrl } : null,
+    event.url && HANDOFF_SYSTEMS.has(event.system) ? { provider: "source", title: event.system === "CHATGPT" ? "Source" : event.system, url: event.url } : null
+  ].filter((row): row is { provider: string; title: string; url: string } => Boolean(row));
+  if (rows.length === 0) return;
+  await tx.executionTaskReference.deleteMany({ where: { userId, taskId, provider: { in: rows.map((row) => row.provider) } } });
+  await tx.executionTaskReference.createMany({ data: rows.map((row) => ({ userId, taskId, ...row })) });
+}
 
 // eBay has its own area since 2026-11-22; until that area exists, eBay items go to Rykas.
 const SYSTEM_FALLBACK_SLUG: Record<string, string> = { EBAY: "rykas" };
@@ -55,6 +83,11 @@ async function resolveDomainId(tx: Tx, userId: string, system: string) {
 }
 
 async function resolveProjectId(tx: Tx, userId: string, domainId: string, event: SourceEvent) {
+  // Handoffs reuse Ryan's existing project when the name matches (e.g. "Freelance launch").
+  if (HANDOFF_SYSTEMS.has(event.system) && event.projectName) {
+    const mine = await tx.executionProject.findFirst({ where: { userId, name: event.projectName, closedAt: null }, select: { id: true } });
+    if (mine) return mine.id;
+  }
   if (!event.projectKey) return null;
   const existing = await tx.executionProject.findFirst({
     where: { userId, sourceSystem: event.system, sourceKey: event.projectKey },
@@ -110,6 +143,26 @@ async function applyEvent(tx: Tx, userId: string, event: SourceEvent): Promise<I
   const decision = reconcileSourceEvent(event, existing);
   const eventKey = `${key}:${event.state}:${fingerprint}:${event.observedAt}`;
 
+  const split = splitTitle(event);
+  if (decision.type === "CREATE" && event.ryanosTaskId) {
+    // Attach to the task Ryan already has instead of creating a second one.
+    const mine = await tx.executionTask.findFirst({ where: { id: event.ryanosTaskId, userId, integrationSourceKey: null, status: { notIn: ["DONE", "DROPPED"] } }, select: { id: true } });
+    if (mine) {
+      await tx.executionTask.update({
+        where: { id: mine.id },
+        data: {
+          integrationSourceKey: key,
+          ...sourceFields(event, fingerprint),
+          ...(split.details ? { note: split.details } : {}),
+          ...(event.durationMinutes ? { remainingMinutes: event.durationMinutes } : {}),
+          ...handoffFields(event)
+        }
+      });
+      await syncReferences(tx, userId, mine.id, event);
+      await logEvent(tx, userId, mine.id, "LINKED", `${event.system} attached to existing task`, eventKey);
+      return { key, taskId: mine.id, decision: decision.type };
+    }
+  }
   if (decision.type === "CREATE") {
     const domainId = await resolveDomainId(tx, userId, event.system);
     const projectId = await resolveProjectId(tx, userId, domainId, event);
@@ -123,7 +176,8 @@ async function applyEvent(tx: Tx, userId: string, event: SourceEvent): Promise<I
         userId,
         domainId,
         projectId,
-        title: event.title,
+        title: split.title,
+        note: split.details,
         type: "ACTION",
         status: event.state === "RESOLVED" ? "DONE" : "NOT_STARTED",
         completedAt: event.state === "RESOLVED" ? new Date() : null,
@@ -139,10 +193,12 @@ async function applyEvent(tx: Tx, userId: string, event: SourceEvent): Promise<I
         integrationSourceKey: key,
         source: `${event.system} feed`,
         ...sourceFields(event, fingerprint),
-        sourceVerifiedAt: event.state === "RESOLVED" ? new Date(event.observedAt) : null
+        sourceVerifiedAt: event.state === "RESOLVED" ? new Date(event.observedAt) : null,
+        ...(event.state === "RESOLVED" ? {} : handoffFields(event))
       },
       select: { id: true }
     });
+    await syncReferences(tx, userId, created.id, event);
     await logEvent(tx, userId, created.id, "ARRIVED", `${event.system} ${event.kind}`, eventKey);
     return { key, taskId: created.id, decision: decision.type };
   }
@@ -177,7 +233,8 @@ async function applyEvent(tx: Tx, userId: string, event: SourceEvent): Promise<I
       where: { id: taskId },
       data: {
         ...sourceFields(event, fingerprint),
-        title: event.title,
+        title: split.title,
+        ...(split.details ? { note: split.details } : {}),
         dueDate: event.dueAt ? new Date(event.dueAt) : null,
         status: "NOT_STARTED",
         completedAt: null,
@@ -196,10 +253,13 @@ async function applyEvent(tx: Tx, userId: string, event: SourceEvent): Promise<I
     where: { id: taskId },
     data: {
       ...sourceFields(event, fingerprint),
-      title: event.title,
-      dueDate: event.dueAt ? new Date(event.dueAt) : undefined
+      title: split.title,
+      ...(split.details ? { note: split.details } : {}),
+      dueDate: event.dueAt ? new Date(event.dueAt) : undefined,
+      ...handoffFields(event)
     }
   });
+  await syncReferences(tx, userId, taskId, event);
   if (existing?.sourceFingerprint !== fingerprint || existing?.sourceState !== event.state) {
     await logEvent(tx, userId, taskId, "SOURCE_UPDATED", `${event.system} ${event.state}`, eventKey);
   }
@@ -228,8 +288,8 @@ export async function ingestSourceEvents(userId: string, rawEvents: unknown[], d
     }
     const event = flattenCasinoProject(parsed.data);
     const key = integrationKey(event.system, event.sourceId);
-    if (event.system === "CCHCS") {
-      const flagged = [event.title, event.doneWhen ?? "", event.projectName ?? ""].some((value) => detectPhi(value).length > 0);
+    if (event.system === "CCHCS" || HANDOFF_SYSTEMS.has(event.system)) {
+      const flagged = [event.title, event.doneWhen ?? "", event.projectName ?? "", event.details ?? ""].some((value) => detectPhi(value).length > 0);
       if (flagged) {
         results.push({ key, taskId: null, decision: "REJECTED", error: "Rejected: possible patient information (NO PHI)." });
         continue;

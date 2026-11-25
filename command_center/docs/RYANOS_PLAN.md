@@ -42,6 +42,23 @@ Plan is now the main place to schedule. The layout changed: the **calendar is th
 - **Handing over:** the agent attaches its work as task references (`ExecutionTaskReference`, `provider = "draft"` or `"source"`, `https://` URLs or RyanOS paths only) and sets `status = NOT_STARTED`, `waitingOn = null`. Code: `lib/v2/readiness.ts`; tests: `tests/plan-readiness.test.ts`.
 - First end-to-end test (local database): Freelance launch → "Draft Upwork/Contra profile (send nothing until approved)". Preparing → draft and Upwork link attached → ready → booked in one click → missed → moved to the next free slot, still one task with both links.
 
+## A day he'd follow (changed 2026-11-25, second pass)
+
+- **Preview my day** is the one planning button (the header copy was removed; the Coach's morning button opens the same preview). It proposes up to **3 commitments**, ticked: protected-area to-dos, what Ryan pinned or picked, real deadlines (due or expiring within two days; overdue work is placed too), work moved to today, then the next action of a project he chose for the week (one per project, the one furthest behind its weekly minutes first). If there are fewer than three, a routine behind its weekly pace fills the rest. Up to 4 more go under **If there's time**, unticked. Every line shows why it was picked; anything that didn't fit is listed with the reason. The interruption buffer stays free. Code: `server/v2/plan.ts`.
+- **Wrap-up's plan-tomorrow and the Coach's fallback** book commitments only.
+- **Availability (one set of rules, `lib/v2/availability.ts`)**, used by Bookable today, the preview, one-click Book, Next free slot, the Coach and Now:
+  - Busy: timed Google Calendar events. All-day events never block.
+  - Optional: events marked "Show as free" in Google, or titled like "A vs B" / "A @ B" (`RYANOS_OPTIONAL_EVENT_WORDS`, `|`-separated, overrides the default). They're drawn dashed and listed under Bookable, but don't block unless `RYANOS_OPTIONAL_EVENTS_BLOCK=true`.
+  - Protected: CCHCS work hours on weekdays (Settings workday start/end) for everything except Work-area tasks and business-hours tasks (PHONE, ERRAND, DESK); Family, Kids and Health blocks.
+  - Unknown: if Google can't be read, Bookable says the times are unconfirmed, and the preview and booking messages say so.
+  - "What this counts" under Bookable lists the sources (with status and time read) and protections.
+- **Booking re-checks the slot.** One-click "Book 7:15 PM" and "Book N blocks" call `bookSlot`, which re-checks the exact slot under the booking lock with the same rules and refuses it if a meeting, protected time or another block now overlaps. Drag-and-drop and "Pick a time" stay manual: they allow overlaps and report them.
+- **Ready for you** cards show context instead of a badge: Due today / Due tomorrow / Overdue, Pinned today, Weekly priority, Draft attached.
+- **Short titles:** long imported titles show as their first line or sentence (`lib/v2/short-title.ts`); the full text is in the tooltip and task details. New imports store the full text in the note (see RYANOS_V2_INTEGRATIONS.md).
+- **Now** shows the current block, else the meeting you're in, else one thing that fits (only Work tasks during work hours), else the next block on the calendar, with its length and a Details link. Missed blocks never take over: they're listed under **Needs rescheduling** with Next free slot, Move… and Did it. During work hours with nothing planned it says "Work hours until 5:30 PM".
+- **Task details** (`/tasks?taskId=…`) now show the task even when it's done, with its note, draft and source.
+- **Fix:** on blocks shorter than 30 minutes the resize handle no longer covers the ✓ and × buttons.
+
 ## Files
 
 `app/plan/` (page, server actions), `components/plan/plan-board.tsx`, `server/v2/board.ts` (read model), `server/v2/plan-board.ts` (schedule/move/unschedule, quick add, waiting-on), `lib/v2/quick-add.ts` (parser), `lib/v2/plan-filters.ts` (search, filters, #-suggestions), `server/v2/calendar-sync.ts` (Google two-way sync, see RYANOS_V2_INTEGRATIONS.md). Tests: `tests/quick-add.test.ts`, `tests/plan-filters.test.ts`, `tests/plan-board.test.ts`, `tests/calendar-sync.test.ts`.

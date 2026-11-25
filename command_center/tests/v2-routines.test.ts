@@ -68,7 +68,7 @@ describe("placing routines", () => {
     const plan = await proposeDay(userId, db, async () => [], wednesday);
     const placed = plan.items.find((item) => item.task.id === workout.id);
     expect(placed?.routine).toBe(true);
-    expect(placed?.reason).toMatch(/^Routine · 0 of 1 this week/);
+    expect(placed?.reason).toMatch(/0 of 1 this week/);
   });
 
   it("paused routines are not placed", async () => {

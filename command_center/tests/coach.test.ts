@@ -34,8 +34,13 @@ describe("coach", () => {
     if (coach?.kind !== "GAP") return;
     expect(coach.until).toBe("4:15 PM");
     expect(coach.options[0]).toMatchObject({ taskId: pinned.id, why: "pinned for today", minutes: 60 });
-    expect(coach.options.some((option) => option.title === "eBay listing" && option.routine)).toBe(true);
-    expect(coach.text).toBe("You're free until 4:15 PM. Draft vendor timeline for 1h?");
+    // 2:30 PM is CCHCS work time: only the Work task is offered, not the eBay routine.
+    expect(coach.options.some((option) => option.title === "eBay listing")).toBe(false);
+    expect(coach.text).toBe("Work hours until 4:15 PM. Draft vendor timeline for 1h?");
+    // After work (6 PM, gymnastics over) the personal routine is offered.
+    const evening = await loadCoach(userId, db, calendar, pst("2026-11-25T18:00:00"));
+    expect(evening?.kind).toBe("GAP");
+    if (evening?.kind === "GAP") expect(evening.options.some((option) => option.title === "eBay listing" && option.routine)).toBe(true);
   });
 
   it("a block that just ended asks if it's done; inside a block it stays quiet", async () => {

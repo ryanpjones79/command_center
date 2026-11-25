@@ -7,6 +7,7 @@ export type CalendarEvent = {
   end: Date;
   isAllDay: boolean;
   location: string | null;
+  showAsFree?: boolean; // Google "Show as free" (transparency: transparent)
 };
 
 export type WorkBlock = {
@@ -250,6 +251,7 @@ type GoogleEventItem = {
   summary?: string | null;
   location?: string | null;
   status?: string | null;
+  transparency?: string | null;
   start?: { date?: string | null; dateTime?: string | null } | null;
   end?: { date?: string | null; dateTime?: string | null } | null;
   extendedProperties?: { private?: Record<string, string> | null } | null;
@@ -282,10 +284,11 @@ export function toCalendarEvents(items: GoogleEventItem[], options: { includeAll
         end: end.date,
         isAllDay: start.isAllDay,
         location: event.location ?? null,
+        showAsFree: event.transparency === "transparent",
         status: event.status ?? "confirmed"
       };
     })
-    .filter((event): event is CalendarEvent & { status: string } => Boolean(event))
+    .filter((event): event is NonNullable<typeof event> => Boolean(event))
     .filter((event) => event.status !== "cancelled" && !isCancelledSummary(event.summary))
     .filter((event) => options.includeAllDay || !event.isAllDay)
     .sort((left, right) => left.start.getTime() - right.start.getTime())

@@ -481,8 +481,8 @@ export async function getTaskMaintenanceData(
           : {}),
         ...(filters?.status && filters.status !== "ALL"
           ? { status: filters.status as never }
-          : filters?.status === "ALL"
-            ? {}
+          : filters?.status === "ALL" || filters?.taskId
+            ? {} // one task's details show it whatever its status (a done task keeps its draft and source)
             : { status: { notIn: ["DONE", "DROPPED"] } }),
         ...(filters?.domainId ? { domainId: filters.domainId } : {}),
         ...(filters?.projectId ? { projectId: filters.projectId } : {}),

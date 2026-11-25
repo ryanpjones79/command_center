@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { NowAutoRefresh } from "@/components/now/now-controls";
-import { BlockControls, ScheduleButton } from "@/components/now/v2-controls";
+import { BlockControls, RescheduleRow, ScheduleButton } from "@/components/now/v2-controls";
+import { shortTitle } from "@/lib/v2/short-title";
 import { QuickAddBox } from "@/components/plan/plan-board";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
@@ -64,6 +65,7 @@ function Context({ task, timeZone, links = [] }: { task: DayTask; timeZone: stri
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <WorkLink task={task} />
         {task.projectName && <span className="text-sm text-muted-foreground">Project: {task.projectName}</span>}
+        {(task.sourceUrl || task.note || task.title.length > 72) && <a className="text-sm font-medium underline underline-offset-4" href={`/tasks?taskId=${encodeURIComponent(task.id)}`}>Details{task.note ? " (full note)" : ""}</a>}
       </div>
       {links.length > 0 && (
         <ul aria-label="Drafts and sources" className="flex flex-wrap gap-2 text-sm">
@@ -80,18 +82,33 @@ function Context({ task, timeZone, links = [] }: { task: DayTask; timeZone: stri
   );
 }
 
+// One missed block: short title, when it was, length, details, and the reschedule controls.
+function MissedItem({ task, timeZone }: { task: DayTask; timeZone: string }) {
+  return (
+    <li className="rounded-xl border bg-card p-3">
+      <p className="break-words text-sm font-medium" title={task.title}>{shortTitle(task.title)}</p>
+      <p className="text-xs text-muted-foreground">
+        Was {(task.scheduledStart as Date).toLocaleDateString("en-US", { timeZone, weekday: "short" })} {localClock(task.scheduledStart as Date, timeZone)} · {minutesText(task.minutes)} ·{" "}
+        <a className="underline underline-offset-2" href={`/tasks?taskId=${encodeURIComponent(task.id)}`}>Details</a>
+      </p>
+      <RescheduleRow taskId={task.id} />
+    </li>
+  );
+}
+
 export default async function NowPage() {
   const user = await requireUser();
   const [model, targets] = await Promise.all([loadDay(user.id, prisma, googleCalendarLoader()), loadQuickTargets(user.id, prisma)]);
   const { settings, now } = model;
   const tz = settings.timeZone;
   const current = model.current;
-  const closeOut = !current ? model.endedOpen[0] ?? null : null;
-  const recommendation = !current && !closeOut && !model.currentMeeting ? recommendNow(model) : null;
+  // A missed block never takes over Now: it goes to "Needs rescheduling" below.
+  const recommendation = !current && !model.currentMeeting ? recommendNow(model) : null;
+  const upNext = !current && !model.currentMeeting && !recommendation ? model.blocks.find((task) => (task.scheduledStart as Date) > now) ?? null : null;
+  const missed = model.endedOpen;
   const freeUntil = model.next?.start ?? null;
 
   const exceptions = [
-    model.endedOpen.length > (closeOut ? 1 : 0) ? `${model.endedOpen.length - (closeOut ? 1 : 0)} ended block${model.endedOpen.length - (closeOut ? 1 : 0) === 1 ? "" : "s"} to close` : null,
     model.expired.length ? `${model.expired.length} expired offer${model.expired.length === 1 ? "" : "s"}` : null,
     model.judgmentDue.length ? `${model.judgmentDue.length} to sort` : null,
     model.stillWorthIt.length ? `${model.stillWorthIt.length} put off 3+ times` : null,
@@ -100,7 +117,7 @@ export default async function NowPage() {
   ].filter(Boolean);
   const urgentIncident = model.openIncidents[0] ?? null;
   // Drafts and sources attached to the task in focus (the same task row Plan booked).
-  const focus = current ?? closeOut ?? recommendation;
+  const focus = current ?? recommendation ?? upNext;
   const links: TaskLink[] = focus
     ? (await prisma.executionTaskReference.findMany({ where: { userId: user.id, taskId: focus.id }, select: { title: true, url: true, provider: true }, orderBy: { createdAt: "asc" }, take: 4 }))
         .map((row) => ({ title: row.title, url: safeLink(row.url) ?? "", provider: row.provider }))
@@ -127,7 +144,7 @@ export default async function NowPage() {
 
         {current ? (
           <>
-            <h1 className="font-display mt-3 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{current.title}</h1>
+            <h1 className="font-display mt-3 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl" title={current.title}>{shortTitle(current.title)}</h1>
             <p className="mt-3 text-base">
               <span className="font-semibold">{minutesText(Math.max(0, Math.ceil(((current.scheduledEnd as Date).getTime() - now.getTime()) / 60_000)))} left</span>
               <span className="text-muted-foreground"> · until {localClock(current.scheduledEnd as Date, tz)}</span>
@@ -138,35 +155,35 @@ export default async function NowPage() {
             )}
             <div className="mt-6"><BlockControls protectedTime={current.isProtected} taskId={current.id} /></div>
           </>
-        ) : closeOut ? (
-          <>
-            <p className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-300">Ended at {localClock(closeOut.scheduledEnd as Date, tz)} without an outcome</p>
-            <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{closeOut.title}</h1>
-            <Context links={links} task={closeOut} timeZone={tz} />
-            <div className="mt-6"><BlockControls ended protectedTime={closeOut.isProtected} taskId={closeOut.id} /></div>
-          </>
         ) : model.currentMeeting ? (
           <>
-            <h1 className="font-display mt-3 break-words text-4xl font-medium leading-[1.1] tracking-tight">{model.currentMeeting.title}</h1>
+            <h1 className="font-display mt-3 break-words text-4xl font-medium leading-[1.1] tracking-tight">{shortTitle(model.currentMeeting.title)}</h1>
             <p className="mt-3 text-muted-foreground">Calendar · until {localClock(model.currentMeeting.end, tz)}</p>
           </>
         ) : recommendation ? (
           <>
             <p className="mt-3 text-base text-muted-foreground">
-              You&apos;re free{freeUntil ? ` until ${localClock(freeUntil, tz)}` : ""}. One thing that fits:
+              {model.workUntil ? `Work hours until ${localClock(model.workUntil, tz)}. One work task that fits:` : `You're free${freeUntil ? ` until ${localClock(freeUntil, tz)}` : ""}. One thing that fits:`}
             </p>
-            <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{recommendation.title}</h1>
+            <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl" title={recommendation.title}>{shortTitle(recommendation.title)}</h1>
             <p className="mt-2 text-sm text-muted-foreground">About {minutesText(recommendation.minutes)}</p>
             <Context links={links} task={recommendation} timeZone={tz} />
             <div className="mt-6"><ScheduleButton label="Do it now" startNow taskId={recommendation.id} /></div>
             <p className="mt-2 text-xs text-muted-foreground">Or keep the time free; buffer is part of the plan.</p>
           </>
+        ) : upNext ? (
+          <>
+            <p className="mt-3 text-base text-muted-foreground">{model.workUntil ? `Work hours until ${localClock(model.workUntil, tz)}. ` : ""}Next on your calendar at {localClock(upNext.scheduledStart as Date, tz)}:</p>
+            <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl" title={upNext.title}>{shortTitle(upNext.title)}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">{minutesText(Math.round(((upNext.scheduledEnd as Date).getTime() - (upNext.scheduledStart as Date).getTime()) / 60_000))} · {localClock(upNext.scheduledStart as Date, tz)}–{localClock(upNext.scheduledEnd as Date, tz)}</p>
+            <Context links={links} task={upNext} timeZone={tz} />
+          </>
         ) : (
           <>
             <h1 className="font-display mt-3 text-4xl font-medium leading-[1.1] tracking-tight">
-              Nothing needs you{freeUntil ? ` until ${localClock(freeUntil, tz)}` : " right now"}.
+              {model.workUntil ? `Work hours until ${localClock(model.workUntil, tz)}.` : `Nothing needs you${freeUntil ? ` until ${localClock(freeUntil, tz)}` : " right now"}.`}
             </h1>
-            <p className="mt-3 text-muted-foreground">Keep the buffer, or look at <Link className="font-medium text-foreground underline underline-offset-4" href="/plan">your plan</Link>.</p>
+            <p className="mt-3 text-muted-foreground">{model.workUntil ? "Protected for CCHCS. " : "Keep the buffer, or "}<Link className="font-medium text-foreground underline underline-offset-4" href="/plan">{model.workUntil ? "Plan the evening" : "look at your plan"}</Link>.</p>
           </>
         )}
       </section>
@@ -186,6 +203,23 @@ export default async function NowPage() {
           </Link>
         )}
       </div>
+
+      {missed.length > 0 && (
+        <section aria-label="Needs rescheduling" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4">
+          <h2 className="text-sm font-semibold">Needs rescheduling <span className="font-normal text-muted-foreground">· {missed.length} missed block{missed.length === 1 ? "" : "s"}</span></h2>
+          <ul className="mt-2 space-y-3">
+            {missed.slice(0, 5).map((task) => <MissedItem key={task.id} task={task} timeZone={tz} />)}
+          </ul>
+          {missed.length > 5 && (
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">Show {missed.length - 5} more</summary>
+              <ul className="mt-2 space-y-3">
+                {missed.slice(5, 25).map((task) => <MissedItem key={task.id} task={task} timeZone={tz} />)}
+              </ul>
+            </details>
+          )}
+        </section>
+      )}
 
       <section aria-label="Add a task" className="rounded-2xl border bg-card p-3 sm:p-4">
         <QuickAddBox targets={targets} timeZone={tz} />

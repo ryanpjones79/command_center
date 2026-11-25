@@ -12,7 +12,8 @@ import { createHabit, setHabitDone } from "@/server/v2/habits";
 import { materializeRoutines } from "@/server/v2/routines";
 import { loadDaySettings } from "@/server/v2/schedule-service";
 import { addZonedDays, localClock, localDateKey, startOfZonedDay } from "@/lib/v2/zoned-time";
-import { scheduleAction } from "@/server/v2/schedule-service";
+import { bookSlot, scheduleAction } from "@/server/v2/schedule-service";
+import { MAX_COMMITMENTS } from "@/server/v2/plan";
 
 export type PlanMessage = { ok: boolean; message: string };
 
@@ -80,7 +81,7 @@ export async function fillDayAction(): Promise<PlanMessage> {
   if (proposal.items.length === 0) {
     return { ok: true, message: proposal.unplaced.length ? `Nothing fits in today's free time (${proposal.unplaced.length} waiting). Drag one in or make room.` : "Nothing is waiting to be placed today." };
   }
-  const result = await acceptPlan(user.id, prisma, proposal.items.map((item) => ({ taskId: item.task.id, start: item.slot.start.toISOString(), end: item.slot.end.toISOString() })));
+  const result = await acceptPlan(user.id, prisma, proposal.items.filter((item) => item.group === "COMMIT").map((item) => ({ taskId: item.task.id, start: item.slot.start.toISOString(), end: item.slot.end.toISOString() })));
   const note = await sync(user.id);
   refresh();
   const routines = proposal.items.filter((item) => item.routine && result.booked.includes(item.task.id)).length;
@@ -138,7 +139,7 @@ export async function planTomorrowAction(mustDo: string[]): Promise<TomorrowResu
   const owned = await prisma.executionTask.findMany({ where: { userId: user.id, id: { in: picks } }, select: { id: true } });
   await materializeRoutines(user.id, prisma, new Date(), { day: tomorrow });
   const proposal = await proposeDay(user.id, prisma, googleCalendarLoader(), new Date(), { day: tomorrow, mustDo: owned.map((row) => row.id) });
-  const result = await acceptPlan(user.id, prisma, proposal.items.map((item) => ({ taskId: item.task.id, start: item.slot.start.toISOString(), end: item.slot.end.toISOString() })));
+  const result = await acceptPlan(user.id, prisma, proposal.items.filter((item) => item.group === "COMMIT").map((item) => ({ taskId: item.task.id, start: item.slot.start.toISOString(), end: item.slot.end.toISOString() })));
   const note = await sync(user.id);
   refresh();
   const placed = proposal.items
@@ -175,8 +176,8 @@ export async function addHabitAction(input: { title: string; weekdays: number[];
 
 // ---- Plan as the scheduling workspace: preview, then book; one-click next slot; missed blocks ----
 
-export type PreviewLine = { taskId: string; title: string; start: string; end: string; reason: string; routine: boolean; areaSlug: string };
-export type PreviewResult = { ok: boolean; message: string; items: PreviewLine[]; unplaced: { title: string; reason: string }[] };
+export type PreviewLine = { taskId: string; title: string; start: string; end: string; reason: string; routine: boolean; areaSlug: string; group: "COMMIT" | "EXTRA" };
+export type PreviewResult = { ok: boolean; message: string; items: PreviewLine[]; unplaced: { title: string; reason: string }[]; calendarKnown: boolean; bufferMinutes: number };
 
 // "Plan my day", step 1: propose today's blocks without booking anything. Ryan reviews the preview on the
 // calendar, unticks what he doesn't want, then books the rest with bookPlanAction.
@@ -191,13 +192,17 @@ export async function previewDayAction(): Promise<PreviewResult> {
     end: item.slot.end.toISOString(),
     reason: item.reason,
     routine: Boolean(item.routine),
-    areaSlug: item.task.domainSlug
+    areaSlug: item.task.domainSlug,
+    group: item.group
   }));
   const unplaced = proposal.unplaced.slice(0, 12).map((item) => ({ title: item.task.title, reason: item.reason }));
+  const base = { ok: true, items, unplaced, calendarKnown: proposal.calendarKnown, bufferMinutes: proposal.bufferMinutes };
+  const unknown = proposal.calendarKnown ? "" : " Google Calendar couldn't be read, so check for meetings first.";
   if (items.length === 0) {
-    return { ok: true, items, unplaced, message: unplaced.length ? `Nothing fits in today's free time (${proposal.unplaced.length} waiting).` : "Nothing is waiting to be placed today." };
+    return { ...base, message: (unplaced.length ? `Nothing fits in today's free time (${proposal.unplaced.length} waiting).` : "Nothing is waiting to be placed today.") + unknown };
   }
-  return { ok: true, items, unplaced, message: `Proposed ${items.length} block${items.length === 1 ? "" : "s"}. Nothing is booked yet.` };
+  const commits = items.filter((item) => item.group === "COMMIT").length;
+  return { ...base, message: `Up to ${MAX_COMMITMENTS} commitments proposed (${commits}); extras are unticked. Nothing is booked yet.${unknown}` };
 }
 
 // "Plan my day", step 2: book the previewed blocks Ryan kept. Each slot is re-checked under the booking lock.
@@ -205,11 +210,19 @@ export async function bookPlanAction(items: { taskId: string; start: string; end
   const user = await requireUser();
   const clean = (Array.isArray(items) ? items : []).slice(0, 40).map((item) => ({ taskId: String(item.taskId), start: String(item.start), end: String(item.end) }));
   if (clean.length === 0) return { ok: false, message: "Nothing picked to book." };
-  const result = await acceptPlan(user.id, prisma, clean);
+  // Same availability rules as the preview, re-checked per slot under the booking lock.
+  const calendar = googleCalendarLoader();
+  let booked = 0;
+  const skipped: string[] = [];
+  for (const item of clean) {
+    const result = await bookSlot(user.id, item.taskId, new Date(item.start), new Date(item.end), prisma, calendar);
+    if (result.type === "BOOKED") booked += 1;
+    else skipped.push(result.type === "TAKEN" ? result.message : "a task was already done or gone.");
+  }
   const note = await sync(user.id);
   refresh();
-  const skipped = result.skipped.length ? ` ${result.skipped.length} skipped because the day changed; preview again.` : "";
-  return { ok: result.booked.length > 0, message: `Booked ${result.booked.length} block${result.booked.length === 1 ? "" : "s"}.${skipped}${note}` };
+  const skippedText = skipped.length ? ` ${skipped.length} skipped: ${skipped[0]} Preview again for a new time.` : "";
+  return { ok: booked > 0, message: `Booked ${booked} block${booked === 1 ? "" : "s"}.${skippedText}${note}` };
 }
 
 // One click: put a ready action (or a missed block) in the next free slot. Same task row, so its project,
@@ -239,4 +252,21 @@ export async function takeOverAction(taskId: string): Promise<PlanMessage> {
   await prisma.executionTaskEvent.create({ data: { userId: user.id, taskId: String(taskId), type: "READY", detail: "Ryan took it over from the agent" } });
   refresh();
   return { ok: true, message: "It's yours now, ready to schedule." };
+}
+
+// One click on a suggested time ("Book 7:15 PM"): books exactly that slot after re-checking it with the same
+// availability rules as the preview. A stale suggestion is refused instead of double-booking.
+export async function bookSlotAction(taskId: string, start: string, end: string): Promise<PlanMessage> {
+  const user = await requireUser();
+  const settings = await loadDaySettings(user.id, prisma);
+  const result = await bookSlot(user.id, String(taskId), new Date(String(start)), new Date(String(end)), prisma, googleCalendarLoader());
+  if (result.type === "NOT_FOUND") return { ok: false, message: "That task is already done or gone." };
+  if (result.type === "TAKEN") {
+    refresh();
+    return { ok: false, message: `${result.message} Pick another time.` };
+  }
+  const note = await sync(user.id);
+  refresh();
+  const unknown = result.calendarKnown ? "" : " Google Calendar couldn't be read; check for a meeting at that time.";
+  return { ok: true, message: `Booked ${localClock(result.slot.start, settings.timeZone)}–${localClock(result.slot.end, settings.timeZone)}.${unknown}${note}` };
 }
