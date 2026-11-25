@@ -31,8 +31,11 @@ export class TaskOAuthError extends Error {
 // Why an authorize request was rejected, for the logs and error_description. Only public OAuth values are
 // echoed (client_id, redirect_uri, resource, response_type, method, scope, parameter names); state and
 // code_challenge are reported as present/absent only.
+// Display hints some clients add (ChatGPT sends ui_locales). Accepted once and ignored; they change nothing.
+export const IGNORED_AUTHORIZE_PARAMS = ["ui_locales"];
+
 export function authorizationMismatch(params: URLSearchParams, config: Pick<TaskOAuthConfig, "clientId" | "redirectUri" | "resource">) {
-  const allowed = ["client_id", "redirect_uri", "response_type", "code_challenge", "code_challenge_method", "scope", "state", "resource"];
+  const allowed = ["client_id", "redirect_uri", "response_type", "code_challenge", "code_challenge_method", "scope", "state", "resource", ...IGNORED_AUTHORIZE_PARAMS];
   const names = [...params.keys()];
   const issues: string[] = [];
   const unexpected = [...new Set(names.filter((name) => !allowed.includes(name)))];
@@ -212,6 +215,7 @@ export function parseTaskAuthorization(
     "scope",
     "state",
     "resource",
+    ...IGNORED_AUTHORIZE_PARAMS,
   ];
   const reject = () => {
     const mismatch = authorizationMismatch(params, config);
@@ -235,7 +239,7 @@ export function parseTaskAuthorization(
       state: z.string().min(1).max(512),
       resource: z.literal(config.resource),
     })
-    .safeParse(Object.fromEntries(params));
+    .safeParse(Object.fromEntries([...params].filter(([key]) => !IGNORED_AUTHORIZE_PARAMS.includes(key))));
   if (!input.success) throw reject();
   const scopes = input.data.scope.split(" ");
   if (
