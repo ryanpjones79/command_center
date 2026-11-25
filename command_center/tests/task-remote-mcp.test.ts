@@ -806,3 +806,16 @@ describe("public origin behind a proxy", () => {
     expect(publicRequestOrigin(at({ "x-forwarded-host": "a.example", "x-forwarded-proto": "javascript" }))).toBe("http://localhost:8080");
   });
 });
+
+describe("authorize rejection diagnostics", () => {
+  it("names the mismatched field without echoing state or PKCE values", async () => {
+    const { authorizationMismatch } = await import("@/server/task-oauth");
+    const config = { clientId: "https://chatgpt.com/oauth/client.json", redirectUri: "https://chatgpt.com/connector_platform_oauth_redirect", resource: "https://x.example/api/mcp/tasks" };
+    const params = new URLSearchParams({ client_id: config.clientId, redirect_uri: "https://chatgpt.com/connector/oauth/abc123", response_type: "code", code_challenge: "a".repeat(43), code_challenge_method: "S256", scope: "tasks:read", state: "secret-state", prompt: "consent" });
+    const result = authorizationMismatch(params, config);
+    expect(result.issues).toEqual(["unexpected parameter(s): prompt", "redirect_uri does not match the configured value", "resource missing"]);
+    expect(result.received.redirect_uri).toBe("https://chatgpt.com/connector/oauth/abc123");
+    expect(JSON.stringify(result)).not.toContain("secret-state");
+    expect(JSON.stringify(result)).not.toContain("a".repeat(43));
+  });
+});
