@@ -1,0 +1,6 @@
+{
+  "guard_fresh_expected_outcome_and_original_data_preserved": true,
+  "guard_source_expected_outcome_and_original_data_preserved": true,
+  "guard_wrong_expected_outcome_and_original_data_preserved": true,
+  "guard_partial_expected_outcome_and_original_data_preserved": true
+}

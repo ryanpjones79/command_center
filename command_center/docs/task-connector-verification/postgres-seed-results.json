@@ -1,0 +1,8 @@
+{
+  "original_seed_overwrites_existing_owner_area": true,
+  "original_seed_preserves_existing_user_password": true,
+  "original_seed_preserves_task_content_and_references": true,
+  "original_seed_preserves_foreign_owner_area_and_task": true,
+  "original_seed_adds_three_agent_projects": true,
+  "vercel_fix": "vercel:build now npm run build; no database push/seed"
+}

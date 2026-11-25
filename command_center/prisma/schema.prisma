@@ -167,6 +167,8 @@ model User {
   alertDeliveries   AlertDelivery[]
   sourceSyncs       SourceSync[]
   protectedRoutines ProtectedRoutine[]
+  taskOAuthGrants    TaskOAuthGrant[]
+  taskOAuthCodes     TaskOAuthCode[]
 }
 
 model UserSettings {
@@ -1075,4 +1077,65 @@ model ProtectedRoutine {
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, active])
+}
+
+// Remote task connector (ChatGPT/Claude MCP at /api/mcp/tasks): OAuth grants, one-time codes and hashed
+// access tokens for Ryan's owner-approved Areas. See docs/TASK_CONNECTOR.md and REMOTE_TASK_MCP_ACTIVATION.md.
+model TaskOAuthGrant {
+  id         String                 @id @default(cuid())
+  userId     String
+  clientId   String
+  resource   String
+  issuer     String
+  domainIds  Json
+  operations Json
+  createdAt  DateTime               @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codes      TaskOAuthCode[]
+  tokens     TaskOAuthAccessToken[]
+
+  @@index([userId, createdAt])
+}
+
+model TaskOAuthCode {
+  id          String          @id @default(cuid())
+  userId      String
+  grantId     String?
+  csrfHash    String
+  codeHash    String?         @unique
+  clientId    String
+  redirectUri String
+  resource    String
+  issuer      String
+  scopes      String
+  state       String
+  challenge   String
+  createdAt   DateTime        @default(now())
+  expiresAt   DateTime
+  consentedAt DateTime?
+  consumedAt  DateTime?
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grant       TaskOAuthGrant? @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model TaskOAuthAccessToken {
+  id        String         @id @default(cuid())
+  grantId   String
+  tokenHash String         @unique
+  createdAt DateTime       @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  grant     TaskOAuthGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  @@index([grantId])
+}
+
+model TaskOAuthRateBucket {
+  id       String   @id
+  count    Int
+  resetsAt DateTime
 }

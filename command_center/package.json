@@ -26,6 +26,7 @@
     "railway:cron:start": "node scripts/run-railway-cron.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@netlify/neon": "^0.1.2",
     "@prisma/client": "6.4.1",
     "@radix-ui/react-dialog": "^1.1.6",

@@ -1,0 +1,9 @@
+{
+  "forward_migration_preserves_original_records": true,
+  "duplicate_run_fails_closed_preserving_data": true,
+  "empty_access_table_synthetic_schema_rollback_preserves_tasks": true,
+  "reapply_after_empty_schema_rollback": true,
+  "transactional_partial_failure_rolls_back_all_ddl": true,
+  "provenance_only_partial_state_completed_without_overwrite": true,
+  "postgres_version": "17.11"
+}

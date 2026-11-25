@@ -1,4 +1,5 @@
 "use server";
+import { taskLoginReturn } from "@/lib/task-login-return";
 
 import { signIn, signOut } from "@/auth";
 import { AuthError } from "next-auth";
@@ -13,6 +14,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function loginAction(formData: FormData) {
+  const returnTo = taskLoginReturn(formData.get("returnTo"));
   const email = String(formData.get("email") || "");
   const password = String(formData.get("password") || "");
 
@@ -20,14 +22,14 @@ export async function loginAction(formData: FormData) {
     await signIn("credentials", {
       email,
       password,
-      redirectTo: "/now"
+      redirectTo: returnTo
     });
   } catch (error) {
     if (error instanceof AuthError) {
       redirect(
         error.type === "CredentialsSignin"
-          ? "/login?error=invalid-credentials"
-          : "/login?error=auth"
+          ? `/login?error=invalid-credentials&returnTo=${encodeURIComponent(returnTo)}`
+          : `/login?error=auth&returnTo=${encodeURIComponent(returnTo)}`
       );
     }
 
