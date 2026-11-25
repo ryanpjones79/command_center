@@ -62,8 +62,9 @@ export function taskOAuthFailure(error: unknown, config?: TaskOAuthConfig) {
   const known = error instanceof TaskOAuthError;
   const status = known ? error.status : 500;
   const code = known ? error.code : "server_error";
+  const description = known ? error.description : undefined;
   return Response.json(
-    { error: code },
+    description ? { error: code, error_description: description } : { error: code },
     {
       status,
       headers: {

@@ -21,9 +21,51 @@ export class TaskOAuthError extends Error {
   constructor(
     public status: number,
     public code: string,
+    // Safe, value-free explanation returned as error_description (never secrets, state or PKCE values).
+    public description?: string,
   ) {
     super(code);
   }
+}
+
+// Why an authorize request was rejected, for the logs and error_description. Only public OAuth values are
+// echoed (client_id, redirect_uri, resource, response_type, method, scope, parameter names); state and
+// code_challenge are reported as present/absent only.
+export function authorizationMismatch(params: URLSearchParams, config: Pick<TaskOAuthConfig, "clientId" | "redirectUri" | "resource">) {
+  const allowed = ["client_id", "redirect_uri", "response_type", "code_challenge", "code_challenge_method", "scope", "state", "resource"];
+  const names = [...params.keys()];
+  const issues: string[] = [];
+  const unexpected = [...new Set(names.filter((name) => !allowed.includes(name)))];
+  const repeated = [...new Set(names.filter((name) => params.getAll(name).length > 1))];
+  if (unexpected.length) issues.push(`unexpected parameter(s): ${unexpected.join(", ")}`);
+  if (repeated.length) issues.push(`repeated parameter(s): ${repeated.join(", ")}`);
+  const check = (name: string, expected: string) => {
+    const value = params.get(name);
+    if (value === null) issues.push(`${name} missing`);
+    else if (value !== expected) issues.push(`${name} does not match the configured value`);
+  };
+  check("client_id", config.clientId);
+  check("redirect_uri", config.redirectUri);
+  check("resource", config.resource);
+  check("response_type", "code");
+  check("code_challenge_method", "S256");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(params.get("code_challenge") ?? "")) issues.push("code_challenge missing or not S256 length");
+  if (!params.get("scope")) issues.push("scope missing");
+  if (!params.get("state")) issues.push("state missing");
+  return {
+    issues,
+    received: {
+      parameters: names,
+      client_id: params.get("client_id"),
+      redirect_uri: params.get("redirect_uri"),
+      resource: params.get("resource"),
+      response_type: params.get("response_type"),
+      code_challenge_method: params.get("code_challenge_method"),
+      scope: params.get("scope"),
+      state: params.get("state") ? "present" : "absent",
+      code_challenge: params.get("code_challenge") ? "present" : "absent"
+    }
+  };
 }
 export type TaskOAuthConfig = {
   origin: string;
@@ -171,12 +213,17 @@ export function parseTaskAuthorization(
     "state",
     "resource",
   ];
+  const reject = () => {
+    const mismatch = authorizationMismatch(params, config);
+    console.warn(JSON.stringify({ event: "mcp_authorize_rejected", issues: mismatch.issues, received: mismatch.received, expected: { client_id: config.clientId, redirect_uri: config.redirectUri, resource: config.resource } }));
+    return new TaskOAuthError(400, "invalid_request", mismatch.issues.join("; ").slice(0, 300) || "invalid authorization request");
+  };
   if (
     [...params.keys()].some(
       (k) => !allowed.includes(k) || params.getAll(k).length !== 1,
     )
   )
-    throw new TaskOAuthError(400, "invalid_request");
+    throw reject();
   const input = z
     .object({
       client_id: z.literal(config.clientId),
@@ -189,7 +236,7 @@ export function parseTaskAuthorization(
       resource: z.literal(config.resource),
     })
     .safeParse(Object.fromEntries(params));
-  if (!input.success) throw new TaskOAuthError(400, "invalid_request");
+  if (!input.success) throw reject();
   const scopes = input.data.scope.split(" ");
   if (
     !scopes.includes("tasks:read") ||
