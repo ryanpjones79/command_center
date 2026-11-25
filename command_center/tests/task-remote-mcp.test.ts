@@ -795,3 +795,14 @@ it("MCP bounds payloads, rejects foreign origins/unknown fields and leaks no tok
   );
   expect((await rpc(issued.token.access_token, "tools/list")).status).toBe(401);
 });
+
+describe("public origin behind a proxy", () => {
+  it("uses the forwarded host on Railway and ignores malformed forwarding", async () => {
+    const { publicRequestOrigin } = await import("@/server/task-oauth-http");
+    const at = (headers: Record<string, string>) => new Request("http://localhost:8080/api/mcp/tasks", { headers });
+    expect(publicRequestOrigin(at({ "x-forwarded-host": "commandcenter-production-264d.up.railway.app", "x-forwarded-proto": "https" }))).toBe("https://commandcenter-production-264d.up.railway.app");
+    expect(publicRequestOrigin(at({}))).toBe("http://localhost:8080");
+    expect(publicRequestOrigin(at({ "x-forwarded-host": "evil.example/@x", "x-forwarded-proto": "https" }))).toBe("http://localhost:8080");
+    expect(publicRequestOrigin(at({ "x-forwarded-host": "a.example", "x-forwarded-proto": "javascript" }))).toBe("http://localhost:8080");
+  });
+});
