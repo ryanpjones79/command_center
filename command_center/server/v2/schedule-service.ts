@@ -1,12 +1,14 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { placeItem, extendBlock, remainingAfterInterruption, type BusyBlock, type DaySettings, type PlaceResult, type Slot } from "@/lib/v2/scheduler";
 import { addZonedDays, DEFAULT_TIME_ZONE, startOfZonedDay } from "@/lib/v2/zoned-time";
+import { blockingEvents, optionalEventsBlock, respectsWorkHours, workWindows } from "@/lib/v2/availability";
 
 // Server-side scheduling for persistent actions. Every booking re-checks the
 // slot inside a transaction holding a per-user lock, so double taps, two
 // devices or concurrent requests can't double-book or overlap.
 
-export type CalendarBusy = { start: Date; end: Date; title: string };
+// optional: shown on the calendar but doesn't block time (see lib/v2/availability.ts).
+export type CalendarBusy = { start: Date; end: Date; title: string; optional?: boolean };
 export type CalendarLoader = (from: Date, to: Date) => Promise<CalendarBusy[]>;
 
 const PROTECTED_SLUGS = new Set(["family", "kids", "health"]);
@@ -36,7 +38,10 @@ export async function lockUser(tx: Tx, userId: string) {
   // SQLite serializes write transactions itself.
 }
 
-async function busyBlocks(tx: Tx | PrismaClient, userId: string, from: Date, to: Date, excludeTaskId: string | null, calendar: CalendarBusy[]): Promise<BusyBlock[]> {
+// Everything that takes time between from and to (shared availability rules, lib/v2/availability.ts):
+// blocking calendar events (optional ones don't block), RyanOS blocks, and, when `work` settings are given
+// (the task isn't Work-area), CCHCS work hours as protected time.
+export async function busyBlocks(tx: Tx | PrismaClient, userId: string, from: Date, to: Date, excludeTaskId: string | null, calendar: CalendarBusy[], work: DaySettings | null = null): Promise<BusyBlock[]> {
   const tasks = await tx.executionTask.findMany({
     where: {
       userId,
@@ -48,7 +53,8 @@ async function busyBlocks(tx: Tx | PrismaClient, userId: string, from: Date, to:
     select: { id: true, title: true, scheduledStart: true, scheduledEnd: true, dueDate: true, expiresAt: true, domain: { select: { slug: true } } }
   });
   return [
-    ...calendar.map((event, index): BusyBlock => ({ id: `cal:${index}`, title: event.title, start: event.start, end: event.end, kind: "MEETING", movable: false })),
+    ...blockingEvents(calendar, optionalEventsBlock()).map((event, index): BusyBlock => ({ id: `cal:${index}`, title: event.title, start: event.start, end: event.end, kind: "MEETING", movable: false })),
+    ...(work ? workWindows(from, to, work) : []).map((window, index): BusyBlock => ({ id: `work:${index}`, title: "Work hours (CCHCS)", start: new Date(window.start), end: new Date(window.end), kind: "PROTECTED", movable: false })),
     ...tasks.map((task): BusyBlock => {
       const isProtected = PROTECTED_SLUGS.has(task.domain.slug);
       const hardLimit = [task.dueDate, task.expiresAt].some((limit) => limit && task.scheduledEnd && limit.getTime() - task.scheduledEnd.getTime() < 24 * 60 * 60_000);
@@ -65,7 +71,7 @@ async function busyBlocks(tx: Tx | PrismaClient, userId: string, from: Date, to:
 }
 
 export type ScheduleOutcome =
-  | { type: "BOOKED"; slot: Slot; usesBuffer: boolean; displacedIds: string[] }
+  | { type: "BOOKED"; slot: Slot; usesBuffer: boolean; displacedIds: string[]; calendarKnown?: boolean }
   | Exclude<PlaceResult, { type: "SLOT" }>
   | { type: "STALE"; message: string }
   | { type: "NOT_FOUND" };
@@ -84,22 +90,24 @@ export async function scheduleAction(
   const settings = await loadDaySettings(userId, db);
   const from = startOfZonedDay(now, settings.timeZone);
   const to = addZonedDays(from, 8, settings.timeZone);
-  const calendar = await calendarLoader(from, to).catch(() => [] as CalendarBusy[]);
+  let calendarKnown = true;
+  const calendar = await calendarLoader(from, to).catch(() => { calendarKnown = false; return [] as CalendarBusy[]; });
 
   return db.$transaction(async (tx) => {
     await lockUser(tx, userId);
     const task = await tx.executionTask.findFirst({
       where: { id: taskId, userId, status: { notIn: ["DONE", "DROPPED"] } },
-      select: { id: true, remainingMinutes: true, estimatedDuration: true, workContext: true, dueDate: true, expiresAt: true, postponeCount: true, scheduledStart: true }
+      select: { id: true, remainingMinutes: true, estimatedDuration: true, workContext: true, dueDate: true, expiresAt: true, postponeCount: true, scheduledStart: true, domain: { select: { slug: true } } }
     });
     if (!task) return { type: "NOT_FOUND" } as const;
-    const busy = await busyBlocks(tx, userId, from, to, task.id, calendar);
-    const result = placeItem({ minutes: taskMinutes(task), workContext: task.workContext, dueAt: task.dueDate, expiresAt: task.expiresAt, earliest: now, startNow: options.startNow }, busy, settings);
+    const busy = await busyBlocks(tx, userId, from, to, task.id, calendar, respectsWorkHours(task.domain.slug, task.workContext) ? settings : null);
+    // An overdue task still gets the next free time; its past due date can't limit where it goes.
+    const result = placeItem({ minutes: taskMinutes(task), workContext: task.workContext, dueAt: task.dueDate && task.dueDate > now ? task.dueDate : null, expiresAt: task.expiresAt, earliest: now, startNow: options.startNow }, busy, settings);
 
     if (result.type === "SLOT" && !options.displaceIds) {
       await tx.executionTask.update({ where: { id: task.id }, data: { scheduledStart: result.slot.start, scheduledEnd: result.slot.end, whenBucket: "TODAY" } });
       await tx.executionTaskEvent.create({ data: { userId, taskId: task.id, type: "SCHEDULED", detail: result.slot.start.toISOString() } });
-      return { type: "BOOKED", slot: result.slot, usesBuffer: result.usesBuffer, displacedIds: [] } as const;
+      return { type: "BOOKED", slot: result.slot, usesBuffer: result.usesBuffer, displacedIds: [], calendarKnown } as const;
     }
     if (result.type === "CONFLICT" && options.displaceIds && result.displace) {
       const current = result.displace.displaced.map((block) => block.id).sort();
@@ -117,7 +125,7 @@ export async function scheduleAction(
       }
       await tx.executionTask.update({ where: { id: task.id }, data: { scheduledStart: result.displace.slot.start, scheduledEnd: result.displace.slot.end, whenBucket: "TODAY" } });
       await tx.executionTaskEvent.create({ data: { userId, taskId: task.id, type: "SCHEDULED", detail: result.displace.slot.start.toISOString() } });
-      return { type: "BOOKED", slot: result.displace.slot, usesBuffer: false, displacedIds: current } as const;
+      return { type: "BOOKED", slot: result.displace.slot, usesBuffer: false, displacedIds: current, calendarKnown } as const;
     }
     if (result.type === "SLOT") return { type: "STALE", message: "A free slot exists now; nothing needs to move." } as const;
     return result;
@@ -190,5 +198,31 @@ export async function postponeAction(
     const updated = await tx.executionTask.update({ where: { id: task.id }, data, select: { postponeCount: true } });
     await tx.executionTaskEvent.create({ data: { userId, taskId: task.id, type: choice === "DROP" ? "DROPPED" : "POSTPONED", detail: choice } });
     return { ok: true as const, postponeCount: updated.postponeCount, stillWorthIt: updated.postponeCount >= 3 && choice !== "DROP" };
+  });
+}
+
+export type SlotOutcome =
+  | { type: "BOOKED"; slot: Slot; calendarKnown: boolean }
+  | { type: "TAKEN"; message: string }
+  | { type: "NOT_FOUND" };
+
+// Book one exact slot that was suggested earlier (one-click "Book 7:15 PM", a previewed plan line).
+// Re-checks it under the booking lock with the same availability rules as the preview, so a stale
+// suggestion can't double-book: a clash with a meeting, protected time or another block is refused.
+export async function bookSlot(userId: string, taskId: string, start: Date, end: Date, db: PrismaClient, calendarLoader: CalendarLoader, now = new Date()): Promise<SlotOutcome> {
+  if (!(start < end) || end <= now) return { type: "TAKEN", message: "That time has passed." };
+  const settings = await loadDaySettings(userId, db);
+  let calendarKnown = true;
+  const calendar = await calendarLoader(new Date(start.getTime() - 86_400_000), new Date(end.getTime() + 86_400_000)).catch(() => { calendarKnown = false; return [] as CalendarBusy[]; });
+  return db.$transaction(async (tx) => {
+    await lockUser(tx, userId);
+    const task = await tx.executionTask.findFirst({ where: { id: taskId, userId, status: { notIn: ["DONE", "DROPPED"] } }, select: { id: true, workContext: true, domain: { select: { slug: true } } } });
+    if (!task) return { type: "NOT_FOUND" } as const;
+    const busy = await busyBlocks(tx, userId, start, end, task.id, calendar, respectsWorkHours(task.domain.slug, task.workContext) ? settings : null);
+    const clash = busy.find((block) => block.start < end && block.end > start);
+    if (clash) return { type: "TAKEN", message: `That time is no longer free (${clash.kind === "MEETING" ? clash.title : clash.kind === "PROTECTED" ? `${clash.title}, protected` : clash.title}).` } as const;
+    await tx.executionTask.update({ where: { id: task.id }, data: { scheduledStart: start, scheduledEnd: end, whenBucket: "TODAY" } });
+    await tx.executionTaskEvent.create({ data: { userId, taskId: task.id, type: "SCHEDULED", detail: start.toISOString() } });
+    return { type: "BOOKED", slot: { start, end }, calendarKnown } as const;
   });
 }

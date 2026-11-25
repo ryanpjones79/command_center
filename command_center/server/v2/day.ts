@@ -5,6 +5,7 @@ import { getCalendarEventsForDate } from "@/server/google-calendar-service";
 import { materializeRoutines } from "@/server/v2/routines";
 import { loadDaySettings, taskMinutes, type CalendarBusy, type CalendarLoader } from "@/server/v2/schedule-service";
 import type { DaySettings } from "@/lib/v2/scheduler";
+import { blockingEvents, isOptionalEvent, optionalEventsBlock, respectsWorkHours, workWindows } from "@/lib/v2/availability";
 
 // One read model for Now, Today, Projects and Inbox, built from the same
 // persistent tasks so an item looks the same everywhere.
@@ -18,7 +19,7 @@ export function googleCalendarLoader(): CalendarLoader {
     for (let day = new Date(from); day < to; day = new Date(day.getTime() + 24 * 60 * 60_000)) {
       const events = await getCalendarEventsForDate(day);
       for (const event of events) {
-        if (!event.isAllDay) busy.push({ start: event.start, end: event.end, title: event.summary });
+        if (!event.isAllDay) busy.push({ start: event.start, end: event.end, title: event.summary, optional: isOptionalEvent({ title: event.summary, showAsFree: event.showAsFree }) });
       }
     }
     return busy;
@@ -63,6 +64,7 @@ export type DayModel = {
   day: { start: Date; end: Date };
   meetings: CalendarBusy[];
   calendarKnown: boolean;
+  workUntil: Date | null; // inside CCHCS work hours now: when they end (protected for personal work)
   blocks: DayTask[]; // scheduled today, open
   current: DayTask | null;
   currentMeeting: CalendarBusy | null;
@@ -153,9 +155,13 @@ export async function loadDay(userId: string, db: PrismaClient, calendarLoader: 
     .filter((task) => task.scheduledStart && task.scheduledEnd && task.scheduledStart < day.end && task.scheduledEnd > day.start)
     .sort((a, b) => (a.scheduledStart as Date).getTime() - (b.scheduledStart as Date).getTime());
   const current = blocks.find((task) => (task.scheduledStart as Date) <= now && (task.scheduledEnd as Date) > now) ?? null;
-  const currentMeeting = meetings.find((meeting) => meeting.start <= now && meeting.end > now) ?? null;
+  // Optional events (e.g. an imported game) stay on the calendar but don't make Ryan busy.
+  const blocking = blockingEvents(meetings, optionalEventsBlock());
+  const work = workWindows(day.start, day.end, settings).find((window) => window.start <= now.getTime() && window.end > now.getTime());
+  const workUntil = work ? new Date(work.end) : null;
+  const currentMeeting = blocking.find((meeting) => meeting.start <= now && meeting.end > now) ?? null;
   const nextTask = blocks.find((task) => (task.scheduledStart as Date) > now);
-  const nextMeeting = meetings.filter((meeting) => meeting.start > now).sort((a, b) => a.start.getTime() - b.start.getTime())[0];
+  const nextMeeting = blocking.filter((meeting) => meeting.start > now).sort((a, b) => a.start.getTime() - b.start.getTime())[0];
   const next =
     nextTask && (!nextMeeting || (nextTask.scheduledStart as Date) <= nextMeeting.start)
       ? { start: nextTask.scheduledStart as Date, title: nextTask.title, kind: "TASK" as const }
@@ -183,6 +189,7 @@ export async function loadDay(userId: string, db: PrismaClient, calendarLoader: 
     day,
     meetings,
     calendarKnown,
+    workUntil,
     blocks,
     current,
     currentMeeting,
@@ -209,7 +216,8 @@ export function recommendNow(model: DayModel): DayTask | null {
     const deadline = [task.dueDate, task.expiresAt].filter((value): value is Date => value instanceof Date).sort((a, b) => a.getTime() - b.getTime())[0];
     return (deadline ? deadline.getTime() : Number.MAX_SAFE_INTEGER) - (task.whenBucket === "TODAY" ? 86_400_000 : 0);
   };
-  return model.queue.filter((task) => task.minutes <= freeMinutes).sort((a, b) => score(a) - score(b))[0] ?? null;
+  // During work hours only Work-area (or business-hours) tasks are suggested.
+  return model.queue.filter((task) => task.minutes <= freeMinutes && (!model.workUntil || !respectsWorkHours(task.domainSlug, task.workContext))).sort((a, b) => score(a) - score(b))[0] ?? null;
 }
 
 export async function loadProjectCoverage(userId: string, db: PrismaClient, now = new Date()) {

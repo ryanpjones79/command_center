@@ -57,6 +57,8 @@ Field rules:
 - **`needsJudgment: true`:** when meaning or timing is unclear. The item goes to the Inbox instead of the proposed plan.
 - **Results:** source-verified, one per goal and period. They never come from RyanOS task completion.
 
+- **Long titles:** a title over 90 characters or with line breaks (a pasted report or alert) is stored as a short title; the full text goes to the task note (or send it as `details`, up to 8,000 characters). Titles may be up to 2,000 characters.
+
 The response lists each key's decision (CREATE, UPDATE_SOURCE, IGNORE_HANDLED, REOPEN, SOURCE_RESOLVED, IGNORE_STALE or REJECTED).
 
 ## Handoffs
@@ -66,6 +68,28 @@ The response lists each key's decision (CREATE, UPDATE_SOURCE, IGNORE_HANDLED, R
 2. Emit one ACTION per useful step (photograph, write up, upload) with `successorSourceId` chaining the steps and `projectKey` per lot.
 3. Send RESOLVED only when the eBay app verifies a step, for example a listing that is actually live.
 4. Report `listings-live` (OUTCOME) and any sales goals as results. **Don't** send sales inside a Rykas aggregate as well, to avoid double counting.
+
+**ChatGPT: career and consulting handoffs (added 2026-11-25)**
+
+Roles: ChatGPT prepares job research, resumes and proposals; RyanOS holds the shared status and next action; Claude maintains the RyanOS code. System `CHATGPT`, token `RYANOS_INGEST_TOKENS.CHATGPT`. Items land in the Upwork & opportunities area as Ryan's own to-dos (not app check-ins).
+
+```json
+{ "events": [{
+  "version": 1, "system": "CHATGPT", "sourceId": "resume/alignment", "kind": "ACTION",
+  "title": "Review Alignment resume", "durationMinutes": 15,
+  "projectName": "Freelance launch",
+  "ryanosTaskId": "<optional: the existing RyanOS task id to attach to>",
+  "handoff": "PREPARING", "preparing": "tailoring the resume",
+  "observedAt": "2026-11-25T18:00:00Z"
+}] }
+```
+
+- **`handoff: "PREPARING"`** shows the item under **Agent preparing** on Plan. It can't be booked and is never proposed.
+- **`handoff: "READY"`** with `draftUrl` (https), `draftTitle`, `url` (the posting or source) and `details` (notes for Ryan) moves it to **Ready for you** with "Draft attached". The draft and source become task links and survive booking, moving, missing and completion.
+- **Reuse:** `projectName` attaches to Ryan's existing project with that exact name; `ryanosTaskId` attaches to an existing task (once; later events update it by `sourceId`). No second task is created.
+- **Meaning of Done:** Ryan marking it done means he reviewed it. Submitting a resume or proposal is a separate step that RyanOS never takes.
+- **NO PHI:** CHATGPT events are checked like CCHCS events and rejected if they look like patient information.
+- **What's needed to use it directly:** a `CHATGPT` token in Railway's `RYANOS_INGEST_TOKENS`, and a ChatGPT custom GPT Action (or another caller) that posts to `/api/v2/ingest` with it. Until then, the same flow is shown with test data (`tests/plan-followable.test.ts`) or by updating the task in RyanOS by hand.
 
 **Store-route owner**
 - Emit ERRAND actions per route stop (`workContext: "ERRAND"`, `durationMinutes` including shopping, `url` to the stop).

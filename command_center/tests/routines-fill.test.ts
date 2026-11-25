@@ -56,7 +56,7 @@ describe("routines that fill free time", () => {
     const slots = proposal.items.find((item) => item.task.title === "Slot hustle");
     expect(first?.routine).toBeFalsy();
     expect(ebay?.routine).toBe(true);
-    expect(ebay?.reason).toMatch(/^Routine · 0 of 5 this week/);
+    expect(ebay?.reason).toMatch(/0 of 5 this week/); // behind pace, so it may fill an empty commitment
     expect(first!.slot.start.getTime()).toBeLessThanOrEqual(ebay!.slot.start.getTime());
     expect(slots!.slot.start.getTime()).toBeGreaterThanOrEqual(new Date("2026-11-26T01:00:00Z").getTime()); // 5 PM Pacific
     expect(timeOfDayWindow("EVENING", { workdayStartMin: 480, dayEndMin: 1260 })).toEqual({ startMin: 1020, endMin: 1260 });
@@ -73,7 +73,10 @@ describe("routines that fill free time", () => {
     const placed = proposal.items.find((item) => item.task.id === pick.id);
     expect(placed?.reason).toBe("You picked it as a must-do");
     expect(placed!.slot.start.getTime()).toBeGreaterThanOrEqual(tomorrow.getTime());
-    expect(proposal.items.some((item) => item.task.title === "eBay listing" && item.routine)).toBe(true);
+    // Work hours are protected now, so the evening may be full: the routine is either placed or listed with a reason.
+    const ebayPlaced = proposal.items.some((item) => item.task.title === "eBay listing" && item.routine);
+    const ebayExplained = proposal.unplaced.some((item) => item.task.title === "eBay listing" && item.reason.length > 0);
+    expect(ebayPlaced || ebayExplained).toBe(true);
   });
 
   it("check-ins from apps are not auto-planned unless committed for today", async () => {

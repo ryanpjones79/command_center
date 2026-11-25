@@ -19,8 +19,8 @@ describe("day load", () => {
     );
     expect(load.freeMin).toBe(10 * 60 - 120); // 12:00-22:00 minus 13:00-15:00
   });
-  it("starts at the workday start before it begins and is zero after day end", () => {
-    expect(dayLoad(board(at(6)), [], []).freeMin).toBe(14 * 60);
+  it("starts at 7:00 (or the workday start if earlier) before the day begins and is zero after day end", () => {
+    expect(dayLoad(board(at(6)), [], []).freeMin).toBe(15 * 60); // from 7:00, the planner's earliest start
     expect(dayLoad(board(at(23)), [], []).freeMin).toBe(0);
   });
   it("counts tasks due or expiring before tomorrow", () => {

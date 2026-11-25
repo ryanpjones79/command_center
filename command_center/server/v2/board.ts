@@ -8,6 +8,9 @@ import { SYNC_SOURCE, writeEnabled } from "@/server/v2/calendar-sync";
 import { loadHabits, type Habit } from "@/server/v2/habits";
 import { resolveTools, type ToolLink } from "@/lib/v2/tools";
 import { agentDoing, readiness, safeLink, type Readiness } from "@/lib/v2/readiness";
+import { optionalEventsBlock, protectionLines, workWindows, type ProtectionLine } from "@/lib/v2/availability";
+import { startOfZonedWeek } from "@/lib/v2/zoned-time";
+import { HANDOFF_SYSTEMS } from "@/lib/v2/source-events";
 
 // Read model for the Plan screen: every open task grouped by area and project (feed items included, labelled
 // by source), plus the calendar for the days shown (Google meetings and RyanOS blocks).
@@ -36,13 +39,16 @@ export type BoardTask = {
   ready: Readiness; // "preparing": an agent is still working on it; "ready": Ryan's to do
   doing: string | null; // what the agent is preparing, when ready === "preparing"
   links: BoardLink[]; // drafts and sources attached to the task
+  weekly: boolean; // its project is one Ryan chose to advance this week
+  workContext: string | null;
+  details: string | null; // the full imported note/report, kept for the details view
 };
 
 export type BoardLink = { title: string; url: string; kind: "draft" | "source" | "link" };
 
 export type BoardProject = { id: string; name: string; tasks: BoardTask[] };
 export type BoardArea = { id: string; slug: string; name: string; projects: BoardProject[]; loose: BoardTask[] };
-export type BoardMeeting = { title: string; start: string; end: string };
+export type BoardMeeting = { title: string; start: string; end: string; optional?: boolean };
 
 export type Board = {
   tools: ToolLink[]; // where each app's check-ins are handled
@@ -59,6 +65,8 @@ export type Board = {
   blocks: BoardTask[];
   meetings: BoardMeeting[];
   calendarKnown: boolean;
+  // What "Bookable" accounts for: protections, sources and their status, and the work windows on the days shown.
+  availability: { protections: ProtectionLine[]; sources: { label: string; ok: boolean; detail: string }[]; work: { start: string; end: string }[]; optionalBlocks: boolean };
   calendarSync: { enabled: boolean; ok: boolean; message: string | null };
   targets: QuickTarget[];
   habits: Habit[]; // today's daily habits (routines) with streaks
@@ -76,7 +84,7 @@ function toLinks(rows: LinkRow[]): BoardLink[] {
     .filter((link): link is BoardLink => Boolean(link.url));
 }
 
-function toBoardTask(task: DayTask & { priority: string; waitingOn: string | null; references?: LinkRow[] }, now: Date): BoardTask {
+function toBoardTask(task: DayTask & { priority: string; waitingOn: string | null; references?: LinkRow[] }, now: Date, weeklyProjects: Set<string> = new Set()): BoardTask {
   const deadline = [task.dueDate, task.expiresAt].filter((value): value is Date => value instanceof Date).sort((a, b) => a.getTime() - b.getTime())[0];
   return {
     id: task.id,
@@ -85,7 +93,8 @@ function toBoardTask(task: DayTask & { priority: string; waitingOn: string | nul
     areaName: task.domainName,
     projectId: task.projectId,
     projectName: task.projectName,
-    source: task.sourceSystem && task.sourceSystem !== "ROUTINE" && task.sourceSystem !== "CAPTURE" ? task.sourceSystem : null,
+    // Check-in source label. Handoffs (ChatGPT-prepared drafts) are Ryan's own to-dos, so they carry none.
+    source: task.sourceSystem && task.sourceSystem !== "ROUTINE" && task.sourceSystem !== "CAPTURE" && !HANDOFF_SYSTEMS.has(task.sourceSystem) ? task.sourceSystem : null,
     href: workHref(task),
     external: Boolean(task.sourceUrl),
     dueDate: task.dueDate?.toISOString() ?? null,
@@ -101,7 +110,10 @@ function toBoardTask(task: DayTask & { priority: string; waitingOn: string | nul
     committed: task.whenBucket === "TODAY",
     ready: readiness(task),
     doing: readiness(task) === "preparing" ? agentDoing(task.waitingOn) : null,
-    links: toLinks(task.references ?? [])
+    links: toLinks(task.references ?? []),
+    weekly: Boolean(task.projectId && weeklyProjects.has(task.projectId)),
+    workContext: task.workContext,
+    details: task.note
   };
 }
 
@@ -146,12 +158,12 @@ export async function loadBoard(
   let meetings: BoardMeeting[] = [];
   let calendarKnown = true;
   try {
-    meetings = (await calendarLoader(busyFrom, busyTo)).map((item) => ({ title: item.title, start: item.start.toISOString(), end: item.end.toISOString() }));
+    meetings = (await calendarLoader(busyFrom, busyTo)).map((item) => ({ title: item.title, start: item.start.toISOString(), end: item.end.toISOString(), ...(item.optional ? { optional: true } : {}) }));
   } catch {
     calendarKnown = false;
   }
 
-  const [rows, domains, projects, sync] = await Promise.all([
+  const [rows, domains, projects, sync, attention] = await Promise.all([
     db.executionTask.findMany({
       where: { userId, status: { notIn: ["DONE", "DROPPED"] }, needsJudgment: false },
       select: { ...dayTaskSelect, priority: true, waitingOn: true, references: { select: { title: true, url: true, provider: true }, orderBy: { createdAt: "asc" }, take: 4 } },
@@ -163,8 +175,10 @@ export async function loadBoard(
       select: { id: true, name: true, domainId: true },
       orderBy: { name: "asc" }
     }),
-    db.sourceSync.findUnique({ where: { userId_sourceSystem: { userId, sourceSystem: SYNC_SOURCE } } })
+    db.sourceSync.findUnique({ where: { userId_sourceSystem: { userId, sourceSystem: SYNC_SOURCE } } }),
+    db.projectAttention.findMany({ where: { userId, weekOf: startOfZonedWeek(now, tz), plannedMinutes: { gt: 0 } }, select: { projectId: true } })
   ]);
+  const weeklyProjects = new Set(attention.map((row) => row.projectId));
 
   // Hidden until they matter again: snoozed (Tomorrow / Later / Review) and parked items, and expired offers.
   // Anything already on the calendar or waiting on someone stays visible.
@@ -175,7 +189,7 @@ export async function loadBoard(
     if (row.whenBucket === "PARKING_LOT") return false;
     return !(row.followUpDate && row.followUpDate > now);
   });
-  const tasks = visible.map((row) => toBoardTask({ ...toDayTask(row), priority: row.priority, waitingOn: row.waitingOn, references: row.references }, now));
+  const tasks = visible.map((row) => toBoardTask({ ...toDayTask(row), priority: row.priority, waitingOn: row.waitingOn, references: row.references }, now, weeklyProjects));
   // Routine day copies live in the Daily habits strip (and on the calendar once placed), not in the lists.
   const isRoutine = (index: number) => visible[index].sourceSystem === "ROUTINE";
   const listed = tasks.filter((_, index) => !isRoutine(index));
@@ -225,6 +239,16 @@ export async function loadBoard(
     blocks,
     meetings,
     calendarKnown,
+    availability: {
+      protections: protectionLines(settings),
+      sources: [
+        { label: "Google Calendar", ok: calendarKnown, detail: calendarKnown ? `read ${now.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" })}; timed events count, all-day events don't` : "couldn't be read, so free time below is unconfirmed" },
+        { label: "RyanOS blocks", ok: true, detail: "your booked tasks and routines" },
+        ...(writeEnabled() ? [{ label: "Google sync", ok: !sync || sync.status !== "FAILING", detail: sync?.status === "FAILING" ? "failing; blocks may be missing from Google" : `OK${sync?.lastSuccessAt ? ` as of ${sync.lastSuccessAt.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" })}` : ""}` }] : [])
+      ],
+      work: workWindows(busyFrom, busyTo, settings).map((window) => ({ start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() })),
+      optionalBlocks: optionalEventsBlock()
+    },
     calendarSync: { enabled: writeEnabled(), ok: !sync || sync.status !== "FAILING", message: sync?.status === "FAILING" ? sync.lastError : null },
     targets,
     habits: await loadHabits(userId, db, now),

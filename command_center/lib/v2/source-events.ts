@@ -7,7 +7,11 @@ import { z } from "zod";
 // RyanOS stores each as ONE persistent ExecutionTask keyed by
 // integrationSourceKey = "<SYSTEM>:<sourceId>" and never writes back.
 
-export const SOURCE_SYSTEMS = ["RYKAS", "EBAY", "STORE_ROUTE", "AP_TRADER", "CASINO_AP", "CCHCS", "EMAIL", "CAPTURE"] as const;
+export const SOURCE_SYSTEMS = ["RYKAS", "EBAY", "STORE_ROUTE", "AP_TRADER", "CASINO_AP", "CCHCS", "EMAIL", "CAPTURE", "CHATGPT"] as const;
+
+// Handoff systems prepare work FOR Ryan (ChatGPT: job research, resumes, proposals). Their items are his own
+// to-dos with a draft attached, not app check-ins, and can be "Agent preparing" until ready.
+export const HANDOFF_SYSTEMS = new Set<string>(["CHATGPT"]);
 export type SourceSystem = (typeof SOURCE_SYSTEMS)[number];
 
 // ACTION: work for Ryan. INCIDENT: a source condition; local "Done" means
@@ -30,7 +34,7 @@ export const sourceEventSchema = z
     sourceId: z.string().min(1).max(200).regex(/^[A-Za-z0-9._:@\-/#]+$/),
     kind: z.enum(SOURCE_KINDS).default("ACTION"),
     state: z.enum(SOURCE_STATES).default("OPEN"),
-    title: z.string().min(1).max(200),
+    title: z.string().min(1).max(2000), // long titles are shortened on arrival; the full text is kept
     doneWhen: z.string().max(400).nullable().optional(),
     dueAt: isoDate.nullable().optional(),
     expiresAt: isoDate.nullable().optional(),
@@ -48,6 +52,16 @@ export const sourceEventSchema = z
     revision: z.string().max(100).nullable().optional(),
     // When the clear meaning or timing is uncertain, the item needs Ryan's judgment.
     needsJudgment: z.boolean().optional(),
+    // Full imported note, alert or report. Kept in the task's details; the title stays short.
+    details: z.string().max(8000).nullable().optional(),
+    // Handoff (agent-prepared work): PREPARING = the agent is still working on it (not bookable);
+    // READY = ready for Ryan. `preparing` says what the agent is doing.
+    handoff: z.enum(["PREPARING", "READY"]).optional(),
+    preparing: z.string().max(120).nullable().optional(),
+    draftUrl: httpsUrl.nullable().optional(),
+    draftTitle: z.string().max(120).nullable().optional(),
+    // Attach to an existing RyanOS task instead of creating one (reuse the record Ryan already has).
+    ryanosTaskId: z.string().min(10).max(40).regex(/^[a-z0-9]+$/).nullable().optional(),
     observedAt: isoDate
   })
   .strict();

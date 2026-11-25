@@ -1,35 +1,55 @@
 import type { PrismaClient } from "@prisma/client";
 import { placeItem, type BusyBlock, type Slot } from "@/lib/v2/scheduler";
 import { addZonedDays, atLocalMinutes, localDateKey, startOfZonedDay, startOfZonedWeek } from "@/lib/v2/zoned-time";
+import { blockingEvents, optionalEventsBlock, respectsWorkHours, workWindows } from "@/lib/v2/availability";
 import { loadRoutineProgress, timeOfDayWindow } from "@/server/v2/routines";
 import { dayTaskSelect, PROTECTED_SLUGS, toDayTask, type DayTask } from "@/server/v2/day";
-import { loadDaySettings, type CalendarLoader } from "@/server/v2/schedule-service";
+import { loadDaySettings, type CalendarBusy, type CalendarLoader } from "@/server/v2/schedule-service";
+import { HANDOFF_SYSTEMS } from "@/lib/v2/source-events";
 
-// Plan a day: propose a feasible day so the normal interaction is
-// "review a few exceptions, accept". Proposal only; nothing is booked until
-// accepted, and acceptance re-checks every slot under the booking lock.
+// Plan a day Ryan would actually follow. Proposal only; nothing is booked until accepted, and acceptance
+// re-checks every slot under the booking lock.
 //
-// Order: fixed items stay put; then to-dos (protected, picked must-dos, due soon,
-// committed for the day, selected projects); then routines fill the gaps that are
-// left: ones with a preferred time of day first, then the rest, each furthest
-// behind its weekly target first. The interruption buffer is never used, so some time stays free.
+// - Up to MAX_COMMITMENTS commitments, checked by default, in this order: protected-area to-dos, what he
+//   pinned (or picked as a must-do), real deadlines (due or expiring within two days), work moved to this
+//   day, then the next action of a project he chose to advance this week (the one furthest behind its
+//   weekly time first, at most one per project). If fewer than three, a routine behind its weekly pace
+//   fills the rest.
+// - Everything else that fits goes under "If there's time" (unchecked), at most MAX_EXTRAS.
+// - The interruption buffer is never used, and availability follows lib/v2/availability.ts: optional
+//   events don't block, CCHCS work hours are protected for non-work tasks.
+// - Anything that doesn't fit is listed with the reason.
 
-export type ProposedItem = { task: DayTask; slot: Slot; reason: string; routine?: boolean };
+export const MAX_COMMITMENTS = 3;
+export const MAX_EXTRAS = 4;
+
+export type ProposedItem = { task: DayTask; slot: Slot; reason: string; routine?: boolean; group: "COMMIT" | "EXTRA" };
 export type PlanOptions = { day?: Date; mustDo?: string[] };
 export type Unplaced = { task: DayTask; reason: string };
-export type DayProposal = { items: ProposedItem[]; unplaced: Unplaced[]; bufferMinutes: number };
+export type DayProposal = { items: ProposedItem[]; unplaced: Unplaced[]; bufferMinutes: number; calendarKnown: boolean };
 
-function rank(task: DayTask, from: Date, dayEnd: Date, selectedProjects: Set<string>, mustDo: Set<string>) {
+type Rank = { tier: number; key: number; reason: string; weeklyProject?: string };
+
+function deadlineText(deadline: Date, expires: boolean, from: Date, tz: string) {
+  const days = Math.round((startOfZonedDay(deadline, tz).getTime() - startOfZonedDay(from, tz).getTime()) / 86_400_000);
+  const word = expires ? "Expires" : "Due";
+  if (deadline < from) return expires ? "Expired" : "Overdue";
+  return days <= 0 ? `${word} today` : days === 1 ? `${word} tomorrow` : `${word} ${deadline.toLocaleDateString("en-US", { timeZone: tz, weekday: "short" })}`;
+}
+
+function rank(task: DayTask, from: Date, dayEnd: Date, weekly: Map<string, number>, mustDo: Set<string>, tz: string): Rank | null {
   const deadline = [task.dueDate, task.expiresAt].filter((value): value is Date => value instanceof Date).sort((a, b) => a.getTime() - b.getTime())[0];
-  if (task.isProtected) return { tier: 0, key: task.createdAt.getTime(), reason: "Protected time goes first" };
+  if (task.isProtected) return { tier: 0, key: task.createdAt.getTime(), reason: "Protected (family/health)" };
   if (mustDo.has(task.id)) return { tier: 1, key: task.createdAt.getTime(), reason: "You picked it as a must-do" };
   // Check-ins (items from Ryan's apps) are cleared, not planned, unless he committed to one for today.
-  const checkin = Boolean(task.sourceSystem && task.sourceSystem !== "ROUTINE" && task.sourceSystem !== "CAPTURE");
+  const checkin = Boolean(task.sourceSystem && task.sourceSystem !== "ROUTINE" && task.sourceSystem !== "CAPTURE" && !HANDOFF_SYSTEMS.has(task.sourceSystem));
   if (checkin && task.whenBucket !== "TODAY") return null;
-  if (deadline && deadline.getTime() - from.getTime() < 2 * 86_400_000) return { tier: 2, key: deadline.getTime(), reason: task.expiresAt ? "Expires soon" : "Due soon" };
-  if (task.whenBucket === "TODAY") return { tier: 3, key: task.createdAt.getTime(), reason: "Committed for today" };
-  if (task.followUpDate && task.followUpDate < dayEnd) return { tier: 3, key: task.followUpDate.getTime(), reason: "Moved to this day" };
-  if (task.projectId && selectedProjects.has(task.projectId)) return { tier: 4, key: task.createdAt.getTime(), reason: "Selected project this week" };
+  if (task.whenBucket === "TODAY") return { tier: 1, key: task.createdAt.getTime(), reason: "You pinned it for today" };
+  if (deadline && deadline.getTime() - from.getTime() < 2 * 86_400_000) return { tier: 2, key: deadline.getTime(), reason: deadlineText(deadline, deadline === task.expiresAt, from, tz) };
+  if (task.followUpDate && task.followUpDate < dayEnd) return { tier: 3, key: task.followUpDate.getTime(), reason: "You moved it to today" };
+  if (task.projectId && weekly.has(task.projectId)) {
+    return { tier: 4, key: -(weekly.get(task.projectId) as number), reason: `Weekly priority: ${task.projectName ?? "project"}`, weeklyProject: task.projectId };
+  }
   return null;
 }
 
@@ -38,15 +58,17 @@ export async function proposeDay(userId: string, db: PrismaClient, calendarLoade
   const tz = settings.timeZone;
   const dayStart = startOfZonedDay(options.day ?? now, tz);
   const dayEnd = addZonedDays(dayStart, 1, tz);
-  if (dayEnd <= now) return { items: [], unplaced: [], bufferMinutes: settings.bufferMinutes };
+  if (dayEnd <= now) return { items: [], unplaced: [], bufferMinutes: settings.bufferMinutes, calendarKnown: true };
   const from = dayStart > now ? dayStart : now; // planning a later day starts at its beginning
   const dateKey = localDateKey(dayStart, tz);
   const mustDo = new Set(options.mustDo ?? []);
   const weekOf = startOfZonedWeek(dayStart, tz);
+  const weekEnd = addZonedDays(weekOf, 7, tz);
+  let calendarKnown = true;
   const [open, meetings, attention, progress, copies, routineRows] = await Promise.all([
     db.executionTask.findMany({ where: { userId, status: { notIn: ["DONE", "DROPPED", "WAITING"] }, isBlocked: false, needsJudgment: false }, select: dayTaskSelect, take: 1000 }),
-    calendarLoader(dayStart, dayEnd).catch(() => []),
-    db.projectAttention.findMany({ where: { userId, weekOf, plannedMinutes: { gt: 0 } }, select: { projectId: true } }),
+    calendarLoader(dayStart, dayEnd).catch(() => { calendarKnown = false; return [] as CalendarBusy[]; }),
+    db.projectAttention.findMany({ where: { userId, weekOf, plannedMinutes: { gt: 0 } }, select: { projectId: true, plannedMinutes: true } }),
     loadRoutineProgress(userId, db, dayStart),
     db.executionTask.findMany({
       where: { userId, sourceSystem: "ROUTINE", status: { notIn: ["DONE", "DROPPED"] }, scheduledStart: null, integrationSourceKey: { endsWith: `:${dateKey}` } },
@@ -54,84 +76,97 @@ export async function proposeDay(userId: string, db: PrismaClient, calendarLoade
     }),
     db.protectedRoutine.findMany({ where: { userId, active: true }, select: { id: true, timeOfDay: true } })
   ]);
-  const selected = new Set(attention.map((row) => row.projectId));
+  // Weekly priorities: minutes still owed this week = planned minus time already booked for the project.
+  const booked = attention.length
+    ? await db.executionTask.findMany({ where: { userId, projectId: { in: attention.map((row) => row.projectId) }, scheduledStart: { gte: weekOf, lt: weekEnd }, status: { not: "DROPPED" } }, select: { projectId: true, scheduledStart: true, scheduledEnd: true } })
+    : [];
+  const weekly = new Map(attention.map((row) => {
+    const used = booked.filter((task) => task.projectId === row.projectId).reduce((sum, task) => sum + ((task.scheduledEnd?.getTime() ?? 0) - (task.scheduledStart?.getTime() ?? 0)) / 60_000, 0);
+    return [row.projectId, row.plannedMinutes - used] as const;
+  }));
+  for (const [projectId, owed] of weekly) if (owed <= 0) weekly.delete(projectId); // that project has had its time this week
   const tasks = open.map(toDayTask);
 
   const busy: BusyBlock[] = [
-    ...meetings.map((meeting, index): BusyBlock => ({ id: `cal:${index}`, title: meeting.title, start: meeting.start, end: meeting.end, kind: "MEETING", movable: false })),
+    ...blockingEvents(meetings, optionalEventsBlock()).map((meeting, index): BusyBlock => ({ id: `cal:${index}`, title: meeting.title, start: meeting.start, end: meeting.end, kind: "MEETING", movable: false })),
     ...tasks
       .filter((task) => task.scheduledStart && task.scheduledEnd && task.scheduledEnd > from && task.scheduledStart < dayEnd)
       .map((task): BusyBlock => ({ id: task.id, title: task.title, start: task.scheduledStart as Date, end: task.scheduledEnd as Date, kind: PROTECTED_SLUGS.has(task.domainSlug) ? "PROTECTED" : "COMMITTED", movable: false }))
   ];
+  const work: BusyBlock[] = workWindows(dayStart, dayEnd, settings).map((window, index) => ({ id: `work:${index}`, title: "Work hours (CCHCS)", start: new Date(window.start), end: new Date(window.end), kind: "PROTECTED", movable: false }));
+  const busyFor = (task: DayTask) => (respectsWorkHours(task.domainSlug, task.workContext) ? [...busy, ...work] : busy);
 
-  // Routine day copies are planned in the second pass, never as to-dos.
-  const candidates = tasks
-    .filter((task) => task.sourceSystem !== "ROUTINE" && !task.scheduledStart && !(task.expiresAt && task.expiresAt <= from))
-    .map((task) => ({ task, rank: rank(task, from, dayEnd, selected, mustDo) }))
-    .filter((entry): entry is { task: DayTask; rank: NonNullable<ReturnType<typeof rank>> } => entry.rank !== null)
-    .sort((a, b) => a.rank.tier - b.rank.tier || a.rank.key - b.rank.key);
-
-  // Only one next action per selected project; the rest wait their turn.
-  const seenProjects = new Set<string>();
   const items: ProposedItem[] = [];
   const unplaced: Unplaced[] = [];
+  const counts = { COMMIT: 0, EXTRA: 0 };
+  const place = (task: DayTask, earliest: Date, dueAt: Date | null, latest: Date | null) => {
+    const result = placeItem({ minutes: task.minutes, workContext: dueAt === null ? task.workContext : null, dueAt: dueAt ?? (task.dueDate && task.dueDate > earliest ? task.dueDate : null), expiresAt: dueAt === null ? task.expiresAt : null, earliest, horizonDays: 1 }, busyFor(task), settings);
+    if (result.type !== "SLOT" || result.usesBuffer || result.slot.start >= dayEnd || (latest && result.slot.end > latest)) return { ok: false as const, result };
+    return { ok: true as const, slot: result.slot };
+  };
+  const take = (task: DayTask, slot: Slot, reason: string, group: "COMMIT" | "EXTRA", routine = false) => {
+    items.push({ task, slot, reason, group, ...(routine ? { routine } : {}) });
+    counts[group] += 1;
+    busy.push({ id: task.id, title: task.title, start: slot.start, end: slot.end, kind: task.isProtected ? "PROTECTED" : "COMMITTED", movable: false });
+  };
+  const groupFor = () => (counts.COMMIT < MAX_COMMITMENTS ? "COMMIT" : counts.EXTRA < MAX_EXTRAS ? "EXTRA" : null);
+
+  // To-dos. Only one next action per weekly project; the rest wait their turn.
+  const candidates = tasks
+    .filter((task) => task.sourceSystem !== "ROUTINE" && !task.scheduledStart && !(task.expiresAt && task.expiresAt <= from))
+    .map((task) => ({ task, rank: rank(task, from, dayEnd, weekly, mustDo, tz) }))
+    .filter((entry): entry is { task: DayTask; rank: Rank } => entry.rank !== null)
+    .sort((a, b) => a.rank.tier - b.rank.tier || a.rank.key - b.rank.key);
+  const seenProjects = new Set<string>();
   for (const { task, rank: why } of candidates.slice(0, 40)) {
-    if (why.tier === 4 && task.projectId) {
-      if (seenProjects.has(task.projectId)) continue;
-      seenProjects.add(task.projectId);
+    if (why.weeklyProject) {
+      if (seenProjects.has(why.weeklyProject)) continue;
+      seenProjects.add(why.weeklyProject);
     }
-    const result = placeItem(
-      { minutes: task.minutes, workContext: task.workContext, dueAt: task.dueDate, expiresAt: task.expiresAt, earliest: from, horizonDays: 1 },
-      busy,
-      settings
-    );
-    if (result.type === "SLOT" && !result.usesBuffer && result.slot.start < dayEnd) {
-      items.push({ task, slot: result.slot, reason: why.reason });
-      busy.push({ id: task.id, title: task.title, start: result.slot.start, end: result.slot.end, kind: task.isProtected ? "PROTECTED" : "COMMITTED", movable: false });
-    } else {
-      unplaced.push({
-        task,
-        reason: result.type === "EXPIRED" ? "Expired" : why.tier <= 2 ? "Doesn't fit. Needs a decision." : "No room without using the buffer"
-      });
+    const group = groupFor();
+    if (!group) {
+      unplaced.push({ task, reason: "Left for another day: today already has a full plan" });
+      continue;
     }
+    const placed = place(task, from, null, null);
+    if (placed.ok) take(task, placed.slot, why.reason, group);
+    else unplaced.push({ task, reason: placed.result.type === "EXPIRED" ? "Expired" : why.tier <= 2 ? `${why.reason}, but no free time fits ${task.minutes} min outside protected time` : `No ${task.minutes}-min gap left outside protected time and the buffer` });
   }
 
-  // Second pass: routines fill what's left, furthest behind this week first.
+  // Routines: furthest behind their weekly target first, inside their time of day. A behind-pace routine
+  // can fill an empty commitment; otherwise routines are "If there's time".
   const routineOf = new Map(routineRows.map((row) => [row.id, row]));
   const routineId = (key: string | null) => (key ?? "").split(":")[1] ?? "";
   const share = (key: string | null) => {
     const week = progress.get(routineId(key));
-    return week && week.target > 0 ? week.done / week.target : 0;
+    return week && week.target > 0 ? week.done / week.target : 1;
   };
-  // Routines tied to a time of day go first (they have fewer places to fit), then any-time ones.
   const windowed = (key: string | null) => (routineOf.get(routineId(key))?.timeOfDay ? 0 : 1);
-  const ordered = [...copies].sort((a, b) => windowed(a.integrationSourceKey) - windowed(b.integrationSourceKey) || share(a.integrationSourceKey) - share(b.integrationSourceKey));
+  const ordered = [...copies].sort((a, b) => share(a.integrationSourceKey) - share(b.integrationSourceKey) || windowed(a.integrationSourceKey) - windowed(b.integrationSourceKey));
   for (const row of ordered) {
     const task = toDayTask(row);
     const id = routineId(row.integrationSourceKey);
     if (!routineOf.has(id)) continue; // paused or removed routine
+    const week = progress.get(id);
+    const label = week ? `${week.done} of ${week.target} this week` : "routine";
     const window = timeOfDayWindow(routineOf.get(id)?.timeOfDay, settings);
     const windowStart = atLocalMinutes(dayStart, window.startMin, tz);
     const windowEnd = atLocalMinutes(dayStart, window.endMin, tz);
-    const week = progress.get(id);
-    const label = week ? `${week.done} of ${week.target} this week` : "routine";
     if (windowEnd <= from) {
       unplaced.push({ task, reason: "Its time of day has passed" });
       continue;
     }
-    const result = placeItem(
-      { minutes: task.minutes, workContext: null, dueAt: windowEnd, expiresAt: null, earliest: windowStart > from ? windowStart : from, horizonDays: 1 },
-      busy,
-      settings
-    );
-    if (result.type === "SLOT" && !result.usesBuffer && result.slot.start < dayEnd && result.slot.end <= windowEnd) {
-      items.push({ task, slot: result.slot, reason: `Routine · ${label}`, routine: true });
-      busy.push({ id: task.id, title: task.title, start: result.slot.start, end: result.slot.end, kind: "COMMITTED", movable: false });
-    } else {
-      unplaced.push({ task, reason: `No free gap for it (${label})` });
+    const behind = week ? week.done < week.target : false;
+    const group = counts.COMMIT < MAX_COMMITMENTS && behind ? "COMMIT" : counts.EXTRA < MAX_EXTRAS ? "EXTRA" : null;
+    if (!group) {
+      unplaced.push({ task, reason: `Left for another day (${label})` });
+      continue;
     }
+    const placed = place(task, windowStart > from ? windowStart : from, windowEnd, windowEnd);
+    if (placed.ok) take(task, placed.slot, group === "COMMIT" ? `Behind this week · ${label}` : `Routine · ${label}`, group, true);
+    else unplaced.push({ task, reason: `No free gap in its time of day (${label})` });
   }
-  return { items: items.sort((a, b) => a.slot.start.getTime() - b.slot.start.getTime()), unplaced, bufferMinutes: settings.bufferMinutes };
+  return { items: items.sort((a, b) => a.slot.start.getTime() - b.slot.start.getTime()), unplaced, bufferMinutes: settings.bufferMinutes, calendarKnown };
 }
 
 // Book accepted items; each slot is re-checked under the lock and skipped if

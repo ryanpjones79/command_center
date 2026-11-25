@@ -150,3 +150,22 @@ export function ScheduleButton({ taskId, label = "Schedule", startNow = false, c
     </div>
   );
 }
+
+// One missed block on Now's "Needs rescheduling" list: next free slot, move it, or mark it done. The task,
+// its project, links and source stay attached whichever is chosen.
+export function RescheduleRow({ taskId }: { taskId: string }) {
+  const { pending, message, setMessage, run } = useRun();
+  const [moving, setMoving] = useState(false);
+  const small = cn("h-9 rounded-lg border bg-background px-3 text-sm font-medium hover:bg-muted disabled:opacity-60", focusRing);
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex flex-wrap gap-2">
+        <button className={cn("h-9 rounded-lg bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-60", focusRing)} disabled={pending} onClick={() => run(() => nextSlotAction(taskId))} type="button">Next free slot</button>
+        <button aria-expanded={moving} className={small} disabled={pending} onClick={() => setMoving((open) => !open)} type="button">Move…</button>
+        <button className={small} disabled={pending} onClick={() => run(() => v2DoneAction(taskId))} type="button">Did it</button>
+      </div>
+      {moving && <MoveMenu onDone={(result) => { setMessage(result); setMoving(false); }} taskId={taskId} />}
+      <Message message={message} />
+    </div>
+  );
+}

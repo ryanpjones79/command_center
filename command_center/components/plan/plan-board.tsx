@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { bookPlanAction, habitDoneAction, moveBlockAction, nextSlotAction, pinTodayAction, planDoneAction, previewDayAction, scheduleCheckinReviewAction, takeOverAction, waitingOnAction, type PlanMessage, type PreviewResult } from "@/app/plan/actions";
+import { bookPlanAction, bookSlotAction, habitDoneAction, moveBlockAction, nextSlotAction, pinTodayAction, planDoneAction, previewDayAction, scheduleCheckinReviewAction, takeOverAction, waitingOnAction, type PlanMessage, type PreviewLine, type PreviewResult } from "@/app/plan/actions";
 import type { Board, BoardArea, BoardLink, BoardTask } from "@/server/v2/board";
 import type { Habit } from "@/server/v2/habits";
 import type { QuickTarget } from "@/lib/v2/quick-add";
@@ -12,7 +12,9 @@ import { CoachCard } from "@/components/plan/coach-card";
 import type { CoachMessage } from "@/server/v2/coach";
 import { SOURCE_LABEL, taskMatches, type QuickFilter } from "@/lib/v2/plan-filters";
 import { v2PostponeAction } from "@/app/now/v2-actions";
-import { dayLoad } from "@/lib/v2/day-load";
+import { dayLoad, personalBusy, planningStartMin } from "@/lib/v2/day-load";
+import { respectsWorkHours } from "@/lib/v2/availability";
+import { shortTitle } from "@/lib/v2/short-title";
 import { areaLook } from "@/lib/v2/area-look";
 
 // Plan is the scheduling workspace: the calendar leads, and a rail beside it shows bookable time, a preview of
@@ -162,10 +164,16 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
   // Missed: today's blocks that ended without being marked done.
   const todayStartMs = Date.parse(board.soonDays[0]);
   const missed = blocks.filter((task) => Date.parse(task.start as string) >= todayStartMs && Date.parse(task.end as string) <= Date.parse(board.now));
-  const firstFree = (task: BoardTask) => freeStarts(board, blocks, board.soonDays[0], task.minutes, task.id, 1)[0] ?? freeStarts(board, blocks, board.soonDays[1], task.minutes, task.id, 1)[0] ?? null;
+  const firstFree = (task: BoardTask) => freeStarts(board, blocks, board.soonDays[0], task.minutes, task, 1)[0] ?? freeStarts(board, blocks, board.soonDays[1], task.minutes, task, 1)[0] ?? null;
+  const bookExact = (task: BoardTask, start: Date) => {
+    const end = new Date(start.getTime() + task.minutes * MIN);
+    run(() => bookSlotAction(task.id, start.toISOString(), end.toISOString()), { [task.id]: { start: start.toISOString(), end: end.toISOString() } });
+  };
+  const optionalToday = board.meetings.filter((meeting) => meeting.optional && Date.parse(meeting.start) >= Date.parse(board.soonDays[0]) && Date.parse(meeting.start) < Date.parse(board.soonDays[1]));
   const openPreview = () => startPreview(async () => {
     const result = await previewDayAction();
-    setSkip(new Set());
+    // Commitments start ticked; "If there's time" extras start unticked.
+    setSkip(new Set(result.items.filter((item) => item.group === "EXTRA").map((item) => item.taskId)));
     setPreview(result);
     setMessage({ ok: result.ok, message: result.message });
   });
@@ -222,9 +230,6 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
             <Link className="rounded-full px-3 py-1 font-medium hover:bg-card" href={viewHref(view)}>Today</Link>
             <Link aria-label="Later" className="flex h-7 w-7 items-center justify-center rounded-full text-base hover:bg-card" href={viewHref(view, shift(step))}>›</Link>
           </div>
-          <button className="rounded-full bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending || previewing} onClick={openPreview} type="button">
-            ✦ Plan my day
-          </button>
           <Link className="rounded-full border px-3.5 py-2 font-medium text-muted-foreground hover:bg-muted hover:text-foreground" href="/plan/wrap-up" title="Evening wrap-up: close today and plan tomorrow">Wrap up</Link>
         </div>
       </header>
@@ -278,7 +283,8 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
               <h2 className="text-sm font-semibold">Bookable today</h2>
               <span className="text-sm font-semibold tabular-nums">{fmtLength(load.freeMin)}</span>
             </div>
-            <p className="px-1 text-xs text-muted-foreground">After meetings, booked blocks and protected routines.</p>
+            <p className="px-1 text-xs text-muted-foreground">For personal work: after meetings, booked blocks, work hours and protected time.</p>
+            {!board.calendarKnown && <p className="mt-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-300">Google Calendar couldn&apos;t be read. These times are unconfirmed, not free.</p>}
             {load.windows.length > 0 ? (
               <ul aria-label="Free windows" className="mt-2 flex flex-wrap gap-1.5 px-1">
                 {load.windows.slice(0, 6).map((window) => (
@@ -288,6 +294,22 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
             ) : (
               <p className="mt-2 px-1 text-xs text-muted-foreground">No free window of 15 minutes or more is left today.</p>
             )}
+            {optionalToday.length > 0 && (
+              <p className="mt-2 px-1 text-xs text-muted-foreground">
+                Optional, not blocking{board.availability.optionalBlocks ? " (set to block)" : ""}: {optionalToday.map((meeting) => `${meeting.title} ${clock(meeting.start, tz)}`).join(" · ")}
+              </p>
+            )}
+            <details className="mt-2 px-1 text-xs">
+              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">What this counts</summary>
+              <ul className="mt-1.5 space-y-1">
+                {board.availability.sources.map((source) => (
+                  <li key={source.label}><span className={source.ok ? "font-semibold" : "font-semibold text-amber-700 dark:text-amber-300"}>{source.ok ? "✓" : "!"} {source.label}</span> <span className="text-muted-foreground">{source.detail}</span></li>
+                ))}
+                {board.availability.protections.map((line) => (
+                  <li key={line.label}><span className="font-semibold">{line.label}</span> <span className="text-muted-foreground">{line.detail}</span></li>
+                ))}
+              </ul>
+            </details>
             {preview ? (
               <PreviewPanel
                 onBook={bookPreview}
@@ -338,7 +360,7 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
                 <ReadyCard
                   firstFree={firstFree(task)}
                   key={task.id}
-                  onBook={(start) => schedule(task, start, task.minutes)}
+                  onBook={(start) => bookExact(task, start)}
                   onDone={done}
                   onPick={togglePick}
                   onSchedule={setScheduling}
@@ -515,7 +537,6 @@ function ReadyCard({ task, timeZone, firstFree, pending, pickedId, onBook, onDon
   task: BoardTask; timeZone: string; firstFree: Date | null; pending: boolean; pickedId: string | null;
   onBook: (start: Date) => void; onDone: (id: string) => void; onPick: (task: BoardTask) => void; onSchedule: (task: BoardTask) => void;
 }) {
-  const deadline = task.expiresAt ? `expires ${shortDate(task.expiresAt, timeZone)}` : task.dueDate ? `due ${shortDate(task.dueDate, timeZone)}` : null;
   const today = firstFree ? dateKey(firstFree.toISOString(), timeZone) === dateKey(new Date().toISOString(), timeZone) : false;
   return (
     <li
@@ -529,13 +550,13 @@ function ReadyCard({ task, timeZone, firstFree, pending, pickedId, onBook, onDon
       <div className="flex items-start gap-2">
         <button aria-label={`Mark done: ${task.title}`} className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/40 text-[10px] text-transparent hover:border-primary hover:text-primary" onClick={() => onDone(task.id)} type="button">✓</button>
         <div className="min-w-0 flex-1">
-          <button aria-pressed={pickedId === task.id} className="block w-full break-words text-left text-sm font-medium leading-snug" onClick={() => onPick(task)} title="Tap, then tap a time on the calendar" type="button">{task.title}</button>
+          <button aria-pressed={pickedId === task.id} className="block w-full break-words text-left text-sm font-medium leading-snug" onClick={() => onPick(task)} title={task.title} type="button">{shortTitle(task.title)}</button>
           <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-            <span className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 font-medium text-emerald-700 dark:text-emerald-300">Ready for you</span>
             <span className="font-semibold text-foreground">{fmtLength(task.minutes)}</span>
+            {readyContext(task, timeZone).map((chip) => (
+              <span className={`rounded-md border px-1.5 font-medium ${chip.tone === "due" ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-primary/30 bg-primary/10 text-primary"}`} key={chip.label}>{chip.label}</span>
+            ))}
             <span>{task.projectName ?? task.areaName}</span>
-            {deadline && <span className={task.urgent ? "font-semibold text-destructive" : ""}>{deadline}</span>}
-            {task.committed && <span>📌 today</span>}
           </p>
           <TaskLinks links={task.links} />
         </div>
@@ -559,31 +580,68 @@ function PreviewPanel({ preview, skip, pending, timeZone, onToggle, onBook, onCa
   preview: PreviewResult; skip: Set<string>; pending: boolean; timeZone: string;
   onToggle: (taskId: string) => void; onBook: () => void; onCancel: () => void;
 }) {
-  const kept = preview.items.filter((item) => !skip.has(item.taskId)).length;
+  const kept = preview.items.filter((item) => !skip.has(item.taskId));
+  const keptMinutes = kept.reduce((sum, item) => sum + (Date.parse(item.end) - Date.parse(item.start)) / MIN, 0);
+  const line = (item: PreviewLine) => (
+    <li key={item.taskId}>
+      <label className="flex cursor-pointer items-start gap-2 rounded-lg px-1 py-1 text-sm hover:bg-muted/60">
+        <input checked={!skip.has(item.taskId)} className="mt-1" onChange={() => onToggle(item.taskId)} type="checkbox" />
+        <span className="min-w-0 flex-1">
+          <span className={`block break-words font-medium leading-snug ${skip.has(item.taskId) ? "text-muted-foreground" : ""}`} title={item.title}>{shortTitle(item.title)}</span>
+          <span className="block text-xs text-muted-foreground">{clock(item.start, timeZone)}–{clock(item.end, timeZone)} · <span className="text-foreground/80">{item.reason}</span></span>
+        </span>
+      </label>
+    </li>
+  );
+  const commits = preview.items.filter((item) => item.group === "COMMIT");
+  const extras = preview.items.filter((item) => item.group === "EXTRA");
   return (
     <div className="mt-3 rounded-xl border border-primary/40 bg-primary/5 p-3" role="region" aria-label="Proposed plan">
       <p className="text-sm font-semibold">Proposed plan <span className="font-normal text-muted-foreground">· nothing booked yet</span></p>
+      {!preview.calendarKnown && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Google Calendar couldn&apos;t be read; check for meetings before booking.</p>}
       {preview.items.length === 0 && <p className="mt-1 text-sm text-muted-foreground">{preview.message}</p>}
-      <ul className="mt-2 space-y-1">
-        {preview.items.map((item) => (
-          <li key={item.taskId}>
-            <label className="flex cursor-pointer items-start gap-2 rounded-lg px-1 py-1 text-sm hover:bg-muted/60">
-              <input checked={!skip.has(item.taskId)} className="mt-1" onChange={() => onToggle(item.taskId)} type="checkbox" />
-              <span className="min-w-0 flex-1">
-                <span className={`block break-words font-medium leading-snug ${skip.has(item.taskId) ? "text-muted-foreground line-through" : ""}`}>{item.title}</span>
-                <span className="block text-xs text-muted-foreground">{clock(item.start, timeZone)}–{clock(item.end, timeZone)} · {item.reason}</span>
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
-      {preview.unplaced.length > 0 && <p className="mt-2 text-xs text-muted-foreground">{preview.unplaced.length} didn&apos;t fit: {preview.unplaced.slice(0, 3).map((item) => item.title).join(", ")}{preview.unplaced.length > 3 ? "…" : ""}</p>}
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button className="rounded-full bg-primary px-3.5 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-60" disabled={pending || kept === 0} onClick={onBook} type="button">Book {kept} block{kept === 1 ? "" : "s"}</button>
+      {commits.length > 0 && (
+        <>
+          <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Commitments ({commits.length})</p>
+          <ul className="mt-1 space-y-1">{commits.map(line)}</ul>
+        </>
+      )}
+      {extras.length > 0 && (
+        <>
+          <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">If there&apos;s time ({extras.length}, unticked)</p>
+          <ul className="mt-1 space-y-1">{extras.map(line)}</ul>
+        </>
+      )}
+      {preview.unplaced.length > 0 && (
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">{preview.unplaced.length} didn&apos;t fit</summary>
+          <ul className="mt-1 space-y-0.5">
+            {preview.unplaced.map((item) => <li key={item.title}><span className="font-medium" title={item.title}>{shortTitle(item.title, 48)}</span> <span className="text-muted-foreground">· {item.reason}</span></li>)}
+          </ul>
+        </details>
+      )}
+      <p className="mt-2 text-xs text-muted-foreground">{fmtLength(Math.round(keptMinutes))} picked; {preview.bufferMinutes} min stays free for interruptions.</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button className="rounded-full bg-primary px-3.5 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-60" disabled={pending || kept.length === 0} onClick={onBook} type="button">Book {kept.length} block{kept.length === 1 ? "" : "s"}</button>
         <button className="rounded-full border px-3.5 py-1.5 text-sm hover:bg-muted" onClick={onCancel} type="button">Cancel</button>
       </div>
     </div>
   );
+}
+
+// Why a ready action matters, in words: pinned, due, weekly priority, draft attached.
+function readyContext(task: BoardTask, timeZone: string): { label: string; tone: "due" | "info" }[] {
+  const out: { label: string; tone: "due" | "info" }[] = [];
+  const deadline = [task.dueDate, task.expiresAt].filter((value): value is string => Boolean(value)).sort()[0];
+  if (deadline) {
+    const days = Math.round((Date.parse(dateKey(deadline, timeZone)) - Date.parse(dateKey(new Date().toISOString(), timeZone))) / 86_400_000);
+    const word = deadline === task.expiresAt ? "Expires" : "Due";
+    out.push({ label: days < 0 ? (word === "Due" ? "Overdue" : "Expired") : days === 0 ? `${word} today` : days === 1 ? `${word} tomorrow` : `${word} ${shortDate(deadline, timeZone)}`, tone: days <= 1 ? "due" : "info" });
+  }
+  if (task.committed) out.push({ label: "Pinned today", tone: "info" });
+  if (task.weekly) out.push({ label: "Weekly priority", tone: "info" });
+  if (task.links.some((link) => link.kind === "draft")) out.push({ label: "Draft attached", tone: "info" });
+  return out;
 }
 
 const NO_QUICK = new Set<QuickFilter>();
@@ -660,7 +718,7 @@ function CheckinCard({ task, timeZone, onDone, onSchedule, onMessage, onPick, pi
   const deadline = task.expiresAt ? `expires ${shortDate(task.expiresAt, timeZone)}` : task.dueDate ? `due ${shortDate(task.dueDate, timeZone)}` : null;
   return (
     <li className={`cursor-grab rounded-lg border bg-card px-2.5 py-2 active:cursor-grabbing ${pickedId === task.id ? "ring-2 ring-primary" : ""} ${task.start ? "opacity-60" : ""}`} {...dragProps(task)}>
-      <button className="line-clamp-2 block w-full text-left text-[13px] font-medium leading-snug" onClick={() => onPick(task)} title={task.title} type="button">{task.title}</button>
+      <button className="line-clamp-2 block w-full text-left text-[13px] font-medium leading-snug" onClick={() => onPick(task)} title={task.title} type="button">{shortTitle(task.title)}</button>
       <p className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
         {deadline && <span className={task.urgent ? "font-semibold text-destructive" : ""}>{deadline}</span>}
         {task.start && <span>{dayLabel(task.start, timeZone)} {clock(task.start, timeZone)}</span>}
@@ -753,7 +811,7 @@ function TaskCard({ task, timeZone, onDone, onSchedule, onMessage, onPick, picke
       <div className="flex items-start gap-2">
         <button aria-label={`Mark done: ${task.title}`} className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/40 text-[10px] text-transparent transition-colors hover:border-primary hover:bg-primary/15 hover:text-primary" onClick={() => onDone(task.id)} type="button">✓</button>
         <div className="min-w-0 flex-1">
-          <button aria-pressed={pickedId === task.id} className="block w-full break-words text-left text-sm font-medium leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => onPick(task)} title="Tap, then tap a time on the calendar" type="button">{task.title}</button>
+          <button aria-pressed={pickedId === task.id} className="block w-full break-words text-left text-sm font-medium leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => onPick(task)} title={task.title} type="button">{shortTitle(task.title)}</button>
           <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
             {task.source && <span className="rounded-md border bg-background/60 px-1.5 text-[11px] font-medium">{SOURCE_LABEL[task.source] ?? task.source}</span>}
             {deadline && <span className={task.urgent ? "rounded-md bg-destructive/15 px-1.5 font-semibold text-destructive" : ""}>{deadline}</span>}
@@ -882,13 +940,23 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                 {[{ from: range.start, to: board.workdayStartMin }, { from: board.dayEndMin, to: range.end }].map((shade) => shade.to > shade.from && (
                   <div aria-hidden className="offhours absolute inset-x-0" key={shade.from} style={{ top: (shade.from - range.start) * PX_PER_MIN, height: (shade.to - shade.from) * PX_PER_MIN }} />
                 ))}
+                {board.availability.work.filter((window) => columnOf(window.start) === dayIndex).map((window) => {
+                  const top = (minutesInZone(window.start, tz) - range.start) * PX_PER_MIN;
+                  const length = (Date.parse(window.end) - Date.parse(window.start)) / MIN;
+                  return (
+                    <div aria-label={`Work hours ${clock(window.start, tz)}–${clock(window.end, tz)}, protected`} className="pointer-events-none absolute inset-x-0 border-y border-dashed border-amber-400/25 bg-amber-400/[0.04]" key={`work-${window.start}`} style={{ top, height: length * PX_PER_MIN }}>
+                      <span className="absolute right-1 top-0.5 rounded bg-amber-400/15 px-1 text-[9.5px] font-semibold uppercase tracking-wide text-amber-700/80 dark:text-amber-300/80">Work · protected</span>
+                    </div>
+                  );
+                })}
                 {dayMeetings.map((meeting) => {
                   const top = (minutesInZone(meeting.start, tz) - range.start) * PX_PER_MIN;
                   const length = Math.max(15, (Date.parse(meeting.end) - Date.parse(meeting.start)) / MIN);
+                  const optional = meeting.optional && !board.availability.optionalBlocks;
                   return (
-                    <div className="absolute inset-x-1 overflow-hidden rounded-lg border border-l-[3px] border-sky-400/30 border-l-sky-400 bg-sky-500/10 px-1.5 py-0.5 text-[11px] leading-tight backdrop-blur-sm" key={`${meeting.start}-${meeting.title}`} style={{ top, height: length * PX_PER_MIN - 2 }} title={`${meeting.title} ${clock(meeting.start, tz)}–${clock(meeting.end, tz)}`}>
+                    <div className={`absolute inset-x-1 overflow-hidden rounded-lg border px-1.5 py-0.5 text-[11px] leading-tight backdrop-blur-sm ${optional ? "border-dashed border-sky-400/40 bg-transparent opacity-70" : "border-l-[3px] border-sky-400/30 border-l-sky-400 bg-sky-500/10"}`} key={`${meeting.start}-${meeting.title}`} style={{ top, height: length * PX_PER_MIN - 2 }} title={`${meeting.title} ${clock(meeting.start, tz)}–${clock(meeting.end, tz)}${optional ? " · optional, doesn't block time" : ""}`}>
                       <p className="truncate font-medium">{meeting.title}</p>
-                      <p className="text-muted-foreground">{clock(meeting.start, tz)}</p>
+                      <p className="text-muted-foreground">{clock(meeting.start, tz)}{optional ? " · optional" : ""}</p>
                     </div>
                   );
                 })}
@@ -928,7 +996,7 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                           {task.title}
                           {short && <span className="font-normal text-white/75"> · {clock(task.start as string, tz)}</span>}
                         </p>
-                        <span className="flex shrink-0 gap-0.5">
+                        <span className="relative z-10 flex shrink-0 gap-0.5">
                           <button aria-label={`Done: ${task.title}`} className="rounded px-1 hover:bg-white/25" onClick={(event) => { event.stopPropagation(); onDone(task.id); }} type="button">✓</button>
                           <button aria-label={`Back to list: ${task.title}`} className="rounded px-1 hover:bg-white/25" onClick={(event) => { event.stopPropagation(); onUnschedule(task.id); }} type="button">×</button>
                         </span>
@@ -936,7 +1004,7 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                       {!short && <p className="truncate text-white/80">{clock(task.start as string, tz)} · {fmtLength(Math.round(shownEnd - startMin))}{task.source ? ` · ${SOURCE_LABEL[task.source] ?? task.source}` : ""}</p>}
                       <div
                         aria-label={`Change length of ${task.title}`}
-                        className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize hover:bg-white/30"
+                        className={`absolute bottom-0 cursor-ns-resize hover:bg-white/30 ${short ? "left-0 right-12 h-1" : "inset-x-0 h-2"}`}
                         onClick={(event) => event.stopPropagation()}
                         onPointerDown={(event) => {
                           event.preventDefault();
@@ -965,7 +1033,7 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                       const minute = range.start + slot * SNAP;
                       const start = toInstant(dayIndex, minute);
                       const end = new Date(start.getTime() + picked.minutes * MIN);
-                      const busy = [...dayMeetings.map((m) => [Date.parse(m.start), Date.parse(m.end)]), ...dayBlocks.filter((b) => b.id !== picked.id).map((b) => [Date.parse(b.start as string), Date.parse(b.end as string)])];
+                      const busy = [...dayMeetings.filter((m) => !m.optional || board.availability.optionalBlocks).map((m) => [Date.parse(m.start), Date.parse(m.end)]), ...dayBlocks.filter((b) => b.id !== picked.id).map((b) => [Date.parse(b.start as string), Date.parse(b.end as string)])];
                       const free = busy.every(([from, to]) => to <= start.getTime() || from >= end.getTime()) && end.getTime() > Date.parse(board.now);
                       return (
                         <button
@@ -1001,17 +1069,16 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
 }
 
 // Free starts that fit the task, from now (or the workday start) to the end of the day, around meetings and blocks.
-export function freeStarts(board: Board, blocks: BoardTask[], dayStartIso: string, minutes: number, excludeId: string, limit = 6) {
+// Free starts that fit the task, from now (or the planning start) to the end of the day, using the shared
+// availability rules: blocking meetings, other blocks, and work hours unless it's a Work-area task.
+export function freeStarts(board: Board, blocks: BoardTask[], dayStartIso: string, minutes: number, task: Pick<BoardTask, "id" | "areaSlug" | "workContext">, limit = 6) {
   const dayStart = Date.parse(dayStartIso);
-  const busy = [
-    ...board.meetings.map((meeting) => [Date.parse(meeting.start), Date.parse(meeting.end)] as const),
-    ...blocks.filter((task) => task.id !== excludeId).map((task) => [Date.parse(task.start as string), Date.parse(task.end as string)] as const)
-  ];
+  const busy = personalBusy(board, blocks, { excludeId: task.id, work: respectsWorkHours(task.areaSlug, task.workContext) });
   const nowRounded = Math.ceil(Date.parse(board.now) / (SNAP * MIN)) * SNAP * MIN;
   const out: Date[] = [];
-  for (let t = Math.max(dayStart + board.workdayStartMin * MIN, nowRounded); t + minutes * MIN <= dayStart + board.dayEndMin * MIN && out.length < limit; t += SNAP * MIN) {
+  for (let t = Math.max(dayStart + planningStartMin(board.workdayStartMin) * MIN, nowRounded); t + minutes * MIN <= dayStart + board.dayEndMin * MIN && out.length < limit; t += SNAP * MIN) {
     const end = t + minutes * MIN;
-    if (busy.every(([s, e]) => e <= t || s >= end)) {
+    if (busy.every(({ start, end: stop }) => stop <= t || start >= end)) {
       out.push(new Date(t));
       t = end - SNAP * MIN; // the next choice starts after this one
     }
@@ -1025,7 +1092,7 @@ function ScheduleSheet({ task, board, blocks, onPick, onUnschedule, onClose, onD
   const tz = board.timeZone;
   const [minutes, setMinutes] = useState(task.minutes);
   const [custom, setCustom] = useState("");
-  const options = board.soonDays.map((day, index) => ({ label: index === 0 ? "Today" : "Tomorrow", starts: freeStarts(board, blocks, day, minutes, task.id) }));
+  const options = board.soonDays.map((day, index) => ({ label: index === 0 ? "Today" : "Tomorrow", starts: freeStarts(board, blocks, day, minutes, task) }));
   const pickCustom = () => {
     if (!custom) return;
     // datetime-local is wall time in Ryan's zone: shift by the zone offset at that moment.
