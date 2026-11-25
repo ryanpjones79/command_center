@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { Sparkles, X } from "lucide-react";
-import { fillDayAction, moveBlockAction, planDoneAction, type PlanMessage } from "@/app/plan/actions";
+import { fillDayAction, moveBlockAction, nextSlotAction, planDoneAction, type PlanMessage } from "@/app/plan/actions";
 import { v2ExtendAction } from "@/app/now/v2-actions";
 import type { CoachMessage } from "@/server/v2/coach";
 import { fmtLength } from "@/lib/v2/format-length";
@@ -26,7 +26,8 @@ function readSnooze(): { key: string; until: number } | null {
 
 // The Coach card on Plan: one message for right now with tap replies. "Not now" hides it on this device
 // for 45 minutes (or until the message changes).
-export function CoachCard({ coach, onMessage }: { coach: CoachMessage | null; onMessage: (result: PlanMessage) => void }) {
+// onPlanDay: when given (on Plan), "Plan my day" opens the preview instead of booking straight away.
+export function CoachCard({ coach, onMessage, onPlanDay }: { coach: CoachMessage | null; onMessage: (result: PlanMessage) => void; onPlanDay?: () => void }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [index, setIndex] = useState(0);
@@ -78,11 +79,12 @@ export function CoachCard({ coach, onMessage }: { coach: CoachMessage | null; on
             )}
             {coach.kind === "ENDED" && (
               <>
+                <button className={secondary} disabled={pending} onClick={() => run(() => nextSlotAction(coach.taskId))} type="button">Next free slot</button>
                 <button className={secondary} disabled={pending} onClick={() => run(() => v2ExtendAction(coach.taskId))} type="button">15 more</button>
                 <button className={secondary} disabled={pending} onClick={() => run(() => moveBlockAction(coach.taskId, null, null))} type="button">Back to the list</button>
               </>
             )}
-            {coach.kind === "MORNING" && <button className={primary} disabled={pending} onClick={() => run(() => fillDayAction())} type="button">✦ Plan my day</button>}
+            {coach.kind === "MORNING" && <button className={primary} disabled={pending} onClick={() => (onPlanDay ? onPlanDay() : run(() => fillDayAction()))} type="button">✦ Plan my day</button>}
             {coach.kind === "EVENING" && <Link className={cn(primary, "inline-flex items-center")} href="/plan/wrap-up">Wrap up</Link>}
             {coach.kind !== "NOW" && <button className={secondary} disabled={pending} onClick={notNow} type="button">Not now</button>}
           </div>

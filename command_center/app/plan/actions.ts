@@ -172,3 +172,71 @@ export async function addHabitAction(input: { title: string; weekdays: number[];
   refresh();
   return { ok: true, message: `Added "${String(input.title).trim()}". It shows here on the days you picked.` };
 }
+
+// ---- Plan as the scheduling workspace: preview, then book; one-click next slot; missed blocks ----
+
+export type PreviewLine = { taskId: string; title: string; start: string; end: string; reason: string; routine: boolean; areaSlug: string };
+export type PreviewResult = { ok: boolean; message: string; items: PreviewLine[]; unplaced: { title: string; reason: string }[] };
+
+// "Plan my day", step 1: propose today's blocks without booking anything. Ryan reviews the preview on the
+// calendar, unticks what he doesn't want, then books the rest with bookPlanAction.
+export async function previewDayAction(): Promise<PreviewResult> {
+  const user = await requireUser();
+  await materializeRoutines(user.id, prisma).catch(() => undefined);
+  const proposal = await proposeDay(user.id, prisma, googleCalendarLoader());
+  const items = proposal.items.map((item) => ({
+    taskId: item.task.id,
+    title: item.task.title,
+    start: item.slot.start.toISOString(),
+    end: item.slot.end.toISOString(),
+    reason: item.reason,
+    routine: Boolean(item.routine),
+    areaSlug: item.task.domainSlug
+  }));
+  const unplaced = proposal.unplaced.slice(0, 12).map((item) => ({ title: item.task.title, reason: item.reason }));
+  if (items.length === 0) {
+    return { ok: true, items, unplaced, message: unplaced.length ? `Nothing fits in today's free time (${proposal.unplaced.length} waiting).` : "Nothing is waiting to be placed today." };
+  }
+  return { ok: true, items, unplaced, message: `Proposed ${items.length} block${items.length === 1 ? "" : "s"}. Nothing is booked yet.` };
+}
+
+// "Plan my day", step 2: book the previewed blocks Ryan kept. Each slot is re-checked under the booking lock.
+export async function bookPlanAction(items: { taskId: string; start: string; end: string }[]): Promise<PlanMessage> {
+  const user = await requireUser();
+  const clean = (Array.isArray(items) ? items : []).slice(0, 40).map((item) => ({ taskId: String(item.taskId), start: String(item.start), end: String(item.end) }));
+  if (clean.length === 0) return { ok: false, message: "Nothing picked to book." };
+  const result = await acceptPlan(user.id, prisma, clean);
+  const note = await sync(user.id);
+  refresh();
+  const skipped = result.skipped.length ? ` ${result.skipped.length} skipped because the day changed; preview again.` : "";
+  return { ok: result.booked.length > 0, message: `Booked ${result.booked.length} block${result.booked.length === 1 ? "" : "s"}.${skipped}${note}` };
+}
+
+// One click: put a ready action (or a missed block) in the next free slot. Same task row, so its project,
+// source link and drafts stay attached; the calendar event moves rather than being duplicated.
+export async function nextSlotAction(taskId: string): Promise<PlanMessage> {
+  const user = await requireUser();
+  const settings = await loadDaySettings(user.id, prisma);
+  const result = await scheduleAction(user.id, String(taskId), prisma, googleCalendarLoader(), {});
+  const note = await sync(user.id);
+  refresh();
+  if (result.type === "BOOKED") {
+    const day = localDateKey(result.slot.start, settings.timeZone) === localDateKey(new Date(), settings.timeZone) ? "" : ` ${result.slot.start.toLocaleDateString("en-US", { timeZone: settings.timeZone, weekday: "short" })}`;
+    return { ok: true, message: `Booked${day} ${localClock(result.slot.start, settings.timeZone)}–${localClock(result.slot.end, settings.timeZone)}.${result.usesBuffer ? " This uses today's buffer." : ""}${note}` };
+  }
+  if (result.type === "NOT_FOUND") return { ok: false, message: "That task is already done or gone." };
+  return { ok: false, message: `${"message" in result ? result.message : "No free slot fits."} Pick a time instead.` };
+}
+
+// Ryan takes over an action an agent was preparing: it becomes his, ready to schedule. Drafts stay attached.
+export async function takeOverAction(taskId: string): Promise<PlanMessage> {
+  const user = await requireUser();
+  const updated = await prisma.executionTask.updateMany({
+    where: { id: String(taskId), userId: user.id, status: "WAITING", waitingOn: { startsWith: "Agent" } },
+    data: { status: "NOT_STARTED", waitingOn: null }
+  });
+  if (!updated.count) return { ok: false, message: "That item isn't with an agent any more." };
+  await prisma.executionTaskEvent.create({ data: { userId: user.id, taskId: String(taskId), type: "READY", detail: "Ryan took it over from the agent" } });
+  refresh();
+  return { ok: true, message: "It's yours now, ready to schedule." };
+}

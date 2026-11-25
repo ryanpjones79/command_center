@@ -7,6 +7,7 @@ import { loadDaySettings, type CalendarLoader } from "@/server/v2/schedule-servi
 import { SYNC_SOURCE, writeEnabled } from "@/server/v2/calendar-sync";
 import { loadHabits, type Habit } from "@/server/v2/habits";
 import { resolveTools, type ToolLink } from "@/lib/v2/tools";
+import { agentDoing, readiness, safeLink, type Readiness } from "@/lib/v2/readiness";
 
 // Read model for the Plan screen: every open task grouped by area and project (feed items included, labelled
 // by source), plus the calendar for the days shown (Google meetings and RyanOS blocks).
@@ -32,7 +33,12 @@ export type BoardTask = {
   isProtected: boolean;
   urgent: boolean;
   committed?: boolean; // whenBucket TODAY: Ryan committed to it for today
+  ready: Readiness; // "preparing": an agent is still working on it; "ready": Ryan's to do
+  doing: string | null; // what the agent is preparing, when ready === "preparing"
+  links: BoardLink[]; // drafts and sources attached to the task
 };
+
+export type BoardLink = { title: string; url: string; kind: "draft" | "source" | "link" };
 
 export type BoardProject = { id: string; name: string; tasks: BoardTask[] };
 export type BoardArea = { id: string; slug: string; name: string; projects: BoardProject[]; loose: BoardTask[] };
@@ -49,6 +55,7 @@ export type Board = {
   soonDays: string[]; // today and tomorrow, for the phone's Schedule choices
   areas: BoardArea[];
   waiting: BoardTask[];
+  preparing: BoardTask[]; // an agent is preparing these; not bookable until ready
   blocks: BoardTask[];
   meetings: BoardMeeting[];
   calendarKnown: boolean;
@@ -61,7 +68,15 @@ export type Board = {
 const AREA_ORDER = ["ebay", "rykas", "betting-models", "casino-ap", "work", "health", "golf", "family", "opportunities", "admin"];
 const PRIORITY_RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
 
-function toBoardTask(task: DayTask & { priority: string; waitingOn: string | null }, now: Date): BoardTask {
+type LinkRow = { title: string; url: string | null; provider: string };
+
+function toLinks(rows: LinkRow[]): BoardLink[] {
+  return rows
+    .map((row) => ({ title: row.title, url: safeLink(row.url), kind: row.provider === "draft" ? ("draft" as const) : row.provider === "source" ? ("source" as const) : ("link" as const) }))
+    .filter((link): link is BoardLink => Boolean(link.url));
+}
+
+function toBoardTask(task: DayTask & { priority: string; waitingOn: string | null; references?: LinkRow[] }, now: Date): BoardTask {
   const deadline = [task.dueDate, task.expiresAt].filter((value): value is Date => value instanceof Date).sort((a, b) => a.getTime() - b.getTime())[0];
   return {
     id: task.id,
@@ -83,7 +98,10 @@ function toBoardTask(task: DayTask & { priority: string; waitingOn: string | nul
     status: task.status,
     isProtected: task.isProtected,
     urgent: task.priority === "CRITICAL" || Boolean(deadline && deadline.getTime() - now.getTime() < 2 * 86_400_000),
-    committed: task.whenBucket === "TODAY"
+    committed: task.whenBucket === "TODAY",
+    ready: readiness(task),
+    doing: readiness(task) === "preparing" ? agentDoing(task.waitingOn) : null,
+    links: toLinks(task.references ?? [])
   };
 }
 
@@ -136,7 +154,7 @@ export async function loadBoard(
   const [rows, domains, projects, sync] = await Promise.all([
     db.executionTask.findMany({
       where: { userId, status: { notIn: ["DONE", "DROPPED"] }, needsJudgment: false },
-      select: { ...dayTaskSelect, priority: true, waitingOn: true },
+      select: { ...dayTaskSelect, priority: true, waitingOn: true, references: { select: { title: true, url: true, provider: true }, orderBy: { createdAt: "asc" }, take: 4 } },
       take: 3000
     }),
     db.executionDomain.findMany({ where: { userId }, select: { id: true, slug: true, name: true } }),
@@ -157,7 +175,7 @@ export async function loadBoard(
     if (row.whenBucket === "PARKING_LOT") return false;
     return !(row.followUpDate && row.followUpDate > now);
   });
-  const tasks = visible.map((row) => toBoardTask({ ...toDayTask(row), priority: row.priority, waitingOn: row.waitingOn }, now));
+  const tasks = visible.map((row) => toBoardTask({ ...toDayTask(row), priority: row.priority, waitingOn: row.waitingOn, references: row.references }, now));
   // Routine day copies live in the Daily habits strip (and on the calendar once placed), not in the lists.
   const isRoutine = (index: number) => visible[index].sourceSystem === "ROUTINE";
   const listed = tasks.filter((_, index) => !isRoutine(index));
@@ -202,7 +220,8 @@ export async function loadBoard(
     days: days.map((day) => day.toISOString()),
     soonDays: [today, addZonedDays(today, 1, tz)].map((day) => day.toISOString()),
     areas,
-    waiting: sortTasks(listed.filter(isWaiting)),
+    waiting: sortTasks(listed.filter((task) => isWaiting(task) && task.ready !== "preparing")),
+    preparing: sortTasks(listed.filter((task) => task.ready === "preparing")),
     blocks,
     meetings,
     calendarKnown,

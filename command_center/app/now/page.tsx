@@ -9,6 +9,9 @@ import { requireUser } from "@/lib/session";
 import { localClock, localDateKey } from "@/lib/v2/zoned-time";
 import { googleCalendarLoader, loadDay, recommendNow, workHref, type DayTask } from "@/server/v2/day";
 import { loadQuickTargets } from "@/server/v2/board";
+import { safeLink } from "@/lib/v2/readiness";
+
+type TaskLink = { title: string; url: string; provider: string };
 
 export const metadata: Metadata = { title: "Now" };
 export const dynamic = "force-dynamic";
@@ -43,7 +46,7 @@ function WorkLink({ task }: { task: DayTask }) {
   );
 }
 
-function Context({ task, timeZone }: { task: DayTask; timeZone: string }) {
+function Context({ task, timeZone, links = [] }: { task: DayTask; timeZone: string; links?: TaskLink[] }) {
   const why = whyHere(task, timeZone);
   const sourceUnknown = task.sourceSystem && task.sourceSystem !== "CAPTURE" && (task.sourceState === "GONE" || task.sourceState === "UNKNOWN");
   return (
@@ -62,6 +65,17 @@ function Context({ task, timeZone }: { task: DayTask; timeZone: string }) {
         <WorkLink task={task} />
         {task.projectName && <span className="text-sm text-muted-foreground">Project: {task.projectName}</span>}
       </div>
+      {links.length > 0 && (
+        <ul aria-label="Drafts and sources" className="flex flex-wrap gap-2 text-sm">
+          {links.map((link) => (
+            <li key={link.url}>
+              <a className="rounded-lg border px-2.5 py-1 font-medium hover:bg-muted" href={link.url} {...(/^https:/i.test(link.url) ? { rel: "noopener noreferrer", target: "_blank" } : {})}>
+                {link.provider === "draft" ? "Draft" : link.provider === "source" ? "Source" : "Link"}: {link.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -85,6 +99,13 @@ export default async function NowPage() {
     !model.calendarKnown ? "calendar not reachable" : null
   ].filter(Boolean);
   const urgentIncident = model.openIncidents[0] ?? null;
+  // Drafts and sources attached to the task in focus (the same task row Plan booked).
+  const focus = current ?? closeOut ?? recommendation;
+  const links: TaskLink[] = focus
+    ? (await prisma.executionTaskReference.findMany({ where: { userId: user.id, taskId: focus.id }, select: { title: true, url: true, provider: true }, orderBy: { createdAt: "asc" }, take: 4 }))
+        .map((row) => ({ title: row.title, url: safeLink(row.url) ?? "", provider: row.provider }))
+        .filter((row) => row.url)
+    : [];
 
   return (
     <div className="space-y-5">
@@ -111,7 +132,7 @@ export default async function NowPage() {
               <span className="font-semibold">{minutesText(Math.max(0, Math.ceil(((current.scheduledEnd as Date).getTime() - now.getTime()) / 60_000)))} left</span>
               <span className="text-muted-foreground"> · until {localClock(current.scheduledEnd as Date, tz)}</span>
             </p>
-            <Context task={current} timeZone={tz} />
+            <Context links={links} task={current} timeZone={tz} />
             {current.postponeCount >= 3 && (
               <p className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">Put off {current.postponeCount} times. Is it still worth doing? If not, Move → Drop or Park.</p>
             )}
@@ -121,7 +142,7 @@ export default async function NowPage() {
           <>
             <p className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-300">Ended at {localClock(closeOut.scheduledEnd as Date, tz)} without an outcome</p>
             <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{closeOut.title}</h1>
-            <Context task={closeOut} timeZone={tz} />
+            <Context links={links} task={closeOut} timeZone={tz} />
             <div className="mt-6"><BlockControls ended protectedTime={closeOut.isProtected} taskId={closeOut.id} /></div>
           </>
         ) : model.currentMeeting ? (
@@ -136,7 +157,7 @@ export default async function NowPage() {
             </p>
             <h1 className="font-display mt-2 break-words text-4xl font-medium leading-[1.1] tracking-tight sm:text-5xl">{recommendation.title}</h1>
             <p className="mt-2 text-sm text-muted-foreground">About {minutesText(recommendation.minutes)}</p>
-            <Context task={recommendation} timeZone={tz} />
+            <Context links={links} task={recommendation} timeZone={tz} />
             <div className="mt-6"><ScheduleButton label="Do it now" startNow taskId={recommendation.id} /></div>
             <p className="mt-2 text-xs text-muted-foreground">Or keep the time free; buffer is part of the plan.</p>
           </>

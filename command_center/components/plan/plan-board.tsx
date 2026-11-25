@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { fillDayAction, habitDoneAction, moveBlockAction, pinTodayAction, planDoneAction, scheduleCheckinReviewAction, waitingOnAction, type PlanMessage } from "@/app/plan/actions";
-import type { Board, BoardArea, BoardTask } from "@/server/v2/board";
+import { bookPlanAction, habitDoneAction, moveBlockAction, nextSlotAction, pinTodayAction, planDoneAction, previewDayAction, scheduleCheckinReviewAction, takeOverAction, waitingOnAction, type PlanMessage, type PreviewResult } from "@/app/plan/actions";
+import type { Board, BoardArea, BoardLink, BoardTask } from "@/server/v2/board";
 import type { Habit } from "@/server/v2/habits";
 import type { QuickTarget } from "@/lib/v2/quick-add";
 import { NewTaskButton } from "@/components/plan/task-composer";
@@ -15,11 +15,12 @@ import { v2PostponeAction } from "@/app/now/v2-actions";
 import { dayLoad } from "@/lib/v2/day-load";
 import { areaLook } from "@/lib/v2/area-look";
 
-// Plan as a command board: three columns (To-dos, Routines, Check-ins) beside today's calendar. To-dos are Ryan's
-// own tasks, routines are regular work with weekly targets, check-ins are items from his apps (AP Trader, eBay,
-// Supplier OS...) that are cleared rather than planned. Drag any card onto the calendar or press Schedule; drag a
-// block to move it, pull its bottom edge to change its length, drag it back to the board to unschedule it. On a
-// phone the day's calendar is pinned on top and the columns become tabs; tap a card, then a time.
+// Plan is the scheduling workspace: the calendar leads, and a rail beside it shows bookable time, a preview of
+// the proposed day, missed blocks, and a short list of actions ready for Ryan (one click books the first free
+// time). Actions an agent is still preparing are listed apart and can't be booked until they're ready. Routines,
+// app check-ins and the full to-do list are folded away. Drag any card onto the calendar; drag a block to move it,
+// pull its bottom edge to change its length, drag it back to the rail to unschedule it. A booked task is the same
+// task row everywhere (Plan, Now, Google Calendar), so moving it never duplicates it or loses its source.
 
 const PX_PER_MIN = 1;
 const SNAP = 15;
@@ -89,7 +90,9 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
   const [picked, setPicked] = useState<BoardTask | null>(null);
   const phone = useIsPhone();
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<"todos" | "routines" | "checkins">("todos");
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [skip, setSkip] = useState<Set<string>>(new Set());
+  const [previewing, startPreview] = useTransition();
   const [closed, setClosed] = useState<Set<string>>(new Set());
   useEffect(() => setClosed(readClosed()), []);
   const setAreaOpen = (slug: string, open: boolean) => setClosed((current) => {
@@ -138,10 +141,12 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
     .map((area) => ({ ...area, projects: area.projects.map((project) => ({ ...project, tasks: project.tasks.filter((task) => !isCheckin(task) && keep(task)) })).filter((project) => project.tasks.length > 0), loose: area.loose.filter((task) => !isCheckin(task) && keep(task)) }))
     .filter((area) => area.projects.length > 0 || area.loose.length > 0);
   const mineTasks = mineAreas.flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)]);
-  const todayEnd = Date.parse(board.soonDays[1]);
-  const todayList = mineTasks
-    .filter((task) => task.urgent || task.committed || (task.start && Date.parse(task.start) < todayEnd))
-    .sort((a, b) => Number(b.urgent) - Number(a.urgent) || (a.start ? Date.parse(a.start) : Infinity) - (b.start ? Date.parse(b.start) : Infinity));
+  // Ready for Ryan: his own open to-dos (not check-ins, not waiting, not with an agent) that aren't booked yet.
+  const ready = readyOrder(board.areas
+    .flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)])
+    .filter((task) => !isCheckin(task) && task.ready === "ready")
+    .map(withOverride)
+    .filter((task) => !task.start));
   const shownWaiting = board.waiting.filter((task) => !task.source && keep(task));
   const checkins = board.areas
     .flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)])
@@ -154,6 +159,22 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
 
   const openTasks = [...board.areas.flatMap((area) => [...area.loose, ...area.projects.flatMap((project) => project.tasks)]), ...board.waiting].filter((task) => !task.source);
   const load = dayLoad(board, blocks, openTasks);
+  // Missed: today's blocks that ended without being marked done.
+  const todayStartMs = Date.parse(board.soonDays[0]);
+  const missed = blocks.filter((task) => Date.parse(task.start as string) >= todayStartMs && Date.parse(task.end as string) <= Date.parse(board.now));
+  const firstFree = (task: BoardTask) => freeStarts(board, blocks, board.soonDays[0], task.minutes, task.id, 1)[0] ?? freeStarts(board, blocks, board.soonDays[1], task.minutes, task.id, 1)[0] ?? null;
+  const openPreview = () => startPreview(async () => {
+    const result = await previewDayAction();
+    setSkip(new Set());
+    setPreview(result);
+    setMessage({ ok: result.ok, message: result.message });
+  });
+  const bookPreview = () => {
+    if (!preview) return;
+    const items = preview.items.filter((item) => !skip.has(item.taskId)).map((item) => ({ taskId: item.taskId, start: item.start, end: item.end }));
+    setPreview(null);
+    run(() => bookPlanAction(items), Object.fromEntries(items.map((item) => [item.taskId, { start: item.start, end: item.end }])));
+  };
 
   const schedule = (task: BoardTask, start: Date, minutes: number) => {
     const end = new Date(start.getTime() + minutes * MIN);
@@ -201,14 +222,14 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
             <Link className="rounded-full px-3 py-1 font-medium hover:bg-card" href={viewHref(view)}>Today</Link>
             <Link aria-label="Later" className="flex h-7 w-7 items-center justify-center rounded-full text-base hover:bg-card" href={viewHref(view, shift(step))}>›</Link>
           </div>
-          <button className="rounded-full bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending} onClick={() => run(() => fillDayAction())} type="button">
+          <button className="rounded-full bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending || previewing} onClick={openPreview} type="button">
             ✦ Plan my day
           </button>
           <Link className="rounded-full border px-3.5 py-2 font-medium text-muted-foreground hover:bg-muted hover:text-foreground" href="/plan/wrap-up" title="Evening wrap-up: close today and plan tomorrow">Wrap up</Link>
         </div>
       </header>
 
-      <CoachCard coach={coach} onMessage={(result) => { setMessage(result); router.refresh(); }} />
+      <CoachCard coach={coach} onMessage={(result) => { setMessage(result); router.refresh(); }} onPlanDay={openPreview} />
 
       <div aria-live="polite" className="text-sm empty:-mt-4">
         {message && <p className={message.ok ? "text-muted-foreground" : "font-medium text-destructive"}>{message.message}</p>}
@@ -217,9 +238,10 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
       </div>
 
 
-      {/* Phone: today's calendar stays pinned above the board. Desktop (day view): board left, calendar right. */}
-      <div className={view === "day" ? "flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(360px,440px)] lg:items-start" : "flex flex-col gap-4"}>
-        <section aria-label="Calendar" className="sticky top-[3.6rem] z-30 -mx-4 min-w-0 border-b bg-background px-4 pb-2 pt-1 sm:-mx-6 sm:px-6 md:static md:mx-0 md:border-0 md:bg-transparent md:p-0 lg:sticky lg:top-4 lg:order-2">
+      {/* The calendar is the workspace: main panel on desktop, pinned on top on a phone. The rail beside it
+          holds what to book next; routines, check-ins and the full to-do list are folded away. */}
+      <div className={view === "day" ? "flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(340px,400px)] lg:items-start" : "flex flex-col gap-4"}>
+        <section aria-label="Calendar" className="sticky top-[3.6rem] z-30 -mx-4 min-w-0 border-b bg-background px-4 pb-2 pt-1 sm:-mx-6 sm:px-6 md:static md:mx-0 md:border-0 md:bg-transparent md:p-0 lg:sticky lg:top-4">
           {picked && (
             <div className="mb-2 flex items-center justify-between gap-2 rounded-2xl border border-primary/40 bg-gradient-to-r from-primary/15 to-accent/10 px-3 py-2 text-sm shadow-[0_0_24px_-8px_hsl(var(--primary)/0.6)]" role="status">
               <span className="min-w-0 truncate">Tap a time for <b>{picked.title}</b> ({fmtLength(picked.minutes)})</span>
@@ -238,113 +260,196 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
             onSchedule={schedule}
             onUnschedule={unschedule}
             picked={picked}
+            preview={preview ? preview.items.map((item) => ({ ...item, off: skip.has(item.taskId) })) : []}
           />
         </section>
 
         <section
-          aria-label="Board"
-          className="min-w-0 lg:order-1"
+          aria-label="Schedule"
+          className="flex min-w-0 flex-col gap-3"
           onDragOver={(event) => { if (event.dataTransfer.types.includes(DRAG_TYPE)) event.preventDefault(); }}
           onDrop={(event) => {
             const payload = readPayload(event);
             if (payload?.mode === "block") { event.preventDefault(); unschedule(payload.taskId); }
           }}
         >
-          <div aria-label="Board columns" className="mb-3 grid grid-cols-3 gap-1 rounded-full border bg-muted/60 p-1 text-sm lg:hidden" role="tablist">
-            {([["todos", "To-dos", mineTasks.length], ["routines", "Routines", routinesLeft], ["checkins", "Check-ins", checkins.length]] as const).map(([key, label, count]) => (
-              <button aria-selected={tab === key} className={`rounded-full px-2 py-1.5 font-medium ${tab === key ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`} key={key} onClick={() => setTab(key)} role="tab" type="button">
-                {label} <span className="tabular-nums opacity-60">{count}</span>
-              </button>
-            ))}
-          </div>
-          <div className="grid gap-3 lg:grid-cols-3 lg:items-start">
-            <BoardColumn className={tab === "todos" ? "" : "hidden lg:flex"} count={mineTasks.length} hint="drag onto the calendar" title="To-dos">
-              <NewTaskButton onDone={setMessage} targets={board.targets} timeZone={tz} />
-              <label className="sr-only" htmlFor="plan-search">Search to-dos</label>
-              <input
-                className="w-full rounded-xl border bg-background/60 px-3 py-2 text-sm placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                id="plan-search"
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search…"
-                type="search"
-                value={query}
+          <div className="rounded-2xl border bg-card p-3">
+            <div className="flex items-baseline justify-between gap-2 px-1">
+              <h2 className="text-sm font-semibold">Bookable today</h2>
+              <span className="text-sm font-semibold tabular-nums">{fmtLength(load.freeMin)}</span>
+            </div>
+            <p className="px-1 text-xs text-muted-foreground">After meetings, booked blocks and protected routines.</p>
+            {load.windows.length > 0 ? (
+              <ul aria-label="Free windows" className="mt-2 flex flex-wrap gap-1.5 px-1">
+                {load.windows.slice(0, 6).map((window) => (
+                  <li className="rounded-full border bg-emerald-500/10 px-2.5 py-1 text-xs tabular-nums" key={window.start}>{clock(window.start, tz)}–{clock(window.end, tz)} · {fmtLength(window.minutes)}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 px-1 text-xs text-muted-foreground">No free window of 15 minutes or more is left today.</p>
+            )}
+            {preview ? (
+              <PreviewPanel
+                onBook={bookPreview}
+                onCancel={() => setPreview(null)}
+                onToggle={(taskId) => setSkip((current) => { const next = new Set(current); if (next.has(taskId)) next.delete(taskId); else next.add(taskId); return next; })}
+                pending={pending}
+                preview={preview}
+                skip={skip}
+                timeZone={tz}
               />
-              {todayList.length > 0 && !filtering && (
-                <div>
-                  <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Today</p>
-                  <ul className="mt-1 space-y-1.5">
-                    {todayList.map((task) => <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={withOverride(task)} timeZone={tz} />)}
-                  </ul>
-                </div>
-              )}
-              {mineAreas.map((area) => (
-                <AreaList
-                  area={area}
-                  filtering={filtering}
-                  key={area.id}
+            ) : (
+              <div className="mt-3 flex flex-wrap items-center gap-2 px-1">
+                <button className="rounded-full bg-primary px-3.5 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-60" disabled={previewing} onClick={openPreview} type="button">{previewing ? "Planning…" : "✦ Preview my day"}</button>
+                <NewTaskButton label="+ New task" onDone={setMessage} targets={board.targets} timeZone={tz} variant="chip" />
+              </div>
+            )}
+          </div>
+
+          {missed.length > 0 && (
+            <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3">
+              <h2 className="px-1 text-sm font-semibold">Missed today <span className="font-normal text-muted-foreground">· {missed.length}</span></h2>
+              <p className="px-1 text-xs text-muted-foreground">Moving it keeps the task, its project, links and source.</p>
+              <ul className="mt-2 space-y-1.5">
+                {missed.map((task) => (
+                  <li className="rounded-xl border bg-card px-3 py-2" key={task.id}>
+                    <p className="break-words text-sm font-medium leading-snug">{task.title}</p>
+                    <p className="text-xs text-muted-foreground">Was {clock(task.start as string, tz)}–{clock(task.end as string, tz)}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+                      <button className="rounded-full bg-primary px-2.5 py-1 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending} onClick={() => run(() => nextSlotAction(task.id))} type="button">Next free slot</button>
+                      <button className="rounded-full border bg-background/60 px-2.5 py-1 font-medium hover:border-primary/60 hover:text-primary" onClick={() => setScheduling(task)} type="button">Pick a time</button>
+                      <button className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted" disabled={pending} onClick={() => unschedule(task.id)} type="button">Back to list</button>
+                      <button className="rounded-full border bg-background/60 px-2.5 py-1 text-muted-foreground hover:bg-muted" disabled={pending} onClick={() => done(task.id)} type="button">Did it</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="rounded-2xl border bg-card p-3">
+            <div className="flex items-baseline justify-between gap-2 px-1">
+              <h2 className="flex items-center gap-2 text-sm font-semibold">Ready for you <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">{ready.length}</span></h2>
+              <span className="text-xs text-muted-foreground">one click books it</span>
+            </div>
+            {ready.length === 0 && <p className="mt-2 rounded-xl border p-3 text-sm text-muted-foreground">Nothing waiting to be booked.</p>}
+            <ul className="mt-2 space-y-1.5">
+              {ready.slice(0, READY_SHOWN).map((task) => (
+                <ReadyCard
+                  firstFree={firstFree(task)}
+                  key={task.id}
+                  onBook={(start) => schedule(task, start, task.minutes)}
                   onDone={done}
-                  onMessage={(result) => { setMessage(result); router.refresh(); }}
-                  onOpenChange={(open) => setAreaOpen(`open:${area.slug}`, !open)}
                   onPick={togglePick}
                   onSchedule={setScheduling}
-                  open={filtering || closed.has(`open:${area.slug}`)}
-                  overrides={overrides}
+                  pending={pending}
                   pickedId={picked?.id ?? null}
-                  targets={board.targets}
+                  task={task}
                   timeZone={tz}
                 />
               ))}
-              {filtering && mineTasks.length === 0 && <p className="rounded-xl border p-3 text-sm text-muted-foreground">Nothing matches.</p>}
-              {shownWaiting.length > 0 && (
-                <details className="rounded-xl border bg-background/40 p-3">
-                  <summary className="cursor-pointer text-sm font-semibold">Waiting on others ({shownWaiting.length})</summary>
-                  <ul className="mt-2 space-y-1.5">
-                    {shownWaiting.map((task) => (
-                      <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={withOverride(task)} timeZone={tz} />
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </BoardColumn>
+            </ul>
+            {ready.length > READY_SHOWN && <p className="mt-2 px-1 text-xs text-muted-foreground">{ready.length - READY_SHOWN} more under All to-dos.</p>}
+          </div>
 
-            <BoardColumn className={tab === "routines" ? "" : "hidden lg:flex"} count={routinesLeft} hint="this week" link={{ href: "/plan/routines", label: "Edit" }} title="Routines">
-              {board.habits.length === 0 && <Link className="rounded-xl border border-dashed p-3 text-sm text-muted-foreground hover:bg-muted" href="/plan/routines">+ Add routines (eBay listing, sourcing, workouts…)</Link>}
-              <ul className="space-y-1.5">
-                {board.habits.map((habit) => (
-                  <RoutineCard
-                    habit={habit}
-                    key={habit.routineId}
-                    onMessage={(result) => { setMessage(result); router.refresh(); }}
-                    onPick={togglePick}
-                    onSchedule={setScheduling}
-                    pickedId={picked?.id ?? null}
-                    task={habit.todayTaskId ? withOverrideMaybe(allTasks.get(habit.todayTaskId)) : null}
-                    timeZone={tz}
-                  />
+          {board.preparing.length > 0 && (
+            <div className="rounded-2xl border border-dashed bg-card/60 p-3">
+              <h2 className="px-1 text-sm font-semibold">Agent preparing <span className="font-normal text-muted-foreground">· not ready to book</span></h2>
+              <ul className="mt-2 space-y-1.5">
+                {board.preparing.map((task) => (
+                  <li className="rounded-xl border bg-background/40 px-3 py-2" key={task.id}>
+                    <p className="break-words text-sm font-medium leading-snug">{task.title}</p>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                      <span className="rounded-md border border-violet-400/40 bg-violet-500/10 px-1.5 font-medium text-violet-700 dark:text-violet-300">Agent preparing</span>
+                      {task.doing && <span>{task.doing}</span>}
+                      <span>then {fmtLength(task.minutes)} for you</span>
+                    </p>
+                    <TaskLinks links={task.links} />
+                    <div className="mt-1.5 text-xs">
+                      <button className="rounded-full border bg-background/60 px-2.5 py-1 font-medium hover:border-primary/60 hover:text-primary disabled:opacity-60" disabled={pending} onClick={() => run(() => takeOverAction(task.id))} type="button">Take it over</button>
+                    </div>
+                  </li>
                 ))}
               </ul>
-            </BoardColumn>
+            </div>
+          )}
 
-            <BoardColumn className={tab === "checkins" ? "" : "hidden lg:flex"} count={checkins.length} hint="clear, don't plan" title="Check-ins">
-              {checkinGroups.length === 0 && <p className="rounded-xl border p-3 text-sm text-muted-foreground">All clear. Nothing from your apps.</p>}
-              {checkinGroups.map((group) => (
-                <CheckinGroup
-                  count={group.tasks.length}
-                  key={group.source}
-                  label={group.label}
-                  onMessage={(result) => { setMessage(result); router.refresh(); }}
-                  source={group.source}
-                  tool={board.tools.find((tool) => tool.key === group.source) ?? null}
-                >
-                  {group.tasks.map((task) => (
-                    <CheckinCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={task} timeZone={tz} />
+          <Fold count={mineTasks.length} title="All to-dos">
+            <label className="sr-only" htmlFor="plan-search">Search to-dos</label>
+            <input
+              className="w-full rounded-xl border bg-background/60 px-3 py-2 text-sm placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              id="plan-search"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search…"
+              type="search"
+              value={query}
+            />
+            {mineAreas.map((area) => (
+              <AreaList
+                area={area}
+                filtering={filtering}
+                key={area.id}
+                onDone={done}
+                onMessage={(result) => { setMessage(result); router.refresh(); }}
+                onOpenChange={(open) => setAreaOpen(`open:${area.slug}`, !open)}
+                onPick={togglePick}
+                onSchedule={setScheduling}
+                open={filtering || closed.has(`open:${area.slug}`)}
+                overrides={overrides}
+                pickedId={picked?.id ?? null}
+                targets={board.targets}
+                timeZone={tz}
+              />
+            ))}
+            {filtering && mineTasks.length === 0 && <p className="rounded-xl border p-3 text-sm text-muted-foreground">Nothing matches.</p>}
+            {shownWaiting.length > 0 && (
+              <details className="rounded-xl border bg-background/40 p-3">
+                <summary className="cursor-pointer text-sm font-semibold">Waiting on others ({shownWaiting.length})</summary>
+                <ul className="mt-2 space-y-1.5">
+                  {shownWaiting.map((task) => (
+                    <TaskCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={withOverride(task)} timeZone={tz} />
                   ))}
-                </CheckinGroup>
-              ))}
-            </BoardColumn>
-          </div>
-        </section>
+                </ul>
+              </details>
+            )}
+          </Fold>
 
+          <Fold count={routinesLeft} link={{ href: "/plan/routines", label: "Edit" }} title="Routines">
+            {board.habits.length === 0 && <Link className="rounded-xl border border-dashed p-3 text-sm text-muted-foreground hover:bg-muted" href="/plan/routines">+ Add routines (eBay listing, sourcing, workouts…)</Link>}
+            <ul className="space-y-1.5">
+              {board.habits.map((habit) => (
+                <RoutineCard
+                  habit={habit}
+                  key={habit.routineId}
+                  onMessage={(result) => { setMessage(result); router.refresh(); }}
+                  onPick={togglePick}
+                  onSchedule={setScheduling}
+                  pickedId={picked?.id ?? null}
+                  task={habit.todayTaskId ? withOverrideMaybe(allTasks.get(habit.todayTaskId)) : null}
+                  timeZone={tz}
+                />
+              ))}
+            </ul>
+          </Fold>
+
+          <Fold count={checkins.length} title="App check-ins">
+            {checkinGroups.length === 0 && <p className="rounded-xl border p-3 text-sm text-muted-foreground">All clear. Nothing from your apps.</p>}
+            {checkinGroups.map((group) => (
+              <CheckinGroup
+                count={group.tasks.length}
+                key={group.source}
+                label={group.label}
+                onMessage={(result) => { setMessage(result); router.refresh(); }}
+                source={group.source}
+                tool={board.tools.find((tool) => tool.key === group.source) ?? null}
+              >
+                {group.tasks.map((task) => (
+                  <CheckinCard key={task.id} onDone={done} onMessage={(result) => { setMessage(result); router.refresh(); }} onPick={togglePick} onSchedule={setScheduling} pickedId={picked?.id ?? null} task={task} timeZone={tz} />
+                ))}
+              </CheckinGroup>
+            ))}
+          </Fold>
+        </section>
       </div>
 
       {scheduling && <ScheduleSheet blocks={blocks} board={board} onClose={() => setScheduling(null)} onDone={() => { done(scheduling.id); setScheduling(null); }} onPick={(start, minutes) => { schedule(scheduling, start, minutes); setScheduling(null); }} onUnschedule={() => { unschedule(scheduling.id); setScheduling(null); }} task={withOverride(scheduling)} />}
@@ -352,19 +457,136 @@ export function PlanBoard({ board, view, coach = null }: { board: Board; view: "
   );
 }
 
-const NO_QUICK = new Set<QuickFilter>();
+const READY_SHOWN = 6;
+const PRIORITY_ORDER: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
 
-function BoardColumn({ title, count, hint, link, className, children }: { title: string; count: number; hint: string; link?: { href: string; label: string }; className?: string; children: React.ReactNode }) {
+// Ready actions: Ryan's own open to-dos that aren't on the calendar, pinned-for-today first, then deadlines, then priority.
+function readyOrder(tasks: BoardTask[]) {
+  const deadline = (task: BoardTask) => Math.min(...[task.dueDate, task.expiresAt].map((value) => (value ? Date.parse(value) : Infinity)));
+  return [...tasks].sort((a, b) =>
+    Number(Boolean(b.committed)) - Number(Boolean(a.committed)) ||
+    Number(b.urgent) - Number(a.urgent) ||
+    (PRIORITY_ORDER[a.priority] ?? 2) - (PRIORITY_ORDER[b.priority] ?? 2) ||
+    deadline(a) - deadline(b)
+  );
+}
+
+// A folded section of the rail: closed by default so the calendar and ready list lead.
+function Fold({ title, count, link, children }: { title: string; count: number; link?: { href: string; label: string }; children: React.ReactNode }) {
   return (
-    <div className={`min-w-0 flex-col gap-2.5 rounded-2xl border bg-card p-3 lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto flex ${className ?? ""}`}>
-      <div className="flex items-baseline justify-between gap-2 px-1">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">{title}<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">{count}</span></h2>
-        <span className="text-xs text-muted-foreground">{link ? <Link className="underline-offset-2 hover:underline" href={link.href}>{link.label}</Link> : hint}</span>
+    <details className="group rounded-2xl border bg-card">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-2">{title}<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">{count}</span></span>
+        <span className="flex items-center gap-3">
+          {link && <Link className="text-xs font-normal text-muted-foreground underline-offset-2 hover:underline" href={link.href} onClick={(event) => event.stopPropagation()}>{link.label}</Link>}
+          <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
+        </span>
+      </summary>
+      <div className="flex flex-col gap-2.5 px-3 pb-3">{children}</div>
+    </details>
+  );
+}
+
+// Drafts and sources attached to a task (agent drafts, the posting or page it came from).
+function TaskLinks({ links }: { links: BoardLink[] }) {
+  if (links.length === 0) return null;
+  return (
+    <p className="mt-1 flex flex-wrap gap-1.5 text-[11px]">
+      {links.map((link) => {
+        const external = /^https:/i.test(link.url);
+        return (
+          <a
+            className={`rounded-md border px-1.5 py-0.5 font-medium hover:bg-muted ${link.kind === "draft" ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-300" : "text-muted-foreground"}`}
+            href={link.url}
+            key={`${link.kind}-${link.url}`}
+            title={link.title}
+            {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+          >
+            {link.kind === "draft" ? "Draft" : link.kind === "source" ? "Source" : "Link"}: {link.title}{external ? " ↗" : ""}
+          </a>
+        );
+      })}
+    </p>
+  );
+}
+
+// A ready action: duration, links, and one click to book the first free time (or pick another).
+function ReadyCard({ task, timeZone, firstFree, pending, pickedId, onBook, onDone, onPick, onSchedule }: {
+  task: BoardTask; timeZone: string; firstFree: Date | null; pending: boolean; pickedId: string | null;
+  onBook: (start: Date) => void; onDone: (id: string) => void; onPick: (task: BoardTask) => void; onSchedule: (task: BoardTask) => void;
+}) {
+  const deadline = task.expiresAt ? `expires ${shortDate(task.expiresAt, timeZone)}` : task.dueDate ? `due ${shortDate(task.dueDate, timeZone)}` : null;
+  const today = firstFree ? dateKey(firstFree.toISOString(), timeZone) === dateKey(new Date().toISOString(), timeZone) : false;
+  return (
+    <li
+      className={`cursor-grab rounded-xl border border-l-[3px] px-3 py-2.5 active:cursor-grabbing ${areaLook(task.areaSlug).card} ${pickedId === task.id ? "ring-2 ring-primary" : ""}`}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ taskId: task.id, minutes: task.minutes, mode: "task", grabMin: 0 } satisfies DragPayload));
+        event.dataTransfer.effectAllowed = "move";
+      }}
+    >
+      <div className="flex items-start gap-2">
+        <button aria-label={`Mark done: ${task.title}`} className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/40 text-[10px] text-transparent hover:border-primary hover:text-primary" onClick={() => onDone(task.id)} type="button">✓</button>
+        <div className="min-w-0 flex-1">
+          <button aria-pressed={pickedId === task.id} className="block w-full break-words text-left text-sm font-medium leading-snug" onClick={() => onPick(task)} title="Tap, then tap a time on the calendar" type="button">{task.title}</button>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+            <span className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 font-medium text-emerald-700 dark:text-emerald-300">Ready for you</span>
+            <span className="font-semibold text-foreground">{fmtLength(task.minutes)}</span>
+            <span>{task.projectName ?? task.areaName}</span>
+            {deadline && <span className={task.urgent ? "font-semibold text-destructive" : ""}>{deadline}</span>}
+            {task.committed && <span>📌 today</span>}
+          </p>
+          <TaskLinks links={task.links} />
+        </div>
       </div>
-      {children}
+      <div className="mt-2 flex flex-wrap gap-1.5 pl-7 text-xs">
+        {firstFree ? (
+          <button className="rounded-full bg-primary px-2.5 py-1 font-semibold text-primary-foreground disabled:opacity-60" disabled={pending} onClick={() => onBook(firstFree)} type="button">
+            Book {today ? "" : `${new Date(firstFree).toLocaleDateString("en-US", { timeZone, weekday: "short" })} `}{clock(firstFree.toISOString(), timeZone)}
+          </button>
+        ) : (
+          <span className="rounded-full border px-2.5 py-1 text-muted-foreground">No free slot today or tomorrow</span>
+        )}
+        <button className="rounded-full border bg-background/60 px-2.5 py-1 font-medium hover:border-primary/60 hover:text-primary" onClick={() => onSchedule(task)} type="button">Other time</button>
+      </div>
+    </li>
+  );
+}
+
+// The proposed day, before anything is booked: untick what you don't want, then book the rest.
+function PreviewPanel({ preview, skip, pending, timeZone, onToggle, onBook, onCancel }: {
+  preview: PreviewResult; skip: Set<string>; pending: boolean; timeZone: string;
+  onToggle: (taskId: string) => void; onBook: () => void; onCancel: () => void;
+}) {
+  const kept = preview.items.filter((item) => !skip.has(item.taskId)).length;
+  return (
+    <div className="mt-3 rounded-xl border border-primary/40 bg-primary/5 p-3" role="region" aria-label="Proposed plan">
+      <p className="text-sm font-semibold">Proposed plan <span className="font-normal text-muted-foreground">· nothing booked yet</span></p>
+      {preview.items.length === 0 && <p className="mt-1 text-sm text-muted-foreground">{preview.message}</p>}
+      <ul className="mt-2 space-y-1">
+        {preview.items.map((item) => (
+          <li key={item.taskId}>
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg px-1 py-1 text-sm hover:bg-muted/60">
+              <input checked={!skip.has(item.taskId)} className="mt-1" onChange={() => onToggle(item.taskId)} type="checkbox" />
+              <span className="min-w-0 flex-1">
+                <span className={`block break-words font-medium leading-snug ${skip.has(item.taskId) ? "text-muted-foreground line-through" : ""}`}>{item.title}</span>
+                <span className="block text-xs text-muted-foreground">{clock(item.start, timeZone)}–{clock(item.end, timeZone)} · {item.reason}</span>
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {preview.unplaced.length > 0 && <p className="mt-2 text-xs text-muted-foreground">{preview.unplaced.length} didn&apos;t fit: {preview.unplaced.slice(0, 3).map((item) => item.title).join(", ")}{preview.unplaced.length > 3 ? "…" : ""}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button className="rounded-full bg-primary px-3.5 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-60" disabled={pending || kept === 0} onClick={onBook} type="button">Book {kept} block{kept === 1 ? "" : "s"}</button>
+        <button className="rounded-full border px-3.5 py-1.5 text-sm hover:bg-muted" onClick={onCancel} type="button">Cancel</button>
+      </div>
     </div>
   );
 }
+
+const NO_QUICK = new Set<QuickFilter>();
 
 const dragProps = (task: BoardTask) => ({
   draggable: true,
@@ -575,8 +797,10 @@ function gridRange(board: Board, blocks: BoardTask[]) {
   return { start: Math.max(0, Math.floor(start / 60) * 60), end: Math.min(24 * 60, Math.ceil(end / 60) * 60) };
 }
 
-function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, onPlace, onOpenBlock, onSchedule, onUnschedule, onDone }: {
-  board: Board; days: string[]; blocks: BoardTask[]; allTasks: Map<string, BoardTask>; compact?: boolean;
+type GhostBlock = { taskId: string; title: string; start: string; end: string; areaSlug: string; off: boolean };
+
+function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, preview = [], onPlace, onOpenBlock, onSchedule, onUnschedule, onDone }: {
+  board: Board; days: string[]; blocks: BoardTask[]; allTasks: Map<string, BoardTask>; compact?: boolean; preview?: GhostBlock[];
   picked: BoardTask | null; onPlace: (start: Date) => void; onOpenBlock: (task: BoardTask) => void;
   onSchedule: (task: BoardTask, start: Date, minutes: number) => void; onUnschedule: (taskId: string) => void; onDone: (id: string) => void;
 }) {
@@ -665,6 +889,16 @@ function CalendarGrid({ board, days, blocks, allTasks, compact = false, picked, 
                     <div className="absolute inset-x-1 overflow-hidden rounded-lg border border-l-[3px] border-sky-400/30 border-l-sky-400 bg-sky-500/10 px-1.5 py-0.5 text-[11px] leading-tight backdrop-blur-sm" key={`${meeting.start}-${meeting.title}`} style={{ top, height: length * PX_PER_MIN - 2 }} title={`${meeting.title} ${clock(meeting.start, tz)}–${clock(meeting.end, tz)}`}>
                       <p className="truncate font-medium">{meeting.title}</p>
                       <p className="text-muted-foreground">{clock(meeting.start, tz)}</p>
+                    </div>
+                  );
+                })}
+                {preview.filter((ghost) => !ghost.off && columnOf(ghost.start) === dayIndex).map((ghost) => {
+                  const top = (minutesInZone(ghost.start, tz) - range.start) * PX_PER_MIN;
+                  const length = (Date.parse(ghost.end) - Date.parse(ghost.start)) / MIN;
+                  return (
+                    <div aria-label={`Proposed: ${ghost.title} at ${clock(ghost.start, tz)}`} className="pointer-events-none absolute inset-x-1 z-[5] overflow-hidden rounded-lg border-2 border-dashed border-primary/70 bg-primary/10 px-1.5 py-0.5 text-[11px] leading-tight" key={`ghost-${ghost.taskId}`} style={{ top, height: Math.max(15, length) * PX_PER_MIN - 2 }}>
+                      <p className="truncate font-semibold">{ghost.title}</p>
+                      {length >= 35 && <p className="truncate text-muted-foreground">Proposed · {clock(ghost.start, tz)}</p>}
                     </div>
                   );
                 })}
