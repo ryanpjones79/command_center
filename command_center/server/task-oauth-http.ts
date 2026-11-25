@@ -122,12 +122,28 @@ function strictForm(
   )
     throw new TaskOAuthError(400, "invalid_request");
 }
+// The public origin a request arrived on. Behind Railway's proxy, request.url carries the internal address
+// (http://localhost:PORT), so the forwarded host/protocol are used when present. They can only make a request
+// match the one configured canonical origin; access itself still needs the OAuth grant and token.
+export function publicRequestOrigin(request: Request) {
+  const url = new URL(request.url);
+  const first = (value: string | null) => value?.split(",")[0]?.trim() || null;
+  const host = first(request.headers.get("x-forwarded-host"));
+  const proto = first(request.headers.get("x-forwarded-proto"));
+  if (!host || !proto || !/^https?$/.test(proto) || /[\s/@]/.test(host)) return url.origin;
+  try {
+    return new URL(`${proto}://${host}`).origin;
+  } catch {
+    return url.origin;
+  }
+}
+
 export function requireTaskRequestOrigin(
   request: Request,
   config: TaskOAuthConfig,
   mutation = false,
 ) {
-  if (new URL(request.url).origin !== config.origin)
+  if (publicRequestOrigin(request) !== config.origin)
     throw new TaskOAuthError(403, "origin_denied");
   const origin = request.headers.get("origin");
   if (
