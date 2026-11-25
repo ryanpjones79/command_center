@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-export function LoginForm({ error }: { error?: string }) {
+export function LoginForm({ error, returnTo }: { error?: string; returnTo?: string }) {
   const message =
     error === "invalid-credentials"
       ? "Email or password was not accepted. Check the saved mobile password and try again."
@@ -24,6 +24,7 @@ export function LoginForm({ error }: { error?: string }) {
           </div>
         )}
         <form action={loginAction} className="space-y-4">
+          {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}
           <div className="space-y-1">
             <label className="text-sm">Email</label>
             <Input name="email" type="email" required />

@@ -1,3 +1,4 @@
+import { taskLoginReturn } from "@/lib/task-login-return";
 import { LoginForm } from "@/components/auth/login-form";
 
 type LoginPageProps = {
@@ -10,7 +11,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
-      <LoginForm error={error} />
+      <LoginForm error={error} returnTo={taskLoginReturn(params.returnTo)} />
     </main>
   );
 }
