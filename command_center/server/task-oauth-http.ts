@@ -294,17 +294,32 @@ export function taskOAuthHandlers(
       run(async (_config, service) => {
         await service.rateLimit("token", 60);
         const form = await boundedTaskForm(request);
-        strictForm(form, [
-          "grant_type",
-          "code",
-          "code_verifier",
-          "client_id",
-          "redirect_uri",
-          "resource",
-        ]);
-        return Response.json(await service.exchange(Object.fromEntries(form)), {
-          headers,
-        });
+        // Safe log on failure: field names plus public values only (never the code or verifier).
+        const logTokenReject = (stage: string, error: unknown) => {
+          if (!(error instanceof TaskOAuthError)) return;
+          console.warn(JSON.stringify({ event: "mcp_token_rejected", stage, error: error.code, parameters: [...form.keys()], grant_type: form.get("grant_type"), client_id: form.get("client_id"), redirect_uri: form.get("redirect_uri"), resource: form.get("resource"), code: form.get("code") ? "present" : "absent", code_verifier: form.get("code_verifier") ? "present" : "absent" }));
+        };
+        try {
+          strictForm(form, [
+            "grant_type",
+            "code",
+            "code_verifier",
+            "client_id",
+            "redirect_uri",
+            "resource",
+          ]);
+        } catch (error) {
+          logTokenReject("parameters", error);
+          throw error;
+        }
+        try {
+          return Response.json(await service.exchange(Object.fromEntries(form)), {
+            headers,
+          });
+        } catch (error) {
+          logTokenReject("exchange", error);
+          throw error;
+        }
       })(request),
     revoke: async (request: Request) =>
       run(async (config, service) => {

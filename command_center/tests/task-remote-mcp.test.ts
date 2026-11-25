@@ -819,3 +819,16 @@ describe("authorize rejection diagnostics", () => {
     expect(JSON.stringify(result)).not.toContain("a".repeat(43));
   });
 });
+
+describe("ChatGPT's ui_locales hint", () => {
+  it("is accepted once and ignored; other unknown parameters are still refused", async () => {
+    const { parseTaskAuthorization } = await import("@/server/task-oauth");
+    const config = { origin: "https://x.example", resource: "https://x.example/api/mcp/tasks", ownerId: "c" + "a".repeat(24), domainIds: ["c" + "b".repeat(24)], scopes: ["tasks:read" as const], clientId: "https://chatgpt.com/oauth/client.json", redirectUri: "https://chatgpt.com/connector_platform_oauth_redirect", grantSeconds: 3600 };
+    const base = { client_id: config.clientId, redirect_uri: config.redirectUri, response_type: "code", code_challenge: "a".repeat(43), code_challenge_method: "S256", scope: "tasks:read", state: "s", resource: config.resource };
+    expect(parseTaskAuthorization(new URLSearchParams({ ...base, ui_locales: "en-US" }), config as never).scopes).toEqual(["tasks:read"]);
+    expect(() => parseTaskAuthorization(new URLSearchParams({ ...base, prompt: "consent" }), config as never)).toThrow();
+    const twice = new URLSearchParams({ ...base, ui_locales: "en-US" });
+    twice.append("ui_locales", "fr");
+    expect(() => parseTaskAuthorization(twice, config as never)).toThrow();
+  });
+});
