@@ -50,8 +50,9 @@ export type BoardLink = { title: string; url: string; kind: "draft" | "source" |
 export type BoardProject = { id: string; name: string; tasks: BoardTask[] };
 export type BoardArea = { id: string; slug: string; name: string; projects: BoardProject[]; loose: BoardTask[] };
 export type BoardMeeting = { title: string; start: string; end: string; optional?: boolean };
-// A project on the Plan shelf. RyanOS has no "pin" field, so the shelf is derived from existing data: projects
-// Ryan put in his weekly top 3 or gave time this week, then the ones holding his most urgent ready actions.
+// A tile on the Plan shelf: one of Ryan's areas (the larger projects: Upwork & opportunities, Rykas, eBay, CCHCS,
+// ...). Changed 2026-11-25 from individual projects at Ryan's request. id is the area id; focus marks an area
+// holding a weekly top-3 project.
 export type ShelfProject = { id: string; name: string; areaSlug: string; areaName: string; ready: number; scheduled: number; workOnly: boolean; focus: boolean };
 
 export type Board = {
@@ -79,48 +80,47 @@ export type Board = {
   decisions: { count: number; first: string | null }; // Inbox items waiting for Ryan's judgment
 };
 
-const SHELF_MAX = 8;
+const SHELF_MAX = 10;
 
-// The shelf: active projects with a ready action Ryan can book, plus his weekly top-3 projects. Order: top 3,
-// then projects given time this week, then the one holding the most urgent ready action, then the most ready.
+// The shelf: every area with a ready, unscheduled action of Ryan's own (not app check-ins). Order: the area with
+// the soonest due date first, then the area holding the most urgent ready action, then the most ready, then the
+// usual area order. Inside an area, the tray lists due-soonest first (dueSoonest in lib/v2/today.ts).
 export function shelfProjects(
   projects: { id: string; name: string; domainId: string; weeklyFocus?: string | null; activeStatus?: string | null }[],
   domains: { id: string; slug: string; name: string }[],
   tasks: BoardTask[],
-  weekly: Set<string>
+  _weekly: Set<string> = new Set()
 ): ShelfProject[] {
-  const ranked = sortTasks(tasks.filter((task) => task.projectId && !task.source && task.ready === "ready" && !task.start && task.status !== "WAITING" && !task.waitingOn));
-  const firstIndex = new Map<string, number>();
-  ranked.forEach((task, index) => { if (!firstIndex.has(task.projectId as string)) firstIndex.set(task.projectId as string, index); });
-  return projects
-    .map((project) => {
-      const domain = domains.find((item) => item.id === project.domainId);
-      const own = tasks.filter((task) => task.projectId === project.id && !task.source);
+  const readyTasks = tasks.filter((task) => !task.source && task.ready === "ready" && !task.start && task.status !== "WAITING" && !task.waitingOn);
+  const ranked = sortTasks(readyTasks);
+  const rank = (slug: string) => AREA_ORDER.indexOf(slug) + 1 || 99;
+  return domains
+    .map((domain) => {
+      const own = tasks.filter((task) => task.areaSlug === domain.slug && !task.source);
+      const ready = readyTasks.filter((task) => task.areaSlug === domain.slug);
       return {
-        project,
         row: {
-          id: project.id,
-          name: project.name,
-          areaSlug: domain?.slug ?? "",
-          areaName: domain?.name ?? "",
-          ready: ranked.filter((task) => task.projectId === project.id).length,
+          id: domain.id,
+          name: domain.name,
+          areaSlug: domain.slug,
+          areaName: domain.name,
+          ready: ready.length,
           scheduled: own.filter((task) => task.start).length,
-          workOnly: domain?.slug === "work",
-          focus: project.weeklyFocus === "TOP_3"
-        } satisfies ShelfProject
+          workOnly: domain.slug === "work",
+          focus: projects.some((project) => project.domainId === domain.id && project.weeklyFocus === "TOP_3")
+        } satisfies ShelfProject,
+        due: Math.min(...ready.map(deadlineOf)),
+        first: ranked.findIndex((task) => task.areaSlug === domain.slug)
       };
     })
-    .filter(({ project, row }) => row.ready > 0 || (row.focus && project.activeStatus !== "PARKED"))
-    .sort((a, b) =>
-      Number(b.row.focus) - Number(a.row.focus) ||
-      Number(weekly.has(b.row.id)) - Number(weekly.has(a.row.id)) ||
-      (firstIndex.get(a.row.id) ?? Infinity) - (firstIndex.get(b.row.id) ?? Infinity) ||
-      b.row.ready - a.row.ready ||
-      a.row.name.localeCompare(b.row.name)
-    )
+    .filter(({ row }) => row.ready > 0)
+    .sort((a, b) => a.due - b.due || a.first - b.first || b.row.ready - a.row.ready || rank(a.row.areaSlug) - rank(b.row.areaSlug))
     .slice(0, SHELF_MAX)
     .map(({ row }) => row);
 }
+
+const deadlineOf = (task: Pick<BoardTask, "dueDate" | "expiresAt">) => Math.min(...[task.dueDate, task.expiresAt].map((value) => (value ? Date.parse(value) : Infinity)));
+
 
 const AREA_ORDER = ["ebay", "rykas", "betting-models", "casino-ap", "work", "health", "golf", "family", "opportunities", "admin"];
 const PRIORITY_RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };

@@ -60,13 +60,13 @@ export const pills = {
 export function ProjectShelf({ shelf, selected, onSelect, mode, onMode }: {
   shelf: ShelfProject[]; selected: string; onSelect: (id: string) => void; mode: "shelf" | "focus"; onMode: (mode: "shelf" | "focus") => void;
 }) {
-  const shown = shelf.slice(0, 6);
+  const shown = shelf.slice(0, 8);
   return (
     <section aria-label="Projects" className="mb-3.5">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2.5">
         <h2 className="text-[0.96rem] font-bold tracking-[-0.01em]">Pinned projects</h2>
         <div className="flex items-center gap-3">
-          <p className="hidden text-[0.8rem] text-muted-foreground xl:block">{mode === "shelf" ? "Choose a project, then pull its next action into your calendar." : "Start with the time you have and only the work that fits."}</p>
+          <p className="hidden text-[0.8rem] text-muted-foreground xl:block">{mode === "shelf" ? "Choose a project area; its actions due soonest come first." : "Start with the time you have and only the work that fits."}</p>
           <div aria-label="Planning mode" className="flex rounded-lg border bg-card p-0.5" role="group">
             {(["shelf", "focus"] as const).map((option) => (
               <button aria-pressed={mode === option} className={`rounded-md px-2.5 py-1 text-[0.79rem] font-semibold ${mode === option ? "bg-today-accent-soft text-today-accent-ink" : "text-muted-foreground hover:text-foreground"}`} key={option} onClick={() => onMode(option)} type="button">
@@ -77,7 +77,7 @@ export function ProjectShelf({ shelf, selected, onSelect, mode, onMode }: {
         </div>
       </div>
       {shown.length === 0 ? (
-        <p className="rounded-xl border bg-card p-3 text-sm text-muted-foreground">No project has a ready action. Add one from Projects, or mark a project as a weekly top 3.</p>
+        <p className="rounded-xl border bg-card p-3 text-sm text-muted-foreground">Nothing ready to book in any area. Add a task from Projects.</p>
       ) : (
         <div className="grid gap-[7px]" style={{ gridTemplateColumns: `repeat(${Math.max(3, shown.length)}, minmax(0, 1fr))` }}>
           {shown.map((project) => {
@@ -97,7 +97,7 @@ export function ProjectShelf({ shelf, selected, onSelect, mode, onMode }: {
                   <span aria-hidden className="mt-1 h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: hex }} />
                   <span className="line-clamp-2 break-words">{project.name}</span>
                 </strong>
-                <small className="text-[0.74rem] text-muted-foreground">{project.workOnly ? `${project.ready} ready · work hours` : project.ready ? `${project.ready} ready` : "No unscheduled actions"}</small>
+                <small className="text-[0.74rem] text-muted-foreground">{project.workOnly ? `${project.ready} ready · work hours` : `${project.ready} ready`}</small>
               </button>
             );
           })}
@@ -110,7 +110,7 @@ export function ProjectShelf({ shelf, selected, onSelect, mode, onMode }: {
 
 // ——— Action cards ———
 
-export function ActionCard({ task, board, showProject, selected, onPlan }: { task: BoardTask; board: Board; showProject: boolean; selected: boolean; onPlan: (task: BoardTask) => void }) {
+export function ActionCard({ task, board, showProject, selected, onPlan, reason }: { task: BoardTask; board: Board; showProject: boolean; selected: boolean; onPlan: (task: BoardTask) => void; reason?: string }) {
   const hex = areaHex(task.areaSlug);
   const draft = task.links.find((link) => link.kind === "draft");
   const source = task.links.find((link) => link.kind === "source");
@@ -132,7 +132,7 @@ export function ActionCard({ task, board, showProject, selected, onPlan }: { tas
         <p className="mb-1 mt-px break-words text-[0.88rem] font-bold leading-tight" title={task.title}>{shortTitle(task.title)}</p>
         <div className="flex flex-wrap items-center gap-x-[7px] gap-y-1 text-[0.75rem] leading-snug text-muted-foreground">
           <strong className="text-today-ink2">{task.minutes} min</strong>
-          <span>{reasonFor(task, board.timeZone, board.now)}</span>
+          <span>{reason ?? reasonFor(task, board.timeZone, board.now)}</span>
           {showProject && <span>· {task.projectName ?? task.areaName}</span>}
         </div>
         {(draft || source) && (
@@ -150,8 +150,8 @@ export function ActionCard({ task, board, showProject, selected, onPlan }: { tas
 
 // The tray under the shelf: top priorities across projects, or the selected project's top three, with the rest a
 // click away. Never navigates.
-export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll }: {
-  board: Board; ready: BoardTask[]; project: ShelfProject | null; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void;
+export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll, reasons = {} }: {
+  board: Board; ready: BoardTask[]; project: ShelfProject | null; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>;
 }) {
   const [showAll, setShowAll] = useState(false);
   useEffect(() => setShowAll(false), [project?.id]);
@@ -166,11 +166,11 @@ export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll 
         </div>
       </div>
       <div className="grid grid-cols-1 gap-2 p-[9px] md:grid-cols-2 lg:grid-cols-3">
-        {items.length ? items.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} showProject={!project} task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">{project ? "No unscheduled actions in this project." : "Nothing ready to book. Agent-prepared work appears here once it's ready."}</p>}
+        {items.length ? items.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} reason={reasons[task.id]} showProject task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">{project ? "No unscheduled actions in this area." : "Nothing ready to book. Agent-prepared work appears here once it's ready."}</p>}
       </div>
       {ready.length > 3 && (
         <p className="border-t px-3.5 py-2 text-[0.8rem] text-muted-foreground">
-          {showAll ? "Showing all " : `${ready.length - 3} more ${project ? "in this project" : "ready"} · `}
+          {showAll ? "Showing all " : `${ready.length - 3} more ${project ? `in ${project.name}` : "ready"} · `}
           <button className={buttonStyles.ghost} onClick={() => setShowAll((value) => !value)} type="button">{showAll ? "Show top 3" : `View all ${ready.length} actions`}</button>
         </p>
       )}
@@ -179,8 +179,8 @@ export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll 
 }
 
 // Secondary mode: start from the next opening and offer only what fits it; longer work stays one click away.
-export function FocusTray({ board, ready, project, opening, fits, selectedTask, onPlan, onAll }: {
-  board: Board; ready: BoardTask[]; project: ShelfProject | null; opening: Opening | null; fits: (task: BoardTask) => boolean; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void;
+export function FocusTray({ board, ready, project, opening, fits, selectedTask, onPlan, onAll, reasons = {} }: {
+  board: Board; ready: BoardTask[]; project: ShelfProject | null; opening: Opening | null; fits: (task: BoardTask) => boolean; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>;
 }) {
   const tz = board.timeZone;
   const fitting = ready.filter(fits);
@@ -201,14 +201,14 @@ export function FocusTray({ board, ready, project, opening, fits, selectedTask, 
           </div>
         </div>
         <div className="grid grid-cols-1 gap-2 p-[9px] md:grid-cols-2 lg:grid-cols-3">
-          {fitting.length ? fitting.slice(0, 3).map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} showProject={!project} task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">No actions from this selection fit the next block.</p>}
+          {fitting.length ? fitting.slice(0, 3).map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} reason={reasons[task.id]} showProject task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">No actions from this selection fit the next block.</p>}
         </div>
         {fitting.length > 1 && <p className="border-t px-3.5 py-2 text-[0.8rem] text-muted-foreground">Options for this block. As you book a task, suggestions update to fit the time left.</p>}
         {later.length > 0 && (
           <details className="border-t px-3 py-2">
             <summary className="cursor-pointer text-[0.8rem] font-bold text-today-ink2">{later.length} {later.length === 1 ? "action needs" : "actions need"} a longer block</summary>
             <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-              {later.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} showProject={!project} task={task} />)}
+              {later.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} reason={reasons[task.id]} showProject task={task} />)}
             </div>
           </details>
         )}

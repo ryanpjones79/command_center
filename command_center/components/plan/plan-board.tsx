@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { bookPlanAction, bookSlotAction, habitDoneAction, moveBlockAction, pinTodayAction, planDoneAction, previewDayAction, scheduleCheckinReviewAction, takeOverAction, waitingOnAction, type PlanMessage, type PreviewLine, type PreviewResult } from "@/app/plan/actions";
-import type { Board, BoardArea, BoardLink, BoardTask } from "@/server/v2/board";
+import type { Board, BoardArea, BoardLink, BoardTask, ShelfProject } from "@/server/v2/board";
 import type { Habit } from "@/server/v2/habits";
 import type { QuickTarget } from "@/lib/v2/quick-add";
 import { NewTaskButton } from "@/components/plan/task-composer";
@@ -14,7 +14,7 @@ import { dayLoad, personalBusy, planningStartMin } from "@/lib/v2/day-load";
 import { blockingEvents, respectsWorkHours } from "@/lib/v2/availability";
 import { shortTitle } from "@/lib/v2/short-title";
 import { areaHex, areaLook } from "@/lib/v2/area-look";
-import { fitsOpening, gridWindow, nextOpening, reasonFor, startsFor } from "@/lib/v2/today";
+import { dueSoonest, fitsOpening, gridWindow, nextOpening, reasonFor, startsFor } from "@/lib/v2/today";
 import { ActionTray, DRAG_TYPE, FocusTray, PlanSheet, ProjectShelf, TimeGrid, buttonStyles, clockAt, earlierLines, lengthLabel, minutesInZone, pills, spanLabel, type DragPayload } from "@/components/plan/today";
 
 // Plan is Today (2026-11-25 redesign): when am I free, which project should I move, what have I committed to.
@@ -35,6 +35,7 @@ const clock = (iso: string, timeZone: string) => clockAt(iso, timeZone);
 const fmtLength = lengthLabel;
 
 const MODE_KEY = "ryanos.plan.mode";
+const ROUTINES = "routines";
 const CLOSED_KEY = "ryanos.plan.closedAreas";
 function readClosed(): Set<string> {
   try { return new Set(JSON.parse(window.localStorage.getItem(CLOSED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
@@ -156,9 +157,19 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   const missed = blocks.filter((task) => Date.parse(task.start as string) >= todayStartMs && Date.parse(task.end as string) <= Date.parse(board.now));
   const optionalToday = board.meetings.filter((meeting) => meeting.optional && Date.parse(meeting.start) >= todayStartMs && Date.parse(meeting.start) < Date.parse(board.soonDays[1]));
 
-  const shelfProject = filter === "all" ? null : board.shelf.find((project) => project.id === filter) ?? null;
-  const trayReady = shelfProject ? ready.filter((task) => task.projectId === shelfProject.id) : ready;
-  const phoneSelected = board.shelf.find((project) => project.id === phoneProject) ?? board.shelf[0] ?? null;
+  // Today's routines (walk, workout, eBay listing, ...) that aren't done or on the calendar yet: a shelf tile of
+  // their own, second in line, so they can be planned like any other action. Same task rows as the Routines fold.
+  const routineReady = board.habits
+    .filter((habit) => habit.todayTaskId && !habit.done)
+    .map((habit) => ({ habit, task: withOverrideMaybe(allTasks.get(habit.todayTaskId as string)) }))
+    .filter((item): item is { habit: Habit; task: BoardTask } => Boolean(item.task && !item.task.start));
+  const routineReasons = Object.fromEntries(routineReady.map(({ habit, task }) => [task.id, habit.week.target ? `Routine · ${habit.week.done}/${habit.week.target} this week` : habit.streak ? `Routine · ${habit.streak}-day streak` : "Daily routine"]));
+  const routineTile: ShelfProject = { id: ROUTINES, name: "Today's routines", areaSlug: "health", areaName: "Routines", ready: routineReady.length, scheduled: board.habits.filter((habit) => habit.todayTaskId && allTasks.get(habit.todayTaskId)?.start).length, workOnly: false, focus: false };
+  const shelf = routineReady.length ? [...board.shelf.slice(0, 1), routineTile, ...board.shelf.slice(1)] : board.shelf;
+  const poolFor = (tile: ShelfProject | null) => (!tile ? ready : tile.id === ROUTINES ? routineReady.map((item) => item.task) : dueSoonest(ready.filter((task) => task.areaSlug === tile.areaSlug)));
+  const shelfProject = filter === "all" ? null : shelf.find((project) => project.id === filter) ?? null;
+  const trayReady = poolFor(shelfProject);
+  const phoneSelected = shelf.find((project) => project.id === phoneProject) ?? shelf[0] ?? null;
 
   // Booking: the server scheduler rechecks the slot; a moved block keeps its task (and its links and source).
   const book = (task: BoardTask, startMs: number, minutes: number) => {
@@ -243,7 +254,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   );
 
   // ——— Phone ———
-  const phonePool = phoneSelected ? ready.filter((task) => task.projectId === phoneSelected.id) : [];
+  const phonePool = phoneSelected ? poolFor(phoneSelected) : [];
   const phoneFitting = phonePool.filter(fits);
   const phonePicks = (phoneSelected?.workOnly ? phonePool : phoneFitting).slice(0, 2);
   const phoneRest = phonePool.filter((task) => !phonePicks.includes(task));
@@ -251,7 +262,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
     <article className="flex items-center justify-between gap-[9px] border-b border-border/70 px-2.5 py-1.5 last:border-b-0" key={task.id}>
       <div className="min-w-0">
         <h3 className="break-words text-[0.82rem] font-semibold leading-[1.3] tracking-[-0.01em]" title={task.title}>{shortTitle(task.title)}</h3>
-        <p className="mt-0.5 text-[0.72rem] text-muted-foreground">{task.minutes} min · {reasonFor(task, tz, board.now)}</p>
+        <p className="mt-0.5 text-[0.72rem] text-muted-foreground">{task.minutes} min · {routineReasons[task.id] ?? reasonFor(task, tz, board.now)}{task.projectName ? ` · ${task.projectName}` : ""}</p>
       </div>
       <button aria-label={`Plan ${task.title}`} className="min-h-11 shrink-0 rounded-lg border border-today-accent-line bg-today-accent-soft px-2.5 py-1.5 text-[0.82rem] font-bold text-today-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-today-accent/50" onClick={() => setSheetTask(task)} type="button">Plan</button>
     </article>
@@ -295,10 +306,10 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
         </section>
         <div className="mx-px mb-1 flex items-center justify-between">
           <h2 className="text-[0.85rem] font-bold">Pinned projects</h2>
-          {board.shelf.length > 2 && <span className="text-[0.7rem] text-muted-foreground">Swipe for more</span>}
+          {shelf.length > 2 && <span className="text-[0.7rem] text-muted-foreground">Swipe for more</span>}
         </div>
         <div aria-label="Pinned projects" className="-mx-4 mb-2 flex items-center gap-1.5 overflow-x-auto px-4 pb-[7px] pt-0.5 [scrollbar-width:thin]">
-          {board.shelf.map((project) => {
+          {shelf.map((project) => {
             const on = phoneSelected?.id === project.id;
             return (
               <button aria-pressed={on} className={`inline-flex min-h-[42px] flex-none items-center gap-1.5 whitespace-nowrap rounded-[9px] border px-2.5 py-[5px] text-[0.76rem] font-bold ${on ? "border-today-accent bg-today-accent-soft text-today-accent-ink" : "bg-card"}`} key={project.id} onClick={() => setPhoneProject(project.id)} type="button">
@@ -307,7 +318,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
               </button>
             );
           })}
-          {board.shelf.length === 0 && <p className="text-[0.8rem] text-muted-foreground">No project has a ready action.</p>}
+          {shelf.length === 0 && <p className="text-[0.8rem] text-muted-foreground">Nothing ready to book in any area.</p>}
         </div>
         {phoneSelected && (
           <section className="mb-2.5 overflow-hidden rounded-[11px] border bg-card">
@@ -315,7 +326,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
               <h2 className="text-[0.9rem] font-bold tracking-[-0.016em]">{phoneSelected.name}</h2>
               <span className="whitespace-nowrap rounded-full border border-today-accent-line bg-today-accent-soft px-[7px] py-1 text-[0.66rem] font-bold text-today-accent-ink">{phoneSelected.workOnly ? "Work hours only" : opening ? `${phoneFitting.length} of ${phonePool.length} fit` : `${phonePool.length} ready`}</span>
             </header>
-            {phonePicks.length ? phonePicks.map(phoneAction) : <p className="m-0 p-[11px] text-[0.82rem] leading-[1.45] text-today-ink2">{phonePool.length ? "Nothing from this project fits the next block." : "No unscheduled actions in this project."}</p>}
+            {phonePicks.length ? phonePicks.map(phoneAction) : <p className="m-0 p-[11px] text-[0.82rem] leading-[1.45] text-today-ink2">{phonePool.length ? "Nothing here fits the next block; see the others below." : "Nothing left to schedule here."}</p>}
             {phoneRest.length > 0 && (
               <details className="px-2.5">
                 <summary className="min-h-[43px] cursor-pointer text-[0.75rem] font-bold leading-[43px] text-today-accent-ink">See {phoneRest.length} other {phoneRest.length === 1 ? "action" : "actions"}</summary>
@@ -369,11 +380,11 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           </div>
         </header>
 
-        <ProjectShelf mode={mode} onMode={setMode} onSelect={setFilter} selected={filter} shelf={board.shelf} />
+        <ProjectShelf mode={mode} onMode={setMode} onSelect={setFilter} selected={filter} shelf={shelf} />
         {mode === "shelf" ? (
-          <ActionTray board={board} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} />
+          <ActionTray board={board} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} project={shelfProject} ready={trayReady} reasons={routineReasons} selectedTask={picked?.id ?? null} />
         ) : (
-          <FocusTray board={board} fits={fits} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} opening={opening} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} />
+          <FocusTray board={board} fits={fits} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} opening={opening} project={shelfProject} ready={trayReady} reasons={routineReasons} selectedTask={picked?.id ?? null} />
         )}
 
         <div className={view === "day" ? "grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,26%)]" : "grid gap-3"}>
