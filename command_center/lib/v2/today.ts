@@ -74,6 +74,7 @@ export function reasonFor(task: Pick<BoardTask, "dueDate" | "expiresAt" | "commi
     if (days === 0) return `${word} today`;
     if (days === 1) return `${word} tomorrow`;
     if (days <= 6) return `${word} ${new Date(deadline).toLocaleDateString("en-US", { timeZone, weekday: "short" })}`;
+    if (days <= 45) return `${word} ${new Date(deadline).toLocaleDateString("en-US", { timeZone, month: "short", day: "numeric" })}`;
   }
   if (task.committed) return "Pinned today";
   if (task.links.some((link) => link.kind === "draft")) return "Draft ready";
@@ -82,6 +83,14 @@ export function reasonFor(task: Pick<BoardTask, "dueDate" | "expiresAt" | "commi
   if (task.weekly) return "Weekly priority";
   if (task.priority === "HIGH") return "High priority";
   return "Ready";
+}
+
+const PRIORITY_RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+const deadline = (task: Pick<BoardTask, "dueDate" | "expiresAt">) => Math.min(...[task.dueDate, task.expiresAt].map((value) => (value ? Date.parse(value) : Infinity)));
+
+// An area's actions on the shelf: due soonest first (no date last), then pinned for today, then priority.
+export function dueSoonest<T extends Pick<BoardTask, "dueDate" | "expiresAt" | "committed" | "priority">>(tasks: T[]): T[] {
+  return [...tasks].sort((a, b) => deadline(a) - deadline(b) || Number(Boolean(b.committed)) - Number(Boolean(a.committed)) || (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2));
 }
 
 export type GridWindow = { start: number; end: number; earlier: { start: number; end: number } | null };

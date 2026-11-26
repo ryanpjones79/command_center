@@ -14,7 +14,7 @@ import { dayLoad, personalBusy, planningStartMin } from "@/lib/v2/day-load";
 import { blockingEvents, respectsWorkHours } from "@/lib/v2/availability";
 import { shortTitle } from "@/lib/v2/short-title";
 import { areaHex, areaLook } from "@/lib/v2/area-look";
-import { fitsOpening, gridWindow, nextOpening, reasonFor, startsFor } from "@/lib/v2/today";
+import { dueSoonest, fitsOpening, gridWindow, nextOpening, reasonFor, startsFor } from "@/lib/v2/today";
 import { ActionTray, DRAG_TYPE, FocusTray, PlanSheet, ProjectShelf, TimeGrid, buttonStyles, clockAt, earlierLines, lengthLabel, minutesInZone, pills, spanLabel, type DragPayload } from "@/components/plan/today";
 
 // Plan is Today (2026-11-25 redesign): when am I free, which project should I move, what have I committed to.
@@ -157,7 +157,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   const optionalToday = board.meetings.filter((meeting) => meeting.optional && Date.parse(meeting.start) >= todayStartMs && Date.parse(meeting.start) < Date.parse(board.soonDays[1]));
 
   const shelfProject = filter === "all" ? null : board.shelf.find((project) => project.id === filter) ?? null;
-  const trayReady = shelfProject ? ready.filter((task) => task.projectId === shelfProject.id) : ready;
+  const trayReady = shelfProject ? dueSoonest(ready.filter((task) => task.areaSlug === shelfProject.areaSlug)) : ready;
   const phoneSelected = board.shelf.find((project) => project.id === phoneProject) ?? board.shelf[0] ?? null;
 
   // Booking: the server scheduler rechecks the slot; a moved block keeps its task (and its links and source).
@@ -243,7 +243,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   );
 
   // ——— Phone ———
-  const phonePool = phoneSelected ? ready.filter((task) => task.projectId === phoneSelected.id) : [];
+  const phonePool = phoneSelected ? dueSoonest(ready.filter((task) => task.areaSlug === phoneSelected.areaSlug)) : [];
   const phoneFitting = phonePool.filter(fits);
   const phonePicks = (phoneSelected?.workOnly ? phonePool : phoneFitting).slice(0, 2);
   const phoneRest = phonePool.filter((task) => !phonePicks.includes(task));
@@ -251,7 +251,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
     <article className="flex items-center justify-between gap-[9px] border-b border-border/70 px-2.5 py-1.5 last:border-b-0" key={task.id}>
       <div className="min-w-0">
         <h3 className="break-words text-[0.82rem] font-semibold leading-[1.3] tracking-[-0.01em]" title={task.title}>{shortTitle(task.title)}</h3>
-        <p className="mt-0.5 text-[0.72rem] text-muted-foreground">{task.minutes} min · {reasonFor(task, tz, board.now)}</p>
+        <p className="mt-0.5 text-[0.72rem] text-muted-foreground">{task.minutes} min · {reasonFor(task, tz, board.now)}{task.projectName ? ` · ${task.projectName}` : ""}</p>
       </div>
       <button aria-label={`Plan ${task.title}`} className="min-h-11 shrink-0 rounded-lg border border-today-accent-line bg-today-accent-soft px-2.5 py-1.5 text-[0.82rem] font-bold text-today-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-today-accent/50" onClick={() => setSheetTask(task)} type="button">Plan</button>
     </article>
@@ -307,7 +307,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
               </button>
             );
           })}
-          {board.shelf.length === 0 && <p className="text-[0.8rem] text-muted-foreground">No project has a ready action.</p>}
+          {board.shelf.length === 0 && <p className="text-[0.8rem] text-muted-foreground">Nothing ready to book in any area.</p>}
         </div>
         {phoneSelected && (
           <section className="mb-2.5 overflow-hidden rounded-[11px] border bg-card">

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { loadBoard, type BoardTask } from "@/server/v2/board";
 import { bookSlot } from "@/server/v2/schedule-service";
-import { fitsOpening, gridWindow, nextOpening, reasonFor, startsFor } from "@/lib/v2/today";
+import { dueSoonest, fitsOpening, gridWindow, nextOpening, reasonFor, startsFor } from "@/lib/v2/today";
 import { createV2TestDb } from "./helpers/v2-db";
 
 // Plan/Today redesign (2026-11-25): the fitting rules from the handoff acceptance checks, the project shelf, and
@@ -87,6 +87,12 @@ describe("what fits the next opening", () => {
     expect(reasonFor({ ...proposal, committed: true }, board.timeZone, board.now)).toBe("Pinned today");
     expect(reasonFor({ ...proposal, areaSlug: "work" }, board.timeZone, board.now)).toBe("Work hours");
     expect(reasonFor(proposal, board.timeZone, board.now)).toBe("Ready");
+    expect(reasonFor({ ...proposal, dueDate: iso(PT(24 * 10)) }, board.timeZone, board.now)).toBe("Due Dec 5");
+  });
+
+  it("an area's actions list due soonest first, undated last", () => {
+    const sorted = dueSoonest([task("no-date", 15, { priority: "CRITICAL" }), task("friday", 15, { dueDate: iso(PT(24 * 2)) }), task("tonight", 15, { dueDate: iso(PT(21)) }), task("pinned", 15, { committed: true })]);
+    expect(sorted.map((item) => item.id)).toEqual(["tonight", "friday", "pinned", "no-date"]);
   });
 });
 
@@ -101,7 +107,7 @@ beforeAll(async () => {
 afterAll(async () => cleanup());
 
 describe("shelf and booking on live records", () => {
-  it("the shelf puts weekly top-3 projects first, counts ready actions, and lists the Inbox", async () => {
+  it("the shelf shows areas (the larger projects), soonest due first, counts ready actions, and lists the Inbox", async () => {
     const opp = await db.executionDomain.findFirstOrThrow({ where: { userId, slug: "opportunities" } });
     const rykas = await db.executionDomain.findFirstOrThrow({ where: { userId, slug: "rykas" } });
     const freelance = await db.executionProject.create({ data: { userId, domainId: opp.id, name: "Freelance launch", weeklyFocus: "TOP_3" } });
@@ -114,8 +120,15 @@ describe("shelf and booking on live records", () => {
     await db.executionTask.create({ data: { userId, domainId: opp.id, title: "Power BI dashboard repair lead", needsJudgment: true } });
 
     const loaded = await loadBoard(userId, db, async () => [], { now: PT(17, 30) });
-    expect(loaded.shelf.map((project) => [project.name, project.ready])).toEqual([["Freelance launch", 4], ["Rykas: top-20 restock", 1]]);
-    expect(loaded.shelf[0]).toMatchObject({ areaSlug: "opportunities", focus: true, workOnly: false });
+    // No due dates yet: the area holding the most urgent action (a critical Rykas task) leads.
+    expect(loaded.shelf.map((area) => [area.areaSlug, area.ready])).toEqual([["rykas", 1], ["opportunities", 4]]);
+    expect(loaded.shelf[1]).toMatchObject({ name: "Upwork & opportunities", focus: true, workOnly: false });
+    // A due date moves its area to the front.
+    const polishRow = await db.executionTask.findFirstOrThrow({ where: { userId, title: "Polish portfolio screenshots" } });
+    await db.executionTask.update({ where: { id: polishRow.id }, data: { dueDate: PT(23) } });
+    const again = await loadBoard(userId, db, async () => [], { now: PT(17, 30) });
+    expect(again.shelf.map((area) => area.areaSlug)).toEqual(["opportunities", "rykas"]);
+    await db.executionTask.update({ where: { id: polishRow.id }, data: { dueDate: null } });
     expect(loaded.decisions).toEqual({ count: 1, first: "Power BI dashboard repair lead" });
   });
 
@@ -151,7 +164,7 @@ describe("shelf and booking on live records", () => {
 
     // The project keeps its other ready actions; the booked one is now scheduled work in the same project.
     const loaded = await loadBoard(userId, db, async () => [], { now });
-    expect(loaded.shelf.find((item) => item.name === "Freelance launch")).toMatchObject({ ready: 3, scheduled: 1 });
+    expect(loaded.shelf.find((item) => item.areaSlug === "opportunities")).toMatchObject({ ready: 3, scheduled: 1 });
     expect(loaded.blocks.find((block) => block.id === proposalRow.id)?.links.map((link) => link.kind)).toEqual(["source"]);
     expect(PT(17, 50).getTime() - PT(17, 30).getTime()).toBe(20 * MIN);
   });
