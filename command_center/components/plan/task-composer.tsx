@@ -34,8 +34,11 @@ export function TaskComposer({ targets, timeZone, presetId = null, onClose, onDo
   const [pending, startTransition] = useTransition();
   const [title, setTitle] = useState("");
   const [targetId, setTargetId] = useState<string | null>(presetId);
-  const [picking, setPicking] = useState(!presetId);
+  // Started from an area (the Today area card): open the picker on that area's projects so the task lands in one.
+  const presetArea = targets.find((target) => target.id === presetId && target.kind === "AREA" && targets.some((item) => item.kind === "PROJECT" && item.domainId === target.id));
+  const [picking, setPicking] = useState(!presetId || Boolean(presetArea));
   const [search, setSearch] = useState("");
+  const [scopeId, setScopeId] = useState<string | null>(presetArea?.id ?? null); // cleared once Ryan types a search
   const [day, setDay] = useState<string | null>(null);
   const [pickDate, setPickDate] = useState(false);
   const [time, setTime] = useState<string>("");
@@ -59,12 +62,13 @@ export function TaskComposer({ targets, timeZone, presetId = null, onClose, onDo
   const groups = useMemo(() => {
     const term = search.trim().toLowerCase();
     return areas
+      .filter((area) => term || !scopeId || area.id === scopeId)
       .map((area) => ({
         area,
         projects: targets.filter((target) => target.kind === "PROJECT" && target.domainId === area.id && (!term || target.name.toLowerCase().includes(term) || area.name.toLowerCase().includes(term)))
       }))
       .filter((group) => !term || group.projects.length > 0 || group.area.name.toLowerCase().includes(term));
-  }, [areas, targets, search]);
+  }, [areas, targets, search, scopeId]);
 
   const target = targets.find((item) => item.id === targetId) ?? null;
   const targetArea = target ? areas.find((area) => area.id === target.domainId) ?? null : null;
@@ -152,7 +156,7 @@ export function TaskComposer({ targets, timeZone, presetId = null, onClose, onDo
                   <input
                     className="w-full rounded-xl border bg-card px-3 py-2 text-sm placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                     id="task-project-search"
-                    onChange={(event) => setSearch(event.target.value)}
+                    onChange={(event) => { setSearch(event.target.value); setScopeId(null); }}
                     placeholder="Find a project or area…"
                     type="search"
                     value={search}

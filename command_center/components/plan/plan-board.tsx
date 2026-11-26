@@ -335,6 +335,9 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
                 <div className="-mx-2.5">{phoneRest.map(phoneAction)}</div>
               </details>
             )}
+            <div className="border-t px-2.5 py-2">
+              <NewTaskButton label={`+ Add task to ${phoneSelected.name}`} onDone={setMessage} presetId={phoneSelected.id} targets={board.targets} timeZone={tz} variant="chip" />
+            </div>
           </section>
         )}
         <section aria-labelledby="today-calendar-title" className="scroll-mt-16 overflow-hidden rounded-[11px] border bg-card focus:outline-none" id="today-calendar" tabIndex={-1}>
@@ -393,9 +396,9 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
         />
         <ProjectShelf mode={mode} onMode={setMode} onSelect={setFilter} selected={filter} shelf={shelf} />
         {mode === "shelf" ? (
-          <ActionTray board={board} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} />
+          <ActionTray board={board} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} add={<NewTaskButton label={shelfProject ? `+ Add task to ${shelfProject.name}` : "+ New task"} onDone={setMessage} presetId={shelfProject?.id ?? null} targets={board.targets} timeZone={tz} variant="chip" />} />
         ) : (
-          <FocusTray board={board} fits={fits} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} opening={opening} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} />
+          <FocusTray board={board} fits={fits} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} opening={opening} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} add={<NewTaskButton label={shelfProject ? `+ Add task to ${shelfProject.name}` : "+ New task"} onDone={setMessage} presetId={shelfProject?.id ?? null} targets={board.targets} timeZone={tz} variant="chip" />} />
         )}
 
         <div className={view === "day" ? "grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,26%)]" : "grid gap-3"}>

@@ -150,8 +150,8 @@ export function ActionCard({ task, board, showProject, selected, onPlan, reason 
 
 // The tray under the shelf: top priorities across projects, or the selected project's top three, with the rest a
 // click away. Never navigates.
-export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll, reasons = {} }: {
-  board: Board; ready: BoardTask[]; project: ShelfProject | null; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>;
+export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll, reasons = {}, add }: {
+  board: Board; ready: BoardTask[]; project: ShelfProject | null; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>; add?: React.ReactNode;
 }) {
   const [showAll, setShowAll] = useState(false);
   useEffect(() => setShowAll(false), [project?.id]);
@@ -161,6 +161,7 @@ export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll,
       <div className="flex items-center justify-between gap-2.5 border-b px-3.5 py-2.5">
         <h2 className="text-[1.03rem] font-bold tracking-[-0.022em]">{project ? `${project.name} · next actions` : "Top priorities across projects"}</h2>
         <div className="flex flex-wrap items-center gap-[7px]">
+          {add}
           <button aria-pressed={!project} className={buttonStyles.ghost} onClick={onAll} type="button">All priorities</button>
           <span className={pills.blue}>{ready.length} ready</span>
         </div>
@@ -179,8 +180,8 @@ export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll,
 }
 
 // Secondary mode: start from the next opening and offer only what fits it; longer work stays one click away.
-export function FocusTray({ board, ready, project, opening, fits, selectedTask, onPlan, onAll, reasons = {} }: {
-  board: Board; ready: BoardTask[]; project: ShelfProject | null; opening: Opening | null; fits: (task: BoardTask) => boolean; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>;
+export function FocusTray({ board, ready, project, opening, fits, selectedTask, onPlan, onAll, reasons = {}, add }: {
+  board: Board; ready: BoardTask[]; project: ShelfProject | null; opening: Opening | null; fits: (task: BoardTask) => boolean; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>; add?: React.ReactNode;
 }) {
   const tz = board.timeZone;
   const fitting = ready.filter(fits);
@@ -196,6 +197,7 @@ export function FocusTray({ board, ready, project, opening, fits, selectedTask, 
         <div className="flex items-center justify-between gap-2.5 border-b px-3.5 py-2.5">
           <h2 className="text-[1.03rem] font-bold tracking-[-0.022em]">{project ? `${project.name} · what fits` : "What fits this block"}</h2>
           <div className="flex items-center gap-[7px]">
+            {add}
             <button className={buttonStyles.ghost} onClick={onAll} type="button">All priorities</button>
             {ready.length > 0 && <span className={pills.blue}>{fitting.length} of {ready.length} fit</span>}
           </div>

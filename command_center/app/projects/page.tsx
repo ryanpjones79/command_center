@@ -190,7 +190,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
             if (section.key === "follow") action = <NewTaskButton label="+ Add a follow-up" presetId={project.id} targets={targets} timeZone={tz} variant="chip" />;
           }
           return (
-            <ProjectRow action={action} id={project.id} key={project.id} settings={settingsFor(project)}>
+            <ProjectRow action={<div className="flex items-center justify-end gap-2">{action}{section.key !== "follow" && section.key !== "next" && <NewTaskButton label="+ Add task" presetId={project.id} targets={targets} timeZone={tz} variant="chip" />}</div>} id={project.id} key={project.id} settings={settingsFor(project)}>
               {name}
               <p className="mt-0.5 line-clamp-2 pl-4 text-sm text-muted-foreground">{detail}</p>
             </ProjectRow>
