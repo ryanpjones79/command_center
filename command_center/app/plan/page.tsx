@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { loadBoard } from "@/server/v2/board";
 import { syncCalendar } from "@/server/v2/calendar-sync";
-import { loadCoach } from "@/server/v2/coach";
 import { googleCalendarLoader } from "@/server/v2/day";
 
 export const metadata: Metadata = { title: "Plan" };
@@ -21,6 +20,5 @@ export default async function PlanPage({ searchParams }: { searchParams: Promise
   await syncCalendar(user.id, prisma).catch(() => null);
   const calendar = googleCalendarLoader();
   const board = await loadBoard(user.id, prisma, calendar, { anchor, dayCount: VIEWS[view] });
-  const coach = await loadCoach(user.id, prisma, calendar).catch(() => null);
-  return <PlanBoard board={board} coach={coach} view={view} />;
+  return <PlanBoard board={board} view={view} />;
 }

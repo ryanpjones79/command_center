@@ -16,3 +16,10 @@ const AREA_LOOK: Record<string, AreaLook> = {
 };
 const DEFAULT_LOOK = look("border-l-slate-400 bg-gradient-to-r from-slate-400/[0.12] to-transparent", "from-slate-500 to-slate-600 shadow-slate-600/30", "bg-slate-400");
 export const areaLook = (slug: string) => AREA_LOOK[slug] ?? DEFAULT_LOOK;
+
+// The same area colours as hex, for inline accents (Plan shelf selection, time-grid block edges and tints).
+const AREA_HEX: Record<string, string> = {
+  ebay: "#f59e0b", rykas: "#f97316", "betting-models": "#8b5cf6", "casino-ap": "#d946ef", work: "#0ea5e9",
+  health: "#10b981", golf: "#84cc16", family: "#f43f5e", kids: "#ec4899", opportunities: "#14b8a6"
+};
+export const areaHex = (slug: string) => AREA_HEX[slug] ?? "#94a3b8";
