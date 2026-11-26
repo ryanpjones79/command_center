@@ -110,7 +110,7 @@ export function ProjectShelf({ shelf, selected, onSelect, mode, onMode }: {
 
 // ——— Action cards ———
 
-export function ActionCard({ task, board, showProject, selected, onPlan }: { task: BoardTask; board: Board; showProject: boolean; selected: boolean; onPlan: (task: BoardTask) => void }) {
+export function ActionCard({ task, board, showProject, selected, onPlan, reason }: { task: BoardTask; board: Board; showProject: boolean; selected: boolean; onPlan: (task: BoardTask) => void; reason?: string }) {
   const hex = areaHex(task.areaSlug);
   const draft = task.links.find((link) => link.kind === "draft");
   const source = task.links.find((link) => link.kind === "source");
@@ -132,7 +132,7 @@ export function ActionCard({ task, board, showProject, selected, onPlan }: { tas
         <p className="mb-1 mt-px break-words text-[0.88rem] font-bold leading-tight" title={task.title}>{shortTitle(task.title)}</p>
         <div className="flex flex-wrap items-center gap-x-[7px] gap-y-1 text-[0.75rem] leading-snug text-muted-foreground">
           <strong className="text-today-ink2">{task.minutes} min</strong>
-          <span>{reasonFor(task, board.timeZone, board.now)}</span>
+          <span>{reason ?? reasonFor(task, board.timeZone, board.now)}</span>
           {showProject && <span>· {task.projectName ?? task.areaName}</span>}
         </div>
         {(draft || source) && (
@@ -150,8 +150,8 @@ export function ActionCard({ task, board, showProject, selected, onPlan }: { tas
 
 // The tray under the shelf: top priorities across projects, or the selected project's top three, with the rest a
 // click away. Never navigates.
-export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll }: {
-  board: Board; ready: BoardTask[]; project: ShelfProject | null; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void;
+export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll, reasons = {} }: {
+  board: Board; ready: BoardTask[]; project: ShelfProject | null; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>;
 }) {
   const [showAll, setShowAll] = useState(false);
   useEffect(() => setShowAll(false), [project?.id]);
@@ -166,7 +166,7 @@ export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll 
         </div>
       </div>
       <div className="grid grid-cols-1 gap-2 p-[9px] md:grid-cols-2 lg:grid-cols-3">
-        {items.length ? items.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} showProject task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">{project ? "No unscheduled actions in this area." : "Nothing ready to book. Agent-prepared work appears here once it's ready."}</p>}
+        {items.length ? items.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} reason={reasons[task.id]} showProject task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">{project ? "No unscheduled actions in this area." : "Nothing ready to book. Agent-prepared work appears here once it's ready."}</p>}
       </div>
       {ready.length > 3 && (
         <p className="border-t px-3.5 py-2 text-[0.8rem] text-muted-foreground">
@@ -179,8 +179,8 @@ export function ActionTray({ board, ready, project, selectedTask, onPlan, onAll 
 }
 
 // Secondary mode: start from the next opening and offer only what fits it; longer work stays one click away.
-export function FocusTray({ board, ready, project, opening, fits, selectedTask, onPlan, onAll }: {
-  board: Board; ready: BoardTask[]; project: ShelfProject | null; opening: Opening | null; fits: (task: BoardTask) => boolean; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void;
+export function FocusTray({ board, ready, project, opening, fits, selectedTask, onPlan, onAll, reasons = {} }: {
+  board: Board; ready: BoardTask[]; project: ShelfProject | null; opening: Opening | null; fits: (task: BoardTask) => boolean; selectedTask: string | null; onPlan: (task: BoardTask) => void; onAll: () => void; reasons?: Record<string, string>;
 }) {
   const tz = board.timeZone;
   const fitting = ready.filter(fits);
@@ -201,14 +201,14 @@ export function FocusTray({ board, ready, project, opening, fits, selectedTask, 
           </div>
         </div>
         <div className="grid grid-cols-1 gap-2 p-[9px] md:grid-cols-2 lg:grid-cols-3">
-          {fitting.length ? fitting.slice(0, 3).map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} showProject task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">No actions from this selection fit the next block.</p>}
+          {fitting.length ? fitting.slice(0, 3).map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} reason={reasons[task.id]} showProject task={task} />) : <p className="p-3 text-[0.9rem] text-muted-foreground">No actions from this selection fit the next block.</p>}
         </div>
         {fitting.length > 1 && <p className="border-t px-3.5 py-2 text-[0.8rem] text-muted-foreground">Options for this block. As you book a task, suggestions update to fit the time left.</p>}
         {later.length > 0 && (
           <details className="border-t px-3 py-2">
             <summary className="cursor-pointer text-[0.8rem] font-bold text-today-ink2">{later.length} {later.length === 1 ? "action needs" : "actions need"} a longer block</summary>
             <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-              {later.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} showProject task={task} />)}
+              {later.map((task) => <ActionCard board={board} key={task.id} onPlan={onPlan} selected={selectedTask === task.id} reason={reasons[task.id]} showProject task={task} />)}
             </div>
           </details>
         )}
