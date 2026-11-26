@@ -35,7 +35,6 @@ const clock = (iso: string, timeZone: string) => clockAt(iso, timeZone);
 const fmtLength = lengthLabel;
 
 const MODE_KEY = "ryanos.plan.mode";
-const ROUTINES = "routines";
 const CLOSED_KEY = "ryanos.plan.closedAreas";
 function readClosed(): Set<string> {
   try { return new Set(JSON.parse(window.localStorage.getItem(CLOSED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
@@ -147,7 +146,6 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   const checkinGroups = [...new Set(checkins.map((task) => task.source as string))]
     .map((source) => ({ source, label: SOURCE_LABEL[source] ?? source, tasks: checkins.filter((task) => task.source === source) }))
     .sort((a, b) => b.tasks.length - a.tasks.length);
-  const routinesLeft = board.habits.filter((habit) => habit.todayTaskId && !habit.done).length;
 
   const openTasks = [...everyTask, ...board.waiting].filter((task) => !task.source);
   const load = dayLoad(board, blocks, openTasks);
@@ -157,16 +155,11 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
   const missed = blocks.filter((task) => Date.parse(task.start as string) >= todayStartMs && Date.parse(task.end as string) <= Date.parse(board.now));
   const optionalToday = board.meetings.filter((meeting) => meeting.optional && Date.parse(meeting.start) >= todayStartMs && Date.parse(meeting.start) < Date.parse(board.soonDays[1]));
 
-  // Today's routines (walk, workout, eBay listing, ...) that aren't done or on the calendar yet: a shelf tile of
-  // their own, second in line, so they can be planned like any other action. Same task rows as the Routines fold.
-  const routineReady = board.habits
-    .filter((habit) => habit.todayTaskId && !habit.done)
-    .map((habit) => ({ habit, task: withOverrideMaybe(allTasks.get(habit.todayTaskId as string)) }))
-    .filter((item): item is { habit: Habit; task: BoardTask } => Boolean(item.task && !item.task.start));
-  const routineReasons = Object.fromEntries(routineReady.map(({ habit, task }) => [task.id, habit.week.target ? `Routine · ${habit.week.done}/${habit.week.target} this week` : habit.streak ? `Routine · ${habit.streak}-day streak` : "Daily routine"]));
-  const routineTile: ShelfProject = { id: ROUTINES, name: "Today's routines", areaSlug: "health", areaName: "Routines", ready: routineReady.length, scheduled: board.habits.filter((habit) => habit.todayTaskId && allTasks.get(habit.todayTaskId)?.start).length, workOnly: false, focus: false };
-  const shelf = routineReady.length ? [...board.shelf.slice(0, 1), routineTile, ...board.shelf.slice(1)] : board.shelf;
-  const poolFor = (tile: ShelfProject | null) => (!tile ? ready : tile.id === ROUTINES ? routineReady.map((item) => item.task) : dueSoonest(ready.filter((task) => task.areaSlug === tile.areaSlug)));
+  // Today's routines (walk, workout, eBay listing, ...) sit in a bar across the top of Today (2026-11-25 owner
+  // feedback: "more prominent ... not tucked away on side"): tick one off, or Plan it like any other action.
+  const routineTask = (habit: Habit) => (habit.todayTaskId ? withOverrideMaybe(allTasks.get(habit.todayTaskId)) : null);
+  const shelf = board.shelf;
+  const poolFor = (tile: ShelfProject | null) => (!tile ? ready : dueSoonest(ready.filter((task) => task.areaSlug === tile.areaSlug)));
   const shelfProject = filter === "all" ? null : shelf.find((project) => project.id === filter) ?? null;
   const trayReady = poolFor(shelfProject);
   const phoneSelected = shelf.find((project) => project.id === phoneProject) ?? shelf[0] ?? null;
@@ -262,7 +255,7 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
     <article className="flex items-center justify-between gap-[9px] border-b border-border/70 px-2.5 py-1.5 last:border-b-0" key={task.id}>
       <div className="min-w-0">
         <h3 className="break-words text-[0.82rem] font-semibold leading-[1.3] tracking-[-0.01em]" title={task.title}>{shortTitle(task.title)}</h3>
-        <p className="mt-0.5 text-[0.72rem] text-muted-foreground">{task.minutes} min · {routineReasons[task.id] ?? reasonFor(task, tz, board.now)}{task.projectName ? ` · ${task.projectName}` : ""}</p>
+        <p className="mt-0.5 text-[0.72rem] text-muted-foreground">{task.minutes} min · {reasonFor(task, tz, board.now)}{task.projectName ? ` · ${task.projectName}` : ""}</p>
       </div>
       <button aria-label={`Plan ${task.title}`} className="min-h-11 shrink-0 rounded-lg border border-today-accent-line bg-today-accent-soft px-2.5 py-1.5 text-[0.82rem] font-bold text-today-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-today-accent/50" onClick={() => setSheetTask(task)} type="button">Plan</button>
     </article>
@@ -291,6 +284,15 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           </button>
         </div>
         {warnings}
+        <RoutineBar
+          habits={board.habits}
+          onMessage={(result) => { setMessage(result); router.refresh(); }}
+          onPlan={setSheetTask}
+          phone={true}
+          pickedId={picked?.id ?? null}
+          taskFor={routineTask}
+          timeZone={tz}
+        />
         <section className="mb-[13px] flex items-center justify-between gap-2 rounded-[11px] border border-today-mint-line bg-today-mint px-2.5 py-[9px]">
           {opening ? (
             <>
@@ -380,11 +382,20 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
           </div>
         </header>
 
+        <RoutineBar
+          habits={board.habits}
+          onMessage={(result) => { setMessage(result); router.refresh(); }}
+          onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))}
+          phone={false}
+          pickedId={picked?.id ?? null}
+          taskFor={routineTask}
+          timeZone={tz}
+        />
         <ProjectShelf mode={mode} onMode={setMode} onSelect={setFilter} selected={filter} shelf={shelf} />
         {mode === "shelf" ? (
-          <ActionTray board={board} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} project={shelfProject} ready={trayReady} reasons={routineReasons} selectedTask={picked?.id ?? null} />
+          <ActionTray board={board} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} />
         ) : (
-          <FocusTray board={board} fits={fits} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} opening={opening} project={shelfProject} ready={trayReady} reasons={routineReasons} selectedTask={picked?.id ?? null} />
+          <FocusTray board={board} fits={fits} onAll={() => setFilter("all")} onPlan={(task) => setPicked((current) => (current?.id === task.id ? null : task))} opening={opening} project={shelfProject} ready={trayReady} selectedTask={picked?.id ?? null} />
         )}
 
         <div className={view === "day" ? "grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,26%)]" : "grid gap-3"}>
@@ -538,24 +549,6 @@ export function PlanBoard({ board, view }: { board: Board; view: "day" | "3" | "
                   </ul>
                 </details>
               )}
-            </Fold>
-
-            <Fold count={routinesLeft} link={{ href: "/plan/routines", label: "Edit" }} title="Routines">
-              {board.habits.length === 0 && <Link className="rounded-xl border border-dashed p-3 text-sm text-muted-foreground hover:bg-muted" href="/plan/routines">+ Add routines (eBay listing, sourcing, workouts…)</Link>}
-              <ul className="space-y-1.5">
-                {board.habits.map((habit) => (
-                  <RoutineCard
-                    habit={habit}
-                    key={habit.routineId}
-                    onMessage={(result) => { setMessage(result); router.refresh(); }}
-                    onPick={(task) => setPicked(task)}
-                    onSchedule={setScheduling}
-                    pickedId={picked?.id ?? null}
-                    task={habit.todayTaskId ? withOverrideMaybe(allTasks.get(habit.todayTaskId)) : null}
-                    timeZone={tz}
-                  />
-                ))}
-              </ul>
             </Fold>
 
             <Fold count={checkins.length} title="App check-ins">
@@ -717,38 +710,64 @@ const dragProps = (task: BoardTask) => ({
   }
 });
 
-// A routine for today: weekly progress, one-tap done, and drag or Schedule to give it time.
-function RoutineCard({ habit, task, timeZone, onMessage, onSchedule, onPick, pickedId }: {
-  habit: Habit; task: BoardTask | null; timeZone: string; onMessage: (result: PlanMessage) => void; onSchedule: (task: BoardTask) => void; onPick: (task: BoardTask) => void; pickedId: string | null;
+// Today's routines as a bar across the top of Today: one chip each with a tick, its length or booked time and
+// weekly progress, and Plan (desktop: pick a time on the calendar or drag the chip; phone: the time sheet).
+function RoutineBar({ habits, taskFor, timeZone, phone, pickedId, onPlan, onMessage }: {
+  habits: Habit[]; taskFor: (habit: Habit) => BoardTask | null; timeZone: string; phone: boolean; pickedId: string | null; onPlan: (task: BoardTask) => void; onMessage: (result: PlanMessage) => void;
+}) {
+  const today = habits.filter((habit) => habit.todayTaskId);
+  if (habits.length === 0) {
+    return <Link className="mb-3 block rounded-[11px] border border-dashed px-3 py-2.5 text-[0.82rem] text-muted-foreground hover:bg-muted" href="/plan/routines">+ Add routines (eBay listing, sourcing, workouts…)</Link>;
+  }
+  const doneCount = today.filter((habit) => habit.done).length;
+  const id = `routines-${phone ? "phone" : "desk"}`;
+  return (
+    <section aria-labelledby={id} className={`${phone ? "mb-[11px] rounded-[11px]" : "mb-3 rounded-[14px] shadow-[0_3px_12px_#1f315409]"} border bg-card px-3 py-2.5`}>
+      <header className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-[0.9rem] font-bold tracking-[-0.016em]" id={id}>
+          Today&apos;s routines <span className="font-medium text-muted-foreground">· {today.length ? `${doneCount} of ${today.length} done` : "none today"}</span>
+        </h2>
+        <Link className="rounded-md px-1.5 py-1 text-[0.76rem] font-semibold text-today-accent-ink hover:bg-muted" href="/plan/routines">Edit</Link>
+      </header>
+      {today.length > 0 && (
+        <ul className={phone ? "-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-1 [scrollbar-width:thin]" : "flex flex-wrap gap-2"}>
+          {today.map((habit) => <RoutineChip habit={habit} key={habit.routineId} onMessage={onMessage} onPlan={onPlan} phone={phone} pickedId={pickedId} task={taskFor(habit)} timeZone={timeZone} />)}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function RoutineChip({ habit, task, timeZone, phone, pickedId, onPlan, onMessage }: {
+  habit: Habit; task: BoardTask | null; timeZone: string; phone: boolean; pickedId: string | null; onPlan: (task: BoardTask) => void; onMessage: (result: PlanMessage) => void;
 }) {
   const [pending, startTransition] = useTransition();
-  const weekMet = !habit.todayTaskId && habit.week.target > 0 && habit.week.done >= habit.week.target;
-  const pct = habit.week.target ? Math.min(100, Math.round((habit.week.done / habit.week.target) * 100)) : 0;
-  const finished = habit.done || weekMet;
+  const booked = task?.start ? clock(task.start, timeZone) : null;
+  const canPlan = Boolean(task && !habit.done && !task.start);
+  const progress = habit.week.target > 0 ? `${habit.week.done}/${habit.week.target} this week` : habit.streak > 1 ? `${habit.streak}-day streak` : null;
+  const detail = [habit.done ? "Done" : booked ? `At ${booked}` : fmtLength(habit.minutes), progress].filter(Boolean).join(" · ");
   return (
-    <li className={`rounded-xl border border-l-[3px] px-3 py-2.5 ${areaLook(habit.areaSlug).card} ${finished ? "opacity-60" : "cursor-grab active:cursor-grabbing"} ${task && pickedId === task.id ? "ring-2 ring-primary" : ""}`} {...(task && !finished ? dragProps(task) : {})}>
-      <div className="flex items-start gap-2">
-        <button
-          aria-label={habit.done ? `Undo: ${habit.title}` : `Done: ${habit.title}`}
-          aria-pressed={habit.done}
-          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-[10px] ${finished ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40 text-transparent hover:border-primary hover:text-primary"}`}
-          disabled={pending || !habit.todayTaskId}
-          onClick={() => startTransition(async () => onMessage(await habitDoneAction(habit.todayTaskId as string, !habit.done)))}
-          type="button"
-        >✓</button>
-        <div className="min-w-0 flex-1">
-          <button className="block w-full truncate text-left text-sm font-medium" disabled={!task || finished} onClick={() => task && onPick(task)} type="button">{habit.title}</button>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {weekMet ? "Week done" : habit.done ? "Done today" : `${fmtLength(habit.minutes)}${task?.start ? ` · ${clock(task.start, timeZone)}` : ""}`}
-            {habit.week.target > 0 && <span className="tabular-nums"> · {habit.week.done}/{habit.week.target} this week</span>}
-          </p>
-          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${areaLook(habit.areaSlug).dot}`} style={{ width: `${pct}%` }} /></div>
-        </div>
+    <li
+      className={`flex flex-none items-center gap-1.5 rounded-[10px] border p-1 pr-1.5 ${habit.done ? "bg-muted/60" : "bg-card"} ${canPlan && !phone ? "cursor-grab active:cursor-grabbing" : ""} ${task && pickedId === task.id ? "ring-2 ring-today-accent" : ""}`}
+      style={{ borderLeft: `3px solid ${areaHex(habit.areaSlug)}` }}
+      {...(task && canPlan && !phone ? dragProps(task) : {})}
+    >
+      <button
+        aria-label={habit.done ? `Undo: ${habit.title}` : `Done: ${habit.title}`}
+        aria-pressed={habit.done}
+        className={`flex flex-none items-center justify-center rounded-full ${phone ? "h-11 w-9" : "h-8 w-8"} focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-today-accent/50`}
+        disabled={pending}
+        onClick={() => startTransition(async () => onMessage(await habitDoneAction(habit.todayTaskId as string, !habit.done)))}
+        type="button"
+      >
+        <span aria-hidden className={`flex h-5 w-5 items-center justify-center rounded-full border-2 text-[10px] ${habit.done ? "border-today-accent bg-today-accent text-white" : "border-muted-foreground/40 text-transparent hover:border-today-accent hover:text-today-accent"}`}>✓</span>
+      </button>
+      <div className="min-w-0">
+        <p className={`whitespace-nowrap text-[0.82rem] font-semibold leading-tight ${habit.done ? "text-muted-foreground line-through" : ""}`}>{habit.title}</p>
+        <p className="mt-0.5 whitespace-nowrap text-[0.7rem] text-muted-foreground">{detail}</p>
       </div>
-      {task && !finished && (
-        <div className="mt-2 pl-7 text-xs">
-          <button className="rounded-full border bg-background/60 px-2.5 py-1 font-medium hover:border-primary/60 hover:text-primary" onClick={() => onSchedule(task)} type="button">{task.start ? "Move" : "Schedule"}</button>
-        </div>
+      {canPlan && task && (
+        <button aria-label={`Plan ${habit.title}`} className={`${phone ? "min-h-11" : "min-h-8"} ml-1 flex-none rounded-lg border border-today-accent-line bg-today-accent-soft px-2.5 py-1 text-[0.78rem] font-bold text-today-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-today-accent/50`} onClick={() => onPlan(task)} type="button">Plan</button>
       )}
     </li>
   );
