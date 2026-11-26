@@ -11,6 +11,7 @@ import { agentDoing, readiness, safeLink, type Readiness } from "@/lib/v2/readin
 import { optionalEventsBlock, protectionLines, workWindows, type ProtectionLine } from "@/lib/v2/availability";
 import { startOfZonedWeek } from "@/lib/v2/zoned-time";
 import { HANDOFF_SYSTEMS } from "@/lib/v2/source-events";
+import { INBOX_STATUS } from "@/server/inbox/inbox";
 
 // Read model for the Plan screen: every open task grouped by area and project (feed items included, labelled
 // by source), plus the calendar for the days shown (Google meetings and RyanOS blocks).
@@ -49,6 +50,9 @@ export type BoardLink = { title: string; url: string; kind: "draft" | "source" |
 export type BoardProject = { id: string; name: string; tasks: BoardTask[] };
 export type BoardArea = { id: string; slug: string; name: string; projects: BoardProject[]; loose: BoardTask[] };
 export type BoardMeeting = { title: string; start: string; end: string; optional?: boolean };
+// A project on the Plan shelf. RyanOS has no "pin" field, so the shelf is derived from existing data: projects
+// Ryan put in his weekly top 3 or gave time this week, then the ones holding his most urgent ready actions.
+export type ShelfProject = { id: string; name: string; areaSlug: string; areaName: string; ready: number; scheduled: number; workOnly: boolean; focus: boolean };
 
 export type Board = {
   tools: ToolLink[]; // where each app's check-ins are handled
@@ -71,7 +75,52 @@ export type Board = {
   targets: QuickTarget[];
   habits: Habit[]; // today's daily habits (routines) with streaks
   routineTasks: BoardTask[]; // today's open routine copies, so a habit can be placed on the calendar
+  shelf: ShelfProject[]; // the Plan project shelf, most important first
+  decisions: { count: number; first: string | null }; // Inbox items waiting for Ryan's judgment
 };
+
+const SHELF_MAX = 8;
+
+// The shelf: active projects with a ready action Ryan can book, plus his weekly top-3 projects. Order: top 3,
+// then projects given time this week, then the one holding the most urgent ready action, then the most ready.
+export function shelfProjects(
+  projects: { id: string; name: string; domainId: string; weeklyFocus?: string | null; activeStatus?: string | null }[],
+  domains: { id: string; slug: string; name: string }[],
+  tasks: BoardTask[],
+  weekly: Set<string>
+): ShelfProject[] {
+  const ranked = sortTasks(tasks.filter((task) => task.projectId && !task.source && task.ready === "ready" && !task.start && task.status !== "WAITING" && !task.waitingOn));
+  const firstIndex = new Map<string, number>();
+  ranked.forEach((task, index) => { if (!firstIndex.has(task.projectId as string)) firstIndex.set(task.projectId as string, index); });
+  return projects
+    .map((project) => {
+      const domain = domains.find((item) => item.id === project.domainId);
+      const own = tasks.filter((task) => task.projectId === project.id && !task.source);
+      return {
+        project,
+        row: {
+          id: project.id,
+          name: project.name,
+          areaSlug: domain?.slug ?? "",
+          areaName: domain?.name ?? "",
+          ready: ranked.filter((task) => task.projectId === project.id).length,
+          scheduled: own.filter((task) => task.start).length,
+          workOnly: domain?.slug === "work",
+          focus: project.weeklyFocus === "TOP_3"
+        } satisfies ShelfProject
+      };
+    })
+    .filter(({ project, row }) => row.ready > 0 || (row.focus && project.activeStatus !== "PARKED"))
+    .sort((a, b) =>
+      Number(b.row.focus) - Number(a.row.focus) ||
+      Number(weekly.has(b.row.id)) - Number(weekly.has(a.row.id)) ||
+      (firstIndex.get(a.row.id) ?? Infinity) - (firstIndex.get(b.row.id) ?? Infinity) ||
+      b.row.ready - a.row.ready ||
+      a.row.name.localeCompare(b.row.name)
+    )
+    .slice(0, SHELF_MAX)
+    .map(({ row }) => row);
+}
 
 const AREA_ORDER = ["ebay", "rykas", "betting-models", "casino-ap", "work", "health", "golf", "family", "opportunities", "admin"];
 const PRIORITY_RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
@@ -163,7 +212,7 @@ export async function loadBoard(
     calendarKnown = false;
   }
 
-  const [rows, domains, projects, sync, attention] = await Promise.all([
+  const [rows, domains, projects, sync, attention, judgment, ideas] = await Promise.all([
     db.executionTask.findMany({
       where: { userId, status: { notIn: ["DONE", "DROPPED"] }, needsJudgment: false },
       select: { ...dayTaskSelect, priority: true, waitingOn: true, references: { select: { title: true, url: true, provider: true }, orderBy: { createdAt: "asc" }, take: 4 } },
@@ -172,11 +221,19 @@ export async function loadBoard(
     db.executionDomain.findMany({ where: { userId }, select: { id: true, slug: true, name: true } }),
     db.executionProject.findMany({
       where: { userId, activeStatus: { in: ["ACTIVE_NOW", "ACTIVE_LATER"] }, closedAt: null },
-      select: { id: true, name: true, domainId: true },
+      select: { id: true, name: true, domainId: true, weeklyFocus: true, activeStatus: true },
       orderBy: { name: "asc" }
     }),
     db.sourceSync.findUnique({ where: { userId_sourceSystem: { userId, sourceSystem: SYNC_SOURCE } } }),
-    db.projectAttention.findMany({ where: { userId, weekOf: startOfZonedWeek(now, tz), plannedMinutes: { gt: 0 } }, select: { projectId: true } })
+    db.projectAttention.findMany({ where: { userId, weekOf: startOfZonedWeek(now, tz), plannedMinutes: { gt: 0 } }, select: { projectId: true } }),
+    // Same rule as the Inbox badge (app/layout.tsx): open items needing a decision, follow-up date reached.
+    db.executionTask.findMany({
+      where: { userId, needsJudgment: true, status: { notIn: ["DONE", "DROPPED"] }, OR: [{ followUpDate: null }, { followUpDate: { lte: now } }] },
+      select: { title: true },
+      orderBy: { createdAt: "desc" },
+      take: 200
+    }),
+    db.parkedIdea.count({ where: { userId, status: INBOX_STATUS } }).catch(() => 0)
   ]);
   const weeklyProjects = new Set(attention.map((row) => row.projectId));
 
@@ -252,6 +309,8 @@ export async function loadBoard(
     calendarSync: { enabled: writeEnabled(), ok: !sync || sync.status !== "FAILING", message: sync?.status === "FAILING" ? sync.lastError : null },
     targets,
     habits: await loadHabits(userId, db, now),
-    routineTasks
+    routineTasks,
+    shelf: shelfProjects(projects, domains, listed, weeklyProjects),
+    decisions: { count: judgment.length + ideas, first: judgment[0]?.title ?? null }
   };
 }

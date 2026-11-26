@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { CalendarRange, ChevronDown, Feather, FolderKanban, Inbox, LayoutGrid, LogOut, Moon, Plus, Search, Settings, Sun, X, Zap, type LucideIcon } from "lucide-react";
+import { BarChart3, CalendarRange, ChevronDown, Feather, FolderKanban, Inbox, LayoutGrid, LogOut, Moon, Plus, Search, Settings, Sun, X, Zap, type LucideIcon } from "lucide-react";
 import { logoutAction } from "@/app/actions";
 import { CaptureBox } from "@/components/inbox/capture-box";
 import { WisdomQuickCapture } from "@/components/library/wisdom-quick-capture";
@@ -18,7 +18,17 @@ import type { ToolLink } from "@/lib/v2/tools";
 
 type ShellProps = { children: React.ReactNode; inboxCount?: number; tools?: ToolLink[] };
 
-const NAV_ICONS: Record<string, LucideIcon> = { now: Zap, today: CalendarRange, projects: FolderKanban, inbox: Inbox };
+const NAV_ICONS: Record<string, LucideIcon> = { now: Zap, today: CalendarRange, projects: FolderKanban, inbox: Inbox, review: BarChart3 };
+
+// Phone bottom bar (approved mobile layout, 2026-11-25): Today · Inbox · Projects · Review. Today is /plan; Now
+// stays one tap away (the RyanOS logo, and first under Tools and more). Desktop keeps the primary nav as is.
+const PHONE_NAV = [
+  { href: "/plan", key: "today", label: "Today" },
+  { href: "/inbox", key: "inbox", label: "Inbox" },
+  { href: "/projects", key: "projects", label: "Projects" },
+  { href: "/review", key: "review", label: "Review" }
+] as const;
+const phoneNavKey = (pathname: string | null) => (pathname?.startsWith("/review") || pathname?.startsWith("/weekly-review") ? "review" : getActiveRyanOsNavKey(pathname));
 
 function LogoMark({ size = "md" }: { size?: "sm" | "md" }) {
   return (
@@ -131,7 +141,7 @@ function ToolsAndMore({ tools, trigger }: { tools: ToolLink[]; trigger: React.Re
           <div className="mt-1"><ToolsList tone="surface" tools={tools} /></div>
           <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">More</p>
           <ul className="mt-1 space-y-0.5">
-            {secondaryRyanOsNavItems.map((item) => (
+            {[{ href: "/now", label: "Now" }, ...secondaryRyanOsNavItems].map((item) => (
               <li key={item.href}>
                 <Dialog.Close asChild>
                   <Link className={cn("block rounded-lg px-3 py-2.5 text-sm hover:bg-muted", focusRing)} href={item.href}>{item.label}</Link>
@@ -162,73 +172,13 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
   const activeKey = getActiveRyanOsNavKey(pathname);
   const [moreOpen, setMoreOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
-  // Plan is calendar first: the sidebar shrinks to an icon strip and the page uses the full width.
-  const rail = pathname === "/plan";
-  const railButton = cn("relative inline-flex h-10 w-10 items-center justify-center rounded-xl text-sidebar-foreground/75 hover:bg-white/[0.06] hover:text-sidebar-foreground", focusRing);
+  // Plan keeps the full sidebar (Today redesign) and uses a wider workspace.
+  const wide = pathname === "/plan";
 
   return (
     <div className="min-h-screen lg:flex">
-      {/* Desktop icon strip (Plan) */}
-      {rail && (
-        <aside className="sticky top-0 hidden h-screen w-[4.25rem] shrink-0 flex-col items-center gap-2 border-r border-white/5 bg-sidebar py-4 text-sidebar-foreground lg:flex">
-          <Link aria-label="RyanOS home" className={cn("mb-3 rounded-xl", focusRing)} href="/now" title="RyanOS">
-            <LogoMark />
-          </Link>
-          <CaptureDialog
-            trigger={
-              <button aria-label="Capture" className={cn("inline-flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground", focusRing)} title="Capture" type="button">
-                <Plus aria-hidden="true" className="h-4 w-4" />
-              </button>
-            }
-          />
-          <Link aria-label="Search" className={railButton} href="/search" title="Search">
-            <Search aria-hidden="true" className="h-4 w-4" />
-          </Link>
-          <nav aria-label="Primary" className="mt-3 flex flex-col items-center gap-1.5">
-            {primaryRyanOsNavItems.map((item) => {
-              const active = activeKey === item.key;
-              const Icon = NAV_ICONS[item.key] ?? Zap;
-              return (
-                <Link
-                  aria-current={active ? "page" : undefined}
-                  aria-label={item.label}
-                  className={cn(railButton, "h-11 w-11", active && "bg-white/[0.08] text-emerald-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]")}
-                  href={item.href}
-                  key={item.href}
-                  title={item.label}
-                >
-                  <Icon aria-hidden="true" className="h-5 w-5" />
-                  {item.key === "inbox" && inboxCount > 0 && (
-                    <span aria-label={`${inboxCount} need a decision`} className="absolute -right-0.5 -top-0.5 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">{inboxCount}</span>
-                  )}
-                </Link>
-              );
-            })}
-          </nav>
-          <ToolsAndMore
-            tools={tools}
-            trigger={
-              <button aria-label="Tools and more" className={cn(railButton, "mt-3 h-11 w-11 border border-white/10")} title="Tools and more" type="button">
-                <LayoutGrid aria-hidden="true" className="h-5 w-5" />
-              </button>
-            }
-          />
-          <div className="mt-auto flex flex-col items-center gap-1 border-t border-white/10 pt-3">
-            <Link aria-label="Settings" className={railButton} href="/settings" title="Settings">
-              <Settings aria-hidden="true" className="h-4 w-4" />
-            </Link>
-            <ThemeToggle className="text-sidebar-foreground/75 hover:bg-white/[0.06]" />
-            <form action={logoutAction}>
-              <button aria-label="Sign out" className={railButton} title="Sign out" type="submit">
-                <LogOut aria-hidden="true" className="h-4 w-4" />
-              </button>
-            </form>
-          </div>
-        </aside>
-      )}
-
       {/* Desktop sidebar */}
-      <aside className={cn("sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/5 bg-sidebar bg-[radial-gradient(420px_260px_at_0%_0%,rgba(52,211,153,0.10),transparent_70%),radial-gradient(360px_300px_at_100%_100%,rgba(139,92,246,0.10),transparent_70%)] px-3 py-5 text-sidebar-foreground", !rail && "lg:flex")}>
+      <aside className={cn("sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/5 bg-sidebar bg-[radial-gradient(420px_260px_at_0%_0%,rgba(52,211,153,0.10),transparent_70%),radial-gradient(360px_300px_at_100%_100%,rgba(139,92,246,0.10),transparent_70%)] px-3 py-5 text-sidebar-foreground lg:flex")}>
         <Link className={cn("mb-6 flex items-center gap-2 rounded-lg px-3", focusRing)} href="/now">
           <LogoMark />
           <span className="text-lg font-semibold tracking-tight">Ryan<span className="text-gradient">OS</span></span>
@@ -340,26 +290,26 @@ export function AppShell({ children, inboxCount = 0, tools = [] }: ShellProps) {
         />
       </header>
 
-      <main className={cn("min-w-0 flex-1 px-4 pb-28 pt-4 sm:px-6 lg:pb-12", rail ? "lg:px-6 lg:pt-5" : "lg:px-10 lg:pt-8")}>
-        <div className={cn("mx-auto w-full", rail ? "max-w-[1600px]" : "max-w-5xl")}>{children}</div>
+      <main className={cn("min-w-0 flex-1 px-4 pb-28 pt-4 sm:px-6 lg:pb-12", wide ? "pt-3.5 lg:px-[clamp(16px,3vw,44px)] lg:pt-6" : "lg:px-10 lg:pt-8")}>
+        <div className={cn("mx-auto w-full", wide ? "max-w-[1550px]" : "max-w-5xl")}>{children}</div>
       </main>
 
       {/* Mobile bottom nav */}
-      <nav aria-label="Mobile primary" className="fixed inset-x-3 bottom-3 z-40 grid grid-cols-4 gap-1 rounded-[1.4rem] border border-white/10 bg-sidebar/85 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] text-sidebar-foreground shadow-[0_18px_50px_rgba(0,0,0,0.45)] backdrop-blur-xl backdrop-saturate-150 lg:hidden">
-        {primaryRyanOsNavItems.map((item) => {
-          const active = activeKey === item.key;
+      <nav aria-label="Mobile primary" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 border-t bg-card px-[5px] pb-[calc(4px+env(safe-area-inset-bottom))] pt-1 lg:hidden">
+        {PHONE_NAV.map((item) => {
+          const active = phoneNavKey(pathname) === item.key;
           const Icon = NAV_ICONS[item.key] ?? Zap;
           return (
             <Link
               aria-current={active ? "page" : undefined}
-              className={cn("relative flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-2xl px-1 text-[11px] font-medium", active ? "bg-white/[0.08] text-white" : "text-sidebar-foreground/65", focusRing)}
+              className={cn("relative grid min-h-[46px] content-center justify-items-center gap-0.5 rounded-lg text-[0.68rem] font-bold", active ? "bg-today-accent-soft text-today-accent" : "text-muted-foreground", focusRing)}
               href={item.href}
               key={item.href}
             >
-              <Icon aria-hidden="true" className={cn("h-5 w-5", active ? "text-emerald-300" : "")} />
+              <Icon aria-hidden="true" className="h-[19px] w-[19px]" strokeWidth={1.7} />
               {item.label}
               {item.key === "inbox" && inboxCount > 0 && (
-                <span aria-label={`${inboxCount} need a decision`} className="absolute right-2 top-1.5 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">{inboxCount}</span>
+                <span aria-label={`${inboxCount} need a decision`} className="absolute right-[22%] top-1 rounded-full bg-today-accent px-1.5 text-[10px] font-semibold text-white dark:text-[hsl(230_40%_8%)]">{inboxCount}</span>
               )}
             </Link>
           );

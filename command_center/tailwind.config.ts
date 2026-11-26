@@ -46,6 +46,22 @@ const config: Config = {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))"
         },
+        today: {
+          accent: "hsl(var(--t-accent))",
+          "accent-soft": "hsl(var(--t-accent-soft))",
+          "accent-line": "hsl(var(--t-accent-line))",
+          "accent-ink": "hsl(var(--t-accent-ink))",
+          mint: "hsl(var(--t-mint))",
+          "mint-line": "hsl(var(--t-mint-line))",
+          "mint-ink": "hsl(var(--t-mint-ink))",
+          track: "hsl(var(--t-track))",
+          "track-line": "hsl(var(--t-track-line))",
+          tick: "hsl(var(--t-tick))",
+          "tick-major": "hsl(var(--t-tick-major))",
+          protected: "hsl(var(--t-protected))",
+          "protected-line": "hsl(var(--t-protected-line))",
+          ink2: "hsl(var(--t-ink-2))"
+        },
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))"

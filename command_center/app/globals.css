@@ -32,6 +32,21 @@
   --glow-b: 262 85% 62%;
   --glow-c: 200 90% 55%;
   --glow-strength: 0.09;
+  /* Plan/Today (2026-11-25 redesign): navy action blue, mint "free time", muted protected time, light time track. */
+  --t-accent: 213 72% 33%;
+  --t-accent-soft: 214 74% 95%;
+  --t-accent-line: 210 55% 87%;
+  --t-accent-ink: 213 54% 31%;
+  --t-mint: 153 42% 91%;
+  --t-mint-line: 156 33% 81%;
+  --t-mint-ink: 170 58% 19%;
+  --t-track: 214 50% 97%;
+  --t-track-line: 210 40% 90%;
+  --t-tick: 211 45% 92%;
+  --t-tick-major: 213 40% 89%;
+  --t-protected: 213 26% 94%;
+  --t-protected-line: 213 19% 68%;
+  --t-ink-2: 214 32% 34%;
 }
 
 .dark {
@@ -58,6 +73,20 @@
   --sidebar-muted: 228 14% 58%;
   --sidebar-active: 230 26% 13%;
   --glow-strength: 0.16;
+  --t-accent: 213 80% 62%;
+  --t-accent-soft: 214 45% 16%;
+  --t-accent-line: 213 40% 30%;
+  --t-accent-ink: 213 85% 80%;
+  --t-mint: 160 40% 12%;
+  --t-mint-line: 160 35% 24%;
+  --t-mint-ink: 155 60% 75%;
+  --t-track: 230 24% 8%;
+  --t-track-line: 230 18% 18%;
+  --t-tick: 230 16% 14%;
+  --t-tick-major: 230 16% 20%;
+  --t-protected: 225 14% 17%;
+  --t-protected-line: 220 12% 42%;
+  --t-ink-2: 220 20% 72%;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -59,6 +59,23 @@ Plan is now the main place to schedule. The layout changed: the **calendar is th
 - **Task details** (`/tasks?taskId=…`) now show the task even when it's done, with its note, draft and source.
 - **Fix:** on blocks shorter than 30 minutes the resize handle no longer covers the ✓ and × buttons.
 
+## Today redesign: project shelf and phone time grid (changed 2026-11-25, third pass)
+
+Built from Ryan's handoff (Project shelf for desktop, Approved-Mobile-Layout for phones). The sections above describe earlier layouts; where they differ, this one is current.
+
+- **Desktop / tablet (768px+):** date and open time, then **Pinned projects** (up to 6), the **next-action tray**, then the calendar with a small rail (Your commitments, Needs a decision, Missed, Agent preparing, What counts as open time, and the folded All to-dos / Routines / App check-ins). The full sidebar shows on Plan again (the icon strip is gone).
+  - A project click filters the tray in place (click again or "All priorities" to clear). The tray shows the top 3 with "View all N actions" for the rest. Each card: title, estimate, one short reason (`reasonFor` in `lib/v2/today.ts`), and Draft/Source/Details links when they exist.
+  - **Drag** a card to an open slot, or press **Plan**, then click (or Tab + Enter) a highlighted time or use "Next opening". Both call the same server scheduler (`bookSlot`), which rechecks the slot under a lock: overlaps with meetings, protected blocks or work hours are refused with a message and nothing is written. Moving a block keeps the same task row. Resizing still uses the block editor (it records the new length).
+  - **Next free block** is the secondary mode (toggle beside Pinned projects, remembered per browser): the next opening, what fits it, and "N actions need a longer block".
+  - **Calendar window:** today opens at the current half hour, after a protected work window that covers it, through the end of the planning day (later blocks extend it). Earlier and protected time is folded above the grid; opening it shows the whole planning day. 30-minute labels, 15-minute lines. Meetings, work hours and protected (family, kids, health) blocks are muted; RyanOS blocks carry their area colour; optional events sit at the side and don't block.
+  - "Preview my evening/day" shows the draft plan in the calendar card (dashed blocks) and books only after "Book selected".
+- **Phone (under 768px):** heading with a **Calendar** shortcut, the **Next free** callout (what limits it), a swipeable row of pinned projects, the selected project's (up to) two actions that fit the next opening with a large **Plan** button and "See N other actions", then the time grid as the last section. **Plan → choose a time → Add to calendar**; choosing a time alone saves nothing and Cancel writes nothing. No drag on phones.
+- **Phone bottom bar:** Today (`/plan`) · Inbox · Projects · Review (`/review`). **Now** moved from the phone bar to the RyanOS logo and the top of Tools and more. Desktop navigation is unchanged (Now · Plan · Projects · Inbox).
+- **Pinned projects** (no pin field exists, so derived; `shelfProjects` in `server/v2/board.ts`): active projects with a ready, unscheduled action of Ryan's own, plus weekly top-3 projects; ordered top 3, then projects given time this week, then the project holding the most urgent ready action, then the most ready. Up to 8 (6 on desktop). To pin by hand later, the smallest change is an additive nullable `pinnedAt` column on `ExecutionProject`.
+- **Needs a decision** uses the same rule as the Inbox badge (needs-judgment tasks whose follow-up date has come, plus captured ideas).
+- The coach card no longer shows on Plan (its "free until" line is now the Next free callout); `components/plan/coach-card.tsx` and `server/v2/coach.ts` are unchanged.
+- Colours: `--t-*` tokens in `app/globals.css` (light and dark), exposed as `today-*` in Tailwind. Code: `components/plan/today.tsx`, `lib/v2/today.ts`, `components/plan/plan-board.tsx`, `components/layout/app-shell.tsx`. Tests: `tests/plan-today.test.ts` (fitting acceptance case, time-sheet starts, grid window, reasons, shelf order, single-write booking, protected/stale-slot refusal, links kept).
+
 ## Files
 
 `app/plan/` (page, server actions), `components/plan/plan-board.tsx`, `server/v2/board.ts` (read model), `server/v2/plan-board.ts` (schedule/move/unschedule, quick add, waiting-on), `lib/v2/quick-add.ts` (parser), `lib/v2/plan-filters.ts` (search, filters, #-suggestions), `server/v2/calendar-sync.ts` (Google two-way sync, see RYANOS_V2_INTEGRATIONS.md). Tests: `tests/quick-add.test.ts`, `tests/plan-filters.test.ts`, `tests/plan-board.test.ts`, `tests/calendar-sync.test.ts`.
